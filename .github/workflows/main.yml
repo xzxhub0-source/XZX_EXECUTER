@@ -66,90 +66,39 @@ jobs:
           cd ..
           echo "✅ insert_dylib compiled"
       
-      - name: Compile Objective-C files
+      - name: Compile all files together
         run: |
           mkdir -p build
-          for file in injector/dylib/*.m; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .m)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang -c \
-                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then exit 1; fi
-            fi
-          done
-          echo "✅ Objective-C compilation complete"
-      
-      - name: Compile C++ files
-        run: |
-          for file in injector/dylib/Core/*.mm; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .mm)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang++ -c -std=c++11 \
-                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then exit 1; fi
-            fi
-          done
-          echo "✅ C++ compilation complete"
-      
-      - name: Compile Swift files together
-        run: |
-          echo "Compiling Swift files together..."
+          echo "Compiling all files together..."
           
-          # Collect all Swift files
+          # Collect all source files
+          OBJC_FILES=$(find injector/dylib -name "*.m" -type f | tr '\n' ' ')
+          CPP_FILES=$(find injector/dylib/Core -name "*.mm" -type f | tr '\n' ' ')
           SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
-          echo "Compiling: $SWIFT_FILES"
           
-          mkdir -p build
+          echo "Objective-C files: $OBJC_FILES"
+          echo "C++ files: $CPP_FILES"
+          echo "Swift files: $SWIFT_FILES"
           
-          # Compile all Swift files together into one object file with whole-module optimization
+          # Compile everything in one command
           xcrun -sdk iphoneos swiftc \
-            -c \
-            -whole-module-optimization \
+            -emit-library \
+            -o build/executor.dylib \
             -module-name XZX \
             -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+            -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
-            -o build/XZX.o \
-            $SWIFT_FILES
+            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
+            -lstdc++ \
+            $OBJC_FILES $CPP_FILES $SWIFT_FILES
           
           if [ $? -ne 0 ]; then
-            echo "❌ Swift compilation failed"
-            exit 1
-          fi
-          echo "✅ Swift compilation complete"
-      
-      - name: List all object files
-        run: ls -la build/
-      
-      - name: Link all object files
-        run: |
-          echo "Linking all object files..."
-          
-          # Collect all object files (including Swift object)
-          OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
-          if [ -z "$OBJECTS" ]; then
-            echo "❌ No object files found"
+            echo "❌ Compilation failed"
             exit 1
           fi
           
-          echo "Linking: $OBJECTS"
-          
-          xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
-            -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
-            -undefined dynamic_lookup \
-            -o build/executor.dylib $OBJECTS -lstdc++ -target arm64-apple-ios15.0
-          
-          if [ ! -f "build/executor.dylib" ]; then
-            echo "❌ Linking failed"
-            exit 1
-          fi
-          echo "✅ Dylib compiled successfully"
-          file build/executor.dylib
+          echo "✅ Compilation complete"
+          ls -la build/
       
       - name: Extract and modify IPA
         run: |

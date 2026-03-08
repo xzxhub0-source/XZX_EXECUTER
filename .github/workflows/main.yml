@@ -19,27 +19,6 @@ jobs:
           pipx ensurepath
           pipx install gdown
       
-      - name: Download and install Lua headers from official source
-        run: |
-          mkdir -p $HOME/lua-ios/include
-          curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
-          if [ ! -f lua-5.4.6.tar.gz ]; then
-            echo "❌ Failed to download Lua source"
-            exit 1
-          fi
-          tar -xzf lua-5.4.6.tar.gz
-          cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lua.hpp $HOME/lua-ios/include/
-          if [ ! -f $HOME/lua-ios/include/lua.h ]; then
-            echo "❌ Lua headers not copied correctly"
-            exit 1
-          fi
-          echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          echo "✅ Lua headers installed successfully"
-      
       - name: Download Roblox IPA
         run: |
           FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
@@ -66,114 +45,121 @@ jobs:
           cd ..
           echo "✅ insert_dylib compiled"
       
-      - name: Compile Objective-C files to objects
+      - name: Create Xcode project
         run: |
-          mkdir -p build
-          for file in injector/dylib/*.m; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .m)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang -c \
-                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then exit 1; fi
-            fi
-          done
-          echo "✅ Objective-C compilation complete"
+          # Create project structure
+          mkdir -p XZXProject/XZX
+          mkdir -p XZXProject/injector/dylib/Core
+          
+          # Copy all files to Xcode project directory
+          cp -r XZX/* XZXProject/XZX/ 2>/dev/null || true
+          cp -r injector/dylib/* XZXProject/injector/dylib/ 2>/dev/null || true
+          
+          # Create Info.plist
+          cat > XZXProject/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>XZX</string>
+              <key>CFBundleExecutable</key>
+              <string>XZX</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.xzx.executor</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>XZX</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UIRequiredDeviceCapabilities</key>
+              <array>
+                  <string>arm64</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+          
+          # Create bridging header in the right place
+          cp XZX/XZX-Bridging-Header.h XZXProject/XZX/
+          
+          # Create a simple Xcode project using xcodegen (automatically installed)
+          brew install xcodegen
+          
+          cat > XZXProject/project.yml << 'EOF'
+          name: XZX
+          options:
+            bundleIdPrefix: com.xzx
+            deploymentTarget:
+              iOS: 15.0
+          targets:
+            XZX:
+              type: application
+              platform: iOS
+              sources:
+                - XZX
+                - injector/dylib
+              settings:
+                base:
+                  INFOPLIST_FILE: Info.plist
+                  SWIFT_OBJC_BRIDGING_HEADER: XZX/XZX-Bridging-Header.h
+                  OTHER_LDFLAGS: -lstdc++
+                  ENABLE_BITCODE: NO
+              info:
+                path: Info.plist
+          EOF
+          
+          cd XZXProject
+          xcodegen generate
+          echo "✅ Xcode project created"
       
-      - name: Compile C++ files to objects
+      - name: Build the app
         run: |
-          for file in injector/dylib/Core/*.mm; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .mm)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang++ -c -std=c++11 \
-                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then exit 1; fi
-            fi
-          done
-          echo "✅ C++ compilation complete"
+          cd XZXProject
+          xcodebuild -project XZX.xcodeproj -scheme XZX -configuration Release -sdk iphoneos -arch arm64 build CODE_SIGNING_ALLOWED=NO
+          echo "✅ App built successfully"
+          ls -la build/Release-iphoneos/
       
-      - name: Compile Swift files individually
+      - name: Create IPA from .app
         run: |
-          echo "Compiling Swift files individually..."
-          
-          # Create directory for Swift objects
-          mkdir -p build/swift
-          
-          # Compile each Swift file separately
-          for file in XZX/UI/*.swift XZX/Services/*.swift XZX/MainViewController.swift; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .swift)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos swiftc \
-                -c \
-                -module-name XZX \
-                -import-objc-header XZX/XZX-Bridging-Header.h \
-                -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
-                -target arm64-apple-ios15.0 \
-                -o "build/swift/${filename}.o" \
-                "$file"
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
-            fi
-          done
-          
-          # Move all Swift objects to build directory
-          mv build/swift/*.o build/ 2>/dev/null || true
-          rm -rf build/swift
-          
-          echo "✅ Swift compilation complete"
-          ls -la build/
+          mkdir -p Payload
+          cp -r XZXProject/build/Release-iphoneos/XZX.app Payload/
+          zip -r XZX.ipa Payload/
+          echo "✅ IPA created: XZX.ipa"
+          ls -la XZX.ipa
       
-      - name: Link all into final dylib
-        run: |
-          echo "Linking all object files..."
-          
-          # Collect all object files
-          OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
-          if [ -z "$OBJECTS" ]; then
-            echo "❌ No object files found"
-            exit 1
-          fi
-          
-          echo "Linking objects: $OBJECTS"
-          
-          xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
-            -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
-            -undefined dynamic_lookup \
-            -o build/executor.dylib \
-            $OBJECTS \
-            -lstdc++ -target arm64-apple-ios15.0
-          
-          if [ ! -f "build/executor.dylib" ]; then
-            echo "❌ Linking failed"
-            exit 1
-          fi
-          echo "✅ Dylib compiled successfully"
-          file build/executor.dylib
-      
-      - name: Extract and modify IPA
+      - name: Extract and modify Roblox IPA
         run: |
           unzip -q Roblox.ipa -d extracted/
           if [ ! -d "extracted/Payload/Roblox.app" ]; then
             echo "❌ Failed to extract IPA"
             exit 1
           fi
-          cp build/executor.dylib extracted/Payload/Roblox.app/
+          
+          # Copy the XZX dylib to Roblox app
+          cp XZXProject/build/Release-iphoneos/XZX.app/XZX extracted/Payload/Roblox.app/executor.dylib
+          
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
+          
           ./tools/insert_dylib @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
             extracted/Payload/Roblox.app/Roblox_patched --all-yes
+          
           if [ ! -f "extracted/Payload/Roblox.app/Roblox_patched" ]; then
             echo "❌ Dylib injection failed"
             exit 1
           fi
+          
           mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
           echo "✅ Roblox modification complete"
       
@@ -191,15 +177,15 @@ jobs:
       - name: Repackage IPA
         run: |
           cd extracted
-          zip -qr ../XZX.ipa Payload/
+          zip -qr ../XZX-Roblox.ipa Payload/
           cd ..
-          echo "✅ IPA created: XZX.ipa"
-          ls -la XZX.ipa
+          echo "✅ Final IPA created: XZX-Roblox.ipa"
+          ls -la XZX-Roblox.ipa
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: XZX-Executor
-          path: ${{ github.workspace }}/XZX.ipa
+          name: XZX-Roblox-Executor
+          path: XZX-Roblox.ipa
           if-no-files-found: error
           retention-days: 90

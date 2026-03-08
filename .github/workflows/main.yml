@@ -19,6 +19,27 @@ jobs:
           pipx ensurepath
           pipx install gdown
       
+      - name: Download and install Lua headers
+        run: |
+          mkdir -p $HOME/lua-ios/include
+          curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
+          if [ ! -f lua-5.4.6.tar.gz ]; then
+            echo "❌ Failed to download Lua source"
+            exit 1
+          fi
+          tar -xzf lua-5.4.6.tar.gz
+          cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
+          cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
+          cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
+          cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
+          cp lua-5.4.6/src/lua.hpp $HOME/lua-ios/include/
+          if [ ! -f $HOME/lua-ios/include/lua.h ]; then
+            echo "❌ Lua headers not copied correctly"
+            exit 1
+          fi
+          echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
+          echo "✅ Lua headers installed successfully"
+      
       - name: Download Roblox IPA
         run: |
           FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
@@ -50,10 +71,32 @@ jobs:
           # Create project structure
           mkdir -p XZXProject/XZX
           mkdir -p XZXProject/injector/dylib/Core
+          mkdir -p XZXProject/LuaHeaders
           
-          # Copy all files to Xcode project directory
+          # Copy all files
           cp -r XZX/* XZXProject/XZX/ 2>/dev/null || true
           cp -r injector/dylib/* XZXProject/injector/dylib/ 2>/dev/null || true
+          
+          # Copy Lua headers
+          cp $HOME/lua-ios/include/*.h XZXProject/LuaHeaders/
+          
+          # Create fixed bridging header
+          cat > XZXProject/XZX/XZX-Bridging-Header.h << 'EOF'
+          #ifndef XZX_Bridging_Header_h
+          #define XZX_Bridging_Header_h
+          
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+          
+          // Include Lua executor header - using relative path within project
+          #include "LuaExecutor.h"
+          
+          // C functions from LuaExecutor.mm
+          void InitLua(void);
+          void ExecuteScript(const char *script);
+          
+          #endif
+          EOF
           
           # Create Info.plist
           cat > XZXProject/Info.plist << 'EOF'
@@ -89,10 +132,7 @@ jobs:
           </plist>
           EOF
           
-          # Create bridging header in the right place
-          cp XZX/XZX-Bridging-Header.h XZXProject/XZX/
-          
-          # Create a simple Xcode project using xcodegen (automatically installed)
+          # Create project.yml with proper header search paths
           brew install xcodegen
           
           cat > XZXProject/project.yml << 'EOF'
@@ -112,6 +152,10 @@ jobs:
                 base:
                   INFOPLIST_FILE: Info.plist
                   SWIFT_OBJC_BRIDGING_HEADER: XZX/XZX-Bridging-Header.h
+                  HEADER_SEARCH_PATHS:
+                    - $(SRCROOT)/LuaHeaders
+                    - $(SRCROOT)/injector/dylib
+                    - $(SRCROOT)/injector/dylib/Core
                   OTHER_LDFLAGS: -lstdc++
                   ENABLE_BITCODE: NO
               info:
@@ -126,6 +170,10 @@ jobs:
         run: |
           cd XZXProject
           xcodebuild -project XZX.xcodeproj -scheme XZX -configuration Release -sdk iphoneos -arch arm64 build CODE_SIGNING_ALLOWED=NO
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed"
+            exit 1
+          fi
           echo "✅ App built successfully"
           ls -la build/Release-iphoneos/
       
@@ -145,7 +193,7 @@ jobs:
             exit 1
           fi
           
-          # Copy the XZX dylib to Roblox app
+          # Copy the XZX binary as dylib
           cp XZXProject/build/Release-iphoneos/XZX.app/XZX extracted/Payload/Roblox.app/executor.dylib
           
           rm -rf extracted/Payload/Roblox.app/_CodeSignature

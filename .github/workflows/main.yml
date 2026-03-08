@@ -95,45 +95,71 @@ jobs:
           done
           echo "✅ C++ compilation complete"
       
-      - name: Compile Swift files together
+      - name: Compile Swift files
         run: |
-          echo "Compiling Swift files together..."
+          echo "Compiling Swift files..."
+          
+          # Create a temporary directory for module files
+          mkdir -p build/swift-tmp
+          
+          # First, verify the bridging header
+          echo "Verifying bridging header..."
+          cat XZX/XZX-Bridging-Header.h
+          
+          # Compile all Swift files with module support
           xcrun -sdk iphoneos swiftc \
-            -emit-object \
+            -c \
             -module-name XZX \
+            -emit-module \
+            -emit-module-path build/XZX.swiftmodule \
             -import-objc-header XZX/XZX-Bridging-Header.h \
             -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
-            -o build/XZXSwift.o \
             XZX/Services/*.swift \
             XZX/UI/*.swift \
             XZX/MainViewController.swift
+          
+          # Move all generated .o files to build directory
+          mv *.o build/ 2>/dev/null || true
+          
           if [ $? -ne 0 ]; then
             echo "❌ Swift compilation failed"
             exit 1
           fi
+          
+          # List all object files
+          echo "Swift object files:"
+          ls -la build/*.o
           echo "✅ Swift compilation complete"
       
-      - name: List object files
+      - name: List all object files
         run: ls -la build/
       
       - name: Link all object files
         run: |
+          echo "Linking all object files..."
+          
+          # Collect all object files
           OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
           if [ -z "$OBJECTS" ]; then
             echo "❌ No object files found"
             exit 1
           fi
+          
+          echo "Linking: $OBJECTS"
+          
           xcrun -sdk iphoneos clang++ -shared \
             -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
             -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -undefined dynamic_lookup \
             -o build/executor.dylib $OBJECTS -lstdc++ -target arm64-apple-ios15.0
+          
           if [ ! -f "build/executor.dylib" ]; then
             echo "❌ Linking failed"
             exit 1
           fi
           echo "✅ Dylib compiled successfully"
+          file build/executor.dylib
       
       - name: Extract and modify IPA
         run: |
@@ -172,6 +198,7 @@ jobs:
           zip -qr ../XZX.ipa Payload/
           cd ..
           echo "✅ IPA created: XZX.ipa"
+          ls -la XZX.ipa
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4

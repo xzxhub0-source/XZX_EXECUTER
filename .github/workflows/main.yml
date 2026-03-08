@@ -95,28 +95,37 @@ jobs:
           done
           echo "✅ C++ compilation complete"
       
-      - name: Compile Swift files into a single object file
+      - name: Compile Swift files individually
         run: |
-          echo "Compiling Swift files into a single object file..."
+          echo "Compiling Swift files individually..."
           
-          # Collect Swift files
-          SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
-          echo "Swift files: $SWIFT_FILES"
+          # Create directory for Swift objects
+          mkdir -p build/swift
           
-          # Compile all Swift files into a single object file using incremental compilation
-          xcrun -sdk iphoneos swiftc \
-            -c \
-            -module-name XZX \
-            -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
-            -target arm64-apple-ios15.0 \
-            -o build/XZXSwift.o \
-            $SWIFT_FILES
+          # Compile each Swift file separately
+          for file in XZX/UI/*.swift XZX/Services/*.swift XZX/MainViewController.swift; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file" .swift)
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos swiftc \
+                -c \
+                -module-name XZX \
+                -import-objc-header XZX/XZX-Bridging-Header.h \
+                -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+                -target arm64-apple-ios15.0 \
+                -o "build/swift/${filename}.o" \
+                "$file"
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to compile $file"
+                exit 1
+              fi
+            fi
+          done
           
-          if [ $? -ne 0 ]; then
-            echo "❌ Swift compilation failed"
-            exit 1
-          fi
+          # Move all Swift objects to build directory
+          mv build/swift/*.o build/ 2>/dev/null || true
+          rm -rf build/swift
+          
           echo "✅ Swift compilation complete"
           ls -la build/
       

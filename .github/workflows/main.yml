@@ -81,6 +81,14 @@ jobs:
           cd ..
           echo "✅ insert_dylib compiled and installed"
       
+      - name: Verify LuaExecutor.h exists
+        run: |
+          echo "Checking for LuaExecutor.h:"
+          ls -la injector/dylib/Core/LuaExecutor.h || echo "File not found!"
+          echo "Current directory: $(pwd)"
+          echo "Full path:"
+          find . -name "LuaExecutor.h" -type f
+      
       - name: Compile Objective-C files
         run: |
           mkdir -p build
@@ -93,6 +101,7 @@ jobs:
               xcrun -sdk iphoneos clang \
                 -c \
                 -I./injector/dylib \
+                -I./injector/dylib/Core \
                 -I${{ env.LUA_INCLUDE_DIR }} \
                 -o "build/${filename}.o" \
                 "$file" \
@@ -117,6 +126,7 @@ jobs:
                 -c \
                 -std=c++11 \
                 -I./injector/dylib \
+                -I./injector/dylib/Core \
                 -I${{ env.LUA_INCLUDE_DIR }} \
                 -o "build/${filename}.o" \
                 "$file" \
@@ -133,7 +143,7 @@ jobs:
         run: |
           echo "Compiling Swift files..."
           
-          # Compile each Swift file individually
+          # Compile each Swift file individually with proper include paths
           for file in XZX/Services/*.swift XZX/UI/*.swift XZX/MainViewController.swift; do
             if [ -f "$file" ]; then
               filename=$(basename "$file" .swift)
@@ -142,8 +152,10 @@ jobs:
                 -c \
                 -module-name XZX \
                 -import-objc-header XZX/XZX-Bridging-Header.h \
-                -I./injector/dylib \
-                -I${{ env.LUA_INCLUDE_DIR }} \
+                -I . \
+                -I ./injector/dylib \
+                -I ./injector/dylib/Core \
+                -I ${{ env.LUA_INCLUDE_DIR }} \
                 -target arm64-apple-ios15.0 \
                 -o "build/${filename}.o" \
                 "$file"
@@ -179,6 +191,9 @@ jobs:
             -framework Foundation \
             -framework CoreGraphics \
             -framework WebKit \
+            -I ./injector/dylib \
+            -I ./injector/dylib/Core \
+            -I ${{ env.LUA_INCLUDE_DIR }} \
             -undefined dynamic_lookup \
             -o build/executor.dylib \
             $OBJECTS \

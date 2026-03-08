@@ -95,18 +95,27 @@ jobs:
           done
           echo "✅ C++ compilation complete"
       
+      - name: List Swift files
+        run: |
+          echo "Swift files in XZX/Services:"
+          ls -la XZX/Services/
+          echo "Swift files in XZX/UI:"
+          ls -la XZX/UI/
+          echo "Main Swift file:"
+          ls -la XZX/MainViewController.swift
+      
       - name: Compile Swift files
         run: |
           echo "Compiling Swift files..."
           
-          # Create a temporary directory for module files
-          mkdir -p build/swift-tmp
+          # Collect all Swift files explicitly
+          SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
+          echo "Compiling: $SWIFT_FILES"
           
-          # First, verify the bridging header
-          echo "Verifying bridging header..."
-          cat XZX/XZX-Bridging-Header.h
+          # Create build directory
+          mkdir -p build
           
-          # Compile all Swift files with module support
+          # Compile all Swift files together
           xcrun -sdk iphoneos swiftc \
             -c \
             -module-name XZX \
@@ -115,21 +124,16 @@ jobs:
             -import-objc-header XZX/XZX-Bridging-Header.h \
             -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
-            XZX/Services/*.swift \
-            XZX/UI/*.swift \
-            XZX/MainViewController.swift
-          
-          # Move all generated .o files to build directory
-          mv *.o build/ 2>/dev/null || true
+            $SWIFT_FILES
           
           if [ $? -ne 0 ]; then
             echo "❌ Swift compilation failed"
             exit 1
           fi
           
-          # List all object files
-          echo "Swift object files:"
-          ls -la build/*.o
+          # Move all .o files to build
+          mv *.o build/ 2>/dev/null || true
+          
           echo "✅ Swift compilation complete"
       
       - name: List all object files

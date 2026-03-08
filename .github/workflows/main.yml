@@ -21,224 +21,138 @@ jobs:
       
       - name: Download and install Lua headers from official source
         run: |
-          # Create directories
           mkdir -p $HOME/lua-ios/include
-          
-          # Download Lua 5.4.6 source tarball
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           if [ ! -f lua-5.4.6.tar.gz ]; then
             echo "❌ Failed to download Lua source"
             exit 1
           fi
-          
-          # Extract headers
           tar -xzf lua-5.4.6.tar.gz
           cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lua.hpp $HOME/lua-ios/include/
-          
-          # Verify headers
           if [ ! -f $HOME/lua-ios/include/lua.h ]; then
             echo "❌ Lua headers not copied correctly"
             exit 1
           fi
-          
-          # Set environment variable
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          
           echo "✅ Lua headers installed successfully"
-          ls -la $HOME/lua-ios/include/
       
       - name: Download Roblox IPA
         run: |
           FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
-          
           if [ ! -f "Roblox.ipa" ]; then
             echo "❌ Download failed"
             exit 1
           fi
-          echo "✅ Download successful! Size: $(ls -la Roblox.ipa | awk '{print $5}') bytes"
+          echo "✅ Download successful!"
       
       - name: Download and compile insert_dylib
         run: |
           git clone https://github.com/tyilo/insert_dylib.git
           cd insert_dylib
           xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib -configuration Release
-          
-          # Find the compiled binary
           BINARY_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "insert_dylib" -type f | head -1)
           if [ -z "$BINARY_PATH" ]; then
             echo "❌ insert_dylib binary not found"
             exit 1
           fi
-          
           mkdir -p ../tools
           cp "$BINARY_PATH" ../tools/insert_dylib
           chmod +x ../tools/insert_dylib
           cd ..
-          echo "✅ insert_dylib compiled and installed"
-      
-      - name: Verify LuaExecutor.h exists
-        run: |
-          echo "Checking for LuaExecutor.h:"
-          ls -la injector/dylib/Core/LuaExecutor.h || echo "File not found!"
-          echo "Current directory: $(pwd)"
-          echo "Full path:"
-          find . -name "LuaExecutor.h" -type f
+          echo "✅ insert_dylib compiled"
       
       - name: Compile Objective-C files
         run: |
           mkdir -p build
-          echo "Compiling Objective-C files..."
-          
           for file in injector/dylib/*.m; do
             if [ -f "$file" ]; then
               filename=$(basename "$file" .m)
               echo "Compiling $file..."
-              xcrun -sdk iphoneos clang \
-                -c \
-                -I./injector/dylib \
-                -I./injector/dylib/Core \
-                -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" \
-                "$file" \
-                -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
+              xcrun -sdk iphoneos clang -c \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
+              if [ $? -ne 0 ]; then exit 1; fi
             fi
           done
           echo "✅ Objective-C compilation complete"
       
       - name: Compile C++ files
         run: |
-          echo "Compiling C++ files..."
-          
           for file in injector/dylib/Core/*.mm; do
             if [ -f "$file" ]; then
               filename=$(basename "$file" .mm)
               echo "Compiling $file..."
-              xcrun -sdk iphoneos clang++ \
-                -c \
-                -std=c++11 \
-                -I./injector/dylib \
-                -I./injector/dylib/Core \
-                -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" \
-                "$file" \
-                -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
+              xcrun -sdk iphoneos clang++ -c -std=c++11 \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
+              if [ $? -ne 0 ]; then exit 1; fi
             fi
           done
           echo "✅ C++ compilation complete"
       
-      - name: Compile Swift files
+      - name: Compile Swift files together
         run: |
-          echo "Compiling Swift files..."
-          
-          # Compile each Swift file individually with proper include paths
-          for file in XZX/Services/*.swift XZX/UI/*.swift XZX/MainViewController.swift; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .swift)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos swiftc \
-                -c \
-                -module-name XZX \
-                -import-objc-header XZX/XZX-Bridging-Header.h \
-                -I . \
-                -I ./injector/dylib \
-                -I ./injector/dylib/Core \
-                -I ${{ env.LUA_INCLUDE_DIR }} \
-                -target arm64-apple-ios15.0 \
-                -o "build/${filename}.o" \
-                "$file"
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
-            fi
-          done
-          
+          echo "Compiling Swift files together..."
+          xcrun -sdk iphoneos swiftc \
+            -emit-object \
+            -module-name XZX \
+            -import-objc-header XZX/XZX-Bridging-Header.h \
+            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+            -target arm64-apple-ios15.0 \
+            -o build/XZXSwift.o \
+            XZX/Services/*.swift \
+            XZX/UI/*.swift \
+            XZX/MainViewController.swift
+          if [ $? -ne 0 ]; then
+            echo "❌ Swift compilation failed"
+            exit 1
+          fi
           echo "✅ Swift compilation complete"
       
       - name: List object files
-        run: |
-          echo "Object files created:"
-          ls -la build/
+        run: ls -la build/
       
       - name: Link all object files
         run: |
-          echo "Linking all object files..."
-          
           OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
           if [ -z "$OBJECTS" ]; then
-            echo "❌ No object files found to link"
+            echo "❌ No object files found"
             exit 1
           fi
-          
-          echo "Linking objects: $OBJECTS"
-          
-          xcrun -sdk iphoneos clang++ \
-            -shared \
-            -framework UIKit \
-            -framework Foundation \
-            -framework CoreGraphics \
-            -framework WebKit \
-            -I ./injector/dylib \
-            -I ./injector/dylib/Core \
-            -I ${{ env.LUA_INCLUDE_DIR }} \
+          xcrun -sdk iphoneos clang++ -shared \
+            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
+            -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -undefined dynamic_lookup \
-            -o build/executor.dylib \
-            $OBJECTS \
-            -lstdc++ \
-            -target arm64-apple-ios15.0
-          
+            -o build/executor.dylib $OBJECTS -lstdc++ -target arm64-apple-ios15.0
           if [ ! -f "build/executor.dylib" ]; then
             echo "❌ Linking failed"
-            ls -la build/
             exit 1
           fi
-          
           echo "✅ Dylib compiled successfully"
-          file build/executor.dylib
       
       - name: Extract and modify IPA
         run: |
-          echo "Extracting Roblox.ipa..."
           unzip -q Roblox.ipa -d extracted/
-          
           if [ ! -d "extracted/Payload/Roblox.app" ]; then
             echo "❌ Failed to extract IPA"
             exit 1
           fi
-          
           cp build/executor.dylib extracted/Payload/Roblox.app/
-          
-          echo "Removing code signatures..."
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          
-          echo "Injecting dylib into Roblox binary..."
           ./tools/insert_dylib @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
-            extracted/Payload/Roblox.app/Roblox_patched \
-            --all-yes
-          
+            extracted/Payload/Roblox.app/Roblox_patched --all-yes
           if [ ! -f "extracted/Payload/Roblox.app/Roblox_patched" ]; then
             echo "❌ Dylib injection failed"
             exit 1
           fi
-          
-          mv extracted/Payload/Roblox.app/Roblox_patched \
-             extracted/Payload/Roblox.app/Roblox
-          
+          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
           echo "✅ Roblox modification complete"
       
       - name: Change app name to XZX
@@ -250,16 +164,14 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
-          echo "✅ App name changed to XZX"
+          echo "✅ App name changed"
       
       - name: Repackage IPA
         run: |
           cd extracted
           zip -qr ../XZX.ipa Payload/
           cd ..
-          
           echo "✅ IPA created: XZX.ipa"
-          ls -la XZX.ipa
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4

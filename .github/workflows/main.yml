@@ -40,13 +40,6 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "✅ Lua headers installed successfully"
       
-      - name: Verify LuaExecutor.h exists
-        run: |
-          echo "Checking for LuaExecutor.h:"
-          ls -la injector/dylib/Core/LuaExecutor.h || echo "File not found!"
-          echo "Full path:"
-          find . -name "LuaExecutor.h" -type f
-      
       - name: Download Roblox IPA
         run: |
           FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
@@ -73,64 +66,88 @@ jobs:
           cd ..
           echo "✅ insert_dylib compiled"
       
-      - name: Create module map for better header visibility
-        run: |
-          mkdir -p build/modulemap
-          cat > build/modulemap/module.modulemap << 'EOF'
-          module XZXHeaders {
-            header "../../injector/dylib/Core/LuaExecutor.h"
-            export *
-          }
-          EOF
-      
-      - name: Compile all files together with proper include paths
+      - name: Compile Swift files into static library
         run: |
           mkdir -p build
-          echo "Compiling all files together..."
+          echo "Compiling Swift files into static library..."
           
-          # Collect all source files
-          OBJC_FILES=$(find injector/dylib -name "*.m" -type f | tr '\n' ' ')
-          CPP_FILES=$(find injector/dylib/Core -name "*.mm" -type f | tr '\n' ' ')
+          # Collect Swift files
           SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
-          
-          echo "Objective-C files: $OBJC_FILES"
-          echo "C++ files: $CPP_FILES"
           echo "Swift files: $SWIFT_FILES"
           
-          # First, verify the bridging header
-          echo "Bridging header content:"
-          cat XZX/XZX-Bridging-Header.h
-          
-          # Compile everything with explicit include paths
+          # Compile Swift files together into a static library
           xcrun -sdk iphoneos swiftc \
-            -emit-library \
-            -o build/executor.dylib \
+            -emit-library -static \
+            -o build/libXZXSwift.a \
             -module-name XZX \
             -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I . \
-            -I ./injector/dylib \
-            -I ./injector/dylib/Core \
-            -I ${{ env.LUA_INCLUDE_DIR }} \
-            -I build/modulemap \
-            -Xcc -I. \
-            -Xcc -I./injector/dylib \
-            -Xcc -I./injector/dylib/Core \
-            -Xcc -I${{ env.LUA_INCLUDE_DIR }} \
+            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
-            -framework UIKit \
-            -framework Foundation \
-            -framework CoreGraphics \
-            -framework WebKit \
-            -lstdc++ \
-            $OBJC_FILES $CPP_FILES $SWIFT_FILES
+            $SWIFT_FILES
           
           if [ $? -ne 0 ]; then
-            echo "❌ Compilation failed"
+            echo "❌ Swift compilation failed"
+            exit 1
+          fi
+          echo "✅ Swift static library created"
+          ls -la build/
+      
+      - name: Compile Objective-C files to objects
+        run: |
+          for file in injector/dylib/*.m; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file" .m)
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos clang -c \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
+              if [ $? -ne 0 ]; then exit 1; fi
+            fi
+          done
+          echo "✅ Objective-C compilation complete"
+      
+      - name: Compile C++ files to objects
+        run: |
+          for file in injector/dylib/Core/*.mm; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file" .mm)
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos clang++ -c -std=c++11 \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/${filename}.o" "$file" -target arm64-apple-ios15.0
+              if [ $? -ne 0 ]; then exit 1; fi
+            fi
+          done
+          echo "✅ C++ compilation complete"
+      
+      - name: Link all into final dylib
+        run: |
+          echo "Linking all object files and Swift static library..."
+          
+          # Collect all object files (excluding any Swift .o if present)
+          OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
+          if [ -z "$OBJECTS" ]; then
+            echo "❌ No object files found"
             exit 1
           fi
           
-          echo "✅ Compilation complete"
-          ls -la build/
+          echo "Linking objects: $OBJECTS"
+          echo "Linking Swift library: build/libXZXSwift.a"
+          
+          xcrun -sdk iphoneos clang++ -shared \
+            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
+            -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+            -undefined dynamic_lookup \
+            -o build/executor.dylib \
+            build/libXZXSwift.a $OBJECTS \
+            -lstdc++ -target arm64-apple-ios15.0
+          
+          if [ ! -f "build/executor.dylib" ]; then
+            echo "❌ Linking failed"
+            exit 1
+          fi
+          echo "✅ Dylib compiled successfully"
+          file build/executor.dylib
       
       - name: Extract and modify IPA
         run: |

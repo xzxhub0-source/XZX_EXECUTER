@@ -95,45 +95,33 @@ jobs:
           done
           echo "✅ C++ compilation complete"
       
-      - name: List Swift files
-        run: |
-          echo "Swift files in XZX/Services:"
-          ls -la XZX/Services/
-          echo "Swift files in XZX/UI:"
-          ls -la XZX/UI/
-          echo "Main Swift file:"
-          ls -la XZX/MainViewController.swift
-      
       - name: Compile Swift files
         run: |
           echo "Compiling Swift files..."
           
-          # Collect all Swift files explicitly
+          # Collect all Swift files
           SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
           echo "Compiling: $SWIFT_FILES"
           
-          # Create build directory
           mkdir -p build
           
-          # Compile all Swift files together
+          # Compile all Swift files together into one object file using whole-module optimization
           xcrun -sdk iphoneos swiftc \
             -c \
+            -whole-module-optimization \
             -module-name XZX \
             -emit-module \
             -emit-module-path build/XZX.swiftmodule \
             -import-objc-header XZX/XZX-Bridging-Header.h \
             -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
+            -o build/XZX.o \
             $SWIFT_FILES
           
           if [ $? -ne 0 ]; then
             echo "❌ Swift compilation failed"
             exit 1
           fi
-          
-          # Move all .o files to build
-          mv *.o build/ 2>/dev/null || true
-          
           echo "✅ Swift compilation complete"
       
       - name: List all object files
@@ -143,7 +131,7 @@ jobs:
         run: |
           echo "Linking all object files..."
           
-          # Collect all object files
+          # Collect all object files (including the Swift object)
           OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
           if [ -z "$OBJECTS" ]; then
             echo "❌ No object files found"

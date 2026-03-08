@@ -66,34 +66,9 @@ jobs:
           cd ..
           echo "✅ insert_dylib compiled"
       
-      - name: Compile Swift files into static library
-        run: |
-          mkdir -p build
-          echo "Compiling Swift files into static library..."
-          
-          # Collect Swift files
-          SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
-          echo "Swift files: $SWIFT_FILES"
-          
-          # Compile Swift files together into a static library
-          xcrun -sdk iphoneos swiftc \
-            -emit-library -static \
-            -o build/libXZXSwift.a \
-            -module-name XZX \
-            -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
-            -target arm64-apple-ios15.0 \
-            $SWIFT_FILES
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ Swift compilation failed"
-            exit 1
-          fi
-          echo "✅ Swift static library created"
-          ls -la build/
-      
       - name: Compile Objective-C files to objects
         run: |
+          mkdir -p build
           for file in injector/dylib/*.m; do
             if [ -f "$file" ]; then
               filename=$(basename "$file" .m)
@@ -120,11 +95,36 @@ jobs:
           done
           echo "✅ C++ compilation complete"
       
+      - name: Compile Swift files into a single object file
+        run: |
+          echo "Compiling Swift files into a single object file..."
+          
+          # Collect Swift files
+          SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
+          echo "Swift files: $SWIFT_FILES"
+          
+          # Compile all Swift files into a single object file using incremental compilation
+          xcrun -sdk iphoneos swiftc \
+            -c \
+            -module-name XZX \
+            -import-objc-header XZX/XZX-Bridging-Header.h \
+            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+            -target arm64-apple-ios15.0 \
+            -o build/XZXSwift.o \
+            $SWIFT_FILES
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Swift compilation failed"
+            exit 1
+          fi
+          echo "✅ Swift compilation complete"
+          ls -la build/
+      
       - name: Link all into final dylib
         run: |
-          echo "Linking all object files and Swift static library..."
+          echo "Linking all object files..."
           
-          # Collect all object files (excluding any Swift .o if present)
+          # Collect all object files
           OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
           if [ -z "$OBJECTS" ]; then
             echo "❌ No object files found"
@@ -132,14 +132,13 @@ jobs:
           fi
           
           echo "Linking objects: $OBJECTS"
-          echo "Linking Swift library: build/libXZXSwift.a"
           
           xcrun -sdk iphoneos clang++ -shared \
             -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
             -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
             -undefined dynamic_lookup \
             -o build/executor.dylib \
-            build/libXZXSwift.a $OBJECTS \
+            $OBJECTS \
             -lstdc++ -target arm64-apple-ios15.0
           
           if [ ! -f "build/executor.dylib" ]; then

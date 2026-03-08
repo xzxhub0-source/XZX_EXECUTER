@@ -40,6 +40,13 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "✅ Lua headers installed successfully"
       
+      - name: Verify LuaExecutor.h exists
+        run: |
+          echo "Checking for LuaExecutor.h:"
+          ls -la injector/dylib/Core/LuaExecutor.h || echo "File not found!"
+          echo "Full path:"
+          find . -name "LuaExecutor.h" -type f
+      
       - name: Download Roblox IPA
         run: |
           FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
@@ -66,7 +73,17 @@ jobs:
           cd ..
           echo "✅ insert_dylib compiled"
       
-      - name: Compile all files together
+      - name: Create module map for better header visibility
+        run: |
+          mkdir -p build/modulemap
+          cat > build/modulemap/module.modulemap << 'EOF'
+          module XZXHeaders {
+            header "../../injector/dylib/Core/LuaExecutor.h"
+            export *
+          }
+          EOF
+      
+      - name: Compile all files together with proper include paths
         run: |
           mkdir -p build
           echo "Compiling all files together..."
@@ -80,15 +97,30 @@ jobs:
           echo "C++ files: $CPP_FILES"
           echo "Swift files: $SWIFT_FILES"
           
-          # Compile everything in one command
+          # First, verify the bridging header
+          echo "Bridging header content:"
+          cat XZX/XZX-Bridging-Header.h
+          
+          # Compile everything with explicit include paths
           xcrun -sdk iphoneos swiftc \
             -emit-library \
             -o build/executor.dylib \
             -module-name XZX \
             -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+            -I . \
+            -I ./injector/dylib \
+            -I ./injector/dylib/Core \
+            -I ${{ env.LUA_INCLUDE_DIR }} \
+            -I build/modulemap \
+            -Xcc -I. \
+            -Xcc -I./injector/dylib \
+            -Xcc -I./injector/dylib/Core \
+            -Xcc -I${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
-            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
+            -framework UIKit \
+            -framework Foundation \
+            -framework CoreGraphics \
+            -framework WebKit \
             -lstdc++ \
             $OBJC_FILES $CPP_FILES $SWIFT_FILES
           

@@ -1,239 +1,109 @@
-name: Build XZX Executor
+import UIKit
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
-
-jobs:
-  build:
-    runs-on: macos-latest
+public class MainViewController: UIViewController {
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Install dependencies
-        run: |
-          brew install pipx
-          pipx ensurepath
-          pipx install gdown
-      
-      - name: Download and install Lua headers
-        run: |
-          mkdir -p $HOME/lua-ios/include
-          curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
-          if [ ! -f lua-5.4.6.tar.gz ]; then
-            echo "❌ Failed to download Lua source"
-            exit 1
-          fi
-          tar -xzf lua-5.4.6.tar.gz
-          cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lua.hpp $HOME/lua-ios/include/
-          if [ ! -f $HOME/lua-ios/include/lua.h ]; then
-            echo "❌ Lua headers not copied correctly"
-            exit 1
-          fi
-          echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          echo "✅ Lua headers installed successfully"
-      
-      - name: Download Roblox IPA
-        run: |
-          FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
-          pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
-          if [ ! -f "Roblox.ipa" ]; then
-            echo "❌ Download failed"
-            exit 1
-          fi
-          echo "✅ Download successful!"
-      
-      - name: Download and compile insert_dylib
-        run: |
-          git clone https://github.com/tyilo/insert_dylib.git
-          cd insert_dylib
-          xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib -configuration Release
-          BINARY_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "insert_dylib" -type f | head -1)
-          if [ -z "$BINARY_PATH" ]; then
-            echo "❌ insert_dylib binary not found"
-            exit 1
-          fi
-          mkdir -p ../tools
-          cp "$BINARY_PATH" ../tools/insert_dylib
-          chmod +x ../tools/insert_dylib
-          cd ..
-          echo "✅ insert_dylib compiled"
-      
-      - name: Create Xcode project
-        run: |
-          # Create project structure
-          mkdir -p XZXProject/XZX
-          mkdir -p XZXProject/injector/dylib/Core
-          mkdir -p XZXProject/LuaHeaders
-          
-          # Copy all files
-          cp -r XZX/* XZXProject/XZX/ 2>/dev/null || true
-          cp -r injector/dylib/* XZXProject/injector/dylib/ 2>/dev/null || true
-          
-          # Copy Lua headers
-          cp $HOME/lua-ios/include/*.h XZXProject/LuaHeaders/
-          
-          # Create fixed bridging header
-          cat > XZXProject/XZX/XZX-Bridging-Header.h << 'EOF'
-          #ifndef XZX_Bridging_Header_h
-          #define XZX_Bridging_Header_h
-          
-          #import <Foundation/Foundation.h>
-          #import <UIKit/UIKit.h>
-          
-          // Include Lua executor header - using relative path within project
-          #include "LuaExecutor.h"
-          
-          // C functions from LuaExecutor.mm
-          void InitLua(void);
-          void ExecuteScript(const char *script);
-          
-          #endif
-          EOF
-          
-          # Create Info.plist
-          cat > XZXProject/Info.plist << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key>
-              <string>en</string>
-              <key>CFBundleDisplayName</key>
-              <string>XZX</string>
-              <key>CFBundleExecutable</key>
-              <string>XZX</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.xzx.executor</string>
-              <key>CFBundleInfoDictionaryVersion</key>
-              <string>6.0</string>
-              <key>CFBundleName</key>
-              <string>XZX</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>UIRequiredDeviceCapabilities</key>
-              <array>
-                  <string>arm64</string>
-              </array>
-          </dict>
-          </plist>
-          EOF
-          
-          # Create project.yml with proper header search paths
-          brew install xcodegen
-          
-          cat > XZXProject/project.yml << 'EOF'
-          name: XZX
-          options:
-            bundleIdPrefix: com.xzx
-            deploymentTarget:
-              iOS: 15.0
-          targets:
-            XZX:
-              type: application
-              platform: iOS
-              sources:
-                - XZX
-                - injector/dylib
-              settings:
-                base:
-                  INFOPLIST_FILE: Info.plist
-                  SWIFT_OBJC_BRIDGING_HEADER: XZX/XZX-Bridging-Header.h
-                  HEADER_SEARCH_PATHS:
-                    - $(SRCROOT)/LuaHeaders
-                    - $(SRCROOT)/injector/dylib
-                    - $(SRCROOT)/injector/dylib/Core
-                  OTHER_LDFLAGS: -lstdc++
-                  ENABLE_BITCODE: NO
-              info:
-                path: Info.plist
-          EOF
-          
-          cd XZXProject
-          xcodegen generate
-          echo "✅ Xcode project created"
-      
-      - name: Build the app
-        run: |
-          cd XZXProject
-          xcodebuild -project XZX.xcodeproj -scheme XZX -configuration Release -sdk iphoneos -arch arm64 build CODE_SIGNING_ALLOWED=NO
-          if [ $? -ne 0 ]; then
-            echo "❌ Build failed"
-            exit 1
-          fi
-          echo "✅ App built successfully"
-          ls -la build/Release-iphoneos/
-      
-      - name: Create IPA from .app
-        run: |
-          mkdir -p Payload
-          cp -r XZXProject/build/Release-iphoneos/XZX.app Payload/
-          zip -r XZX.ipa Payload/
-          echo "✅ IPA created: XZX.ipa"
-          ls -la XZX.ipa
-      
-      - name: Extract and modify Roblox IPA
-        run: |
-          unzip -q Roblox.ipa -d extracted/
-          if [ ! -d "extracted/Payload/Roblox.app" ]; then
-            echo "❌ Failed to extract IPA"
-            exit 1
-          fi
-          
-          # Copy the XZX binary as dylib
-          cp XZXProject/build/Release-iphoneos/XZX.app/XZX extracted/Payload/Roblox.app/executor.dylib
-          
-          rm -rf extracted/Payload/Roblox.app/_CodeSignature
-          rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          
-          ./tools/insert_dylib @executable_path/executor.dylib \
-            extracted/Payload/Roblox.app/Roblox \
-            extracted/Payload/Roblox.app/Roblox_patched --all-yes
-          
-          if [ ! -f "extracted/Payload/Roblox.app/Roblox_patched" ]; then
-            echo "❌ Dylib injection failed"
-            exit 1
-          fi
-          
-          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
-          echo "✅ Roblox modification complete"
-      
-      - name: Change app name to XZX
-        run: |
-          INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
-          plutil -convert xml1 "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName XZX" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string XZX" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
-          plutil -convert binary1 "$INFO_PLIST"
-          echo "✅ App name changed"
-      
-      - name: Repackage IPA
-        run: |
-          cd extracted
-          zip -qr ../XZX-Roblox.ipa Payload/
-          cd ..
-          echo "✅ Final IPA created: XZX-Roblox.ipa"
-          ls -la XZX-Roblox.ipa
-      
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: XZX-Roblox-Executor
-          path: XZX-Roblox.ipa
-          if-no-files-found: error
-          retention-days: 90
+    private let neonWindow = NeonWindow()
+    private let sidebar = SidebarView()
+    private let editor = EditorView()
+    private let hub = HubView()
+    private let executeButton = UIButton()
+    private let clearButton = UIButton()
+    private let saveButton = UIButton()
+    
+    public override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        InitLua()
+        setupWindow()
+        setupSidebar()
+        setupViews()
+        setupToolbar()
+        setupNotifications()
+    }
+    
+    private func setupWindow() {
+        neonWindow.frame = CGRect(x: 40, y: 80, width: 400, height: 500)
+        view.addSubview(neonWindow)
+    }
+    
+    private func setupSidebar() {
+        sidebar.frame = CGRect(x: 10, y: 10, width: 180, height: 480)
+        sidebar.onTabSelected = { [weak self] index in
+            self?.switchToTab(index)
+        }
+        neonWindow.addSubview(sidebar)
+    }
+    
+    private func setupViews() {
+        let views: [(UIView, Int)] = [
+            (editor, 0),
+            (hub, 1)
+        ]
+        
+        for (view, tag) in views {
+            view.frame = CGRect(x: 200, y: 20, width: 180, height: 400)
+            view.tag = tag
+            view.isHidden = tag != 0
+            neonWindow.addSubview(view)
+        }
+    }
+    
+    private func setupToolbar() {
+        executeButton.frame = CGRect(x: 200, y: 430, width: 50, height: 40)
+        executeButton.setTitle("▶️", for: .normal)
+        executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
+        executeButton.layer.cornerRadius = 8
+        executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
+        neonWindow.addSubview(executeButton)
+        
+        clearButton.frame = CGRect(x: 260, y: 430, width: 50, height: 40)
+        clearButton.setTitle("🗑️", for: .normal)
+        clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
+        clearButton.layer.cornerRadius = 8
+        clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
+        neonWindow.addSubview(clearButton)
+        
+        saveButton.frame = CGRect(x: 320, y: 430, width: 50, height: 40)
+        saveButton.setTitle("💾", for: .normal)
+        saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1)
+        saveButton.layer.cornerRadius = 8
+        saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside)
+        neonWindow.addSubview(saveButton)
+    }
+    
+    private func setupNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(loadScriptFromHub(_:)),
+            name: NSNotification.Name("LoadScript"),
+            object: nil
+        )
+    }
+    
+    private func switchToTab(_ index: Int) {
+        let views = neonWindow.subviews
+        for view in views where view.tag < 2 {
+            view.isHidden = view.tag != index
+        }
+    }
+    
+    @objc private func executeScript() {
+        let script = editor.textView.text ?? ""
+        ExecuteScript(script)
+    }
+    
+    @objc private func clearScript() {
+        editor.textView.text = ""
+    }
+    
+    @objc private func saveScript() {
+        print("Script saved")
+    }
+    
+    @objc private func loadScriptFromHub(_ notification: Notification) {
+        if let scriptTitle = notification.object as? String {
+            switchToTab(0)
+            editor.textView.text = "-- Loaded: \(scriptTitle)\n\nprint('Script loaded!')"
+        }
+    }
+}

@@ -19,200 +19,1156 @@ jobs:
           pipx ensurepath
           pipx install gdown
       
-      - name: Download and install Lua headers
+      - name: Download and install Lua headers from official source
         run: |
+          # Create directories
           mkdir -p $HOME/lua-ios/include
+          
+          # Download Lua 5.4.6 source tarball
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           if [ ! -f lua-5.4.6.tar.gz ]; then
             echo "❌ Failed to download Lua source"
             exit 1
           fi
+          
+          # Extract headers
           tar -xzf lua-5.4.6.tar.gz
           cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lua.hpp $HOME/lua-ios/include/
+          
+          # Verify headers
           if [ ! -f $HOME/lua-ios/include/lua.h ]; then
             echo "❌ Lua headers not copied correctly"
             exit 1
           fi
+          
+          # Set environment variable
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
+          
           echo "✅ Lua headers installed successfully"
+          ls -la $HOME/lua-ios/include/
       
       - name: Download Roblox IPA
         run: |
           FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
+          
           if [ ! -f "Roblox.ipa" ]; then
             echo "❌ Download failed"
             exit 1
           fi
-          echo "✅ Download successful!"
+          echo "✅ Download successful! Size: $(ls -la Roblox.ipa | awk '{print $5}') bytes"
       
       - name: Download and compile insert_dylib
         run: |
           git clone https://github.com/tyilo/insert_dylib.git
           cd insert_dylib
           xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib -configuration Release
+          
+          # Find the compiled binary
           BINARY_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "insert_dylib" -type f | head -1)
           if [ -z "$BINARY_PATH" ]; then
             echo "❌ insert_dylib binary not found"
             exit 1
           fi
+          
           mkdir -p ../tools
           cp "$BINARY_PATH" ../tools/insert_dylib
           chmod +x ../tools/insert_dylib
           cd ..
-          echo "✅ insert_dylib compiled"
+          echo "✅ insert_dylib compiled and installed"
       
-      - name: Create Xcode project
+      - name: Create directory structure
         run: |
-          # Create project structure
-          mkdir -p XZXProject/XZX
-          mkdir -p XZXProject/injector/dylib/Core
-          mkdir -p XZXProject/LuaHeaders
-          
-          # Copy all files
-          cp -r XZX/* XZXProject/XZX/ 2>/dev/null || true
-          cp -r injector/dylib/* XZXProject/injector/dylib/ 2>/dev/null || true
-          
-          # Copy Lua headers
-          cp $HOME/lua-ios/include/*.h XZXProject/LuaHeaders/
-          
-          # Create fixed bridging header
-          cat > XZXProject/XZX/XZX-Bridging-Header.h << 'EOF'
+          mkdir -p XZX/Services
+          mkdir -p XZX/UI
+          mkdir -p injector/dylib/Core
+      
+      - name: Create LuaExecutor.h
+        run: |
+          cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
+          #ifndef LuaExecutor_h
+          #define LuaExecutor_h
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void InitLua(void);
+          void ExecuteScript(const char *script);
+
+          #ifdef __cplusplus
+          }
+          #endif
+
+          #endif
+          EOF
+      
+      - name: Create LuaExecutor.mm
+        run: |
+          cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+          #include <lua.h>
+          #include <lauxlib.h>
+          #include <lualib.h>
+          #include "LuaExecutor.h"
+
+          static lua_State *L = nil;
+
+          static int xzx_print(lua_State *L) {
+              int n = lua_gettop(L);
+              NSMutableString *output = [NSMutableString string];
+              
+              for (int i = 1; i <= n; i++) {
+                  if (lua_isstring(L, i)) {
+                      if (i > 1) [output appendString:@"\t"];
+                      [output appendFormat:@"%s", lua_tostring(L, i)];
+                  }
+              }
+              
+              NSLog(@"[XZX] %@", output);
+              return 0;
+          }
+
+          static int xzx_getscript(lua_State *L) {
+              const char *url = luaL_checkstring(L, 1);
+              
+              dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+              __block NSString *result = nil;
+              
+              NSURL *nsUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+              NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:nsUrl completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                  if (data) {
+                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                  }
+                  dispatch_semaphore_signal(semaphore);
+              }];
+              
+              [task resume];
+              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+              
+              if (result) {
+                  lua_pushstring(L, [result UTF8String]);
+              } else {
+                  lua_pushnil(L);
+              }
+              
+              return 1;
+          }
+
+          void InitLua(void) {
+              if (!L) {
+                  L = luaL_newstate();
+                  luaL_openlibs(L);
+                  
+                  lua_register(L, "print", xzx_print);
+                  lua_register(L, "getscript", xzx_getscript);
+                  
+                  luaL_dostring(L, "xzx = { version = '2.0.0' }");
+              }
+          }
+
+          void ExecuteScript(const char *script) {
+              if (!L) InitLua();
+              
+              int status = luaL_dostring(L, script);
+              
+              if (status != LUA_OK) {
+                  const char *error = lua_tostring(L, -1);
+                  NSLog(@"[XZX] Lua Error: %s", error);
+                  lua_pop(L, 1);
+              }
+          }
+          EOF
+      
+      - name: Create bridging header with correct relative path
+        run: |
+          cat > XZX/XZX-Bridging-Header.h << 'EOF'
           #ifndef XZX_Bridging_Header_h
           #define XZX_Bridging_Header_h
           
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
           
-          // Include Lua executor header - using relative path within project
-          #include "LuaExecutor.h"
-          
-          // C functions from LuaExecutor.mm
-          void InitLua(void);
-          void ExecuteScript(const char *script);
+          // Include Lua executor header - using relative path from current directory
+          #include "../injector/dylib/Core/LuaExecutor.h"
           
           #endif
           EOF
-          
-          # Create Info.plist
-          cat > XZXProject/Info.plist << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key>
-              <string>en</string>
-              <key>CFBundleDisplayName</key>
-              <string>XZX</string>
-              <key>CFBundleExecutable</key>
-              <string>XZX</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.xzx.executor</string>
-              <key>CFBundleInfoDictionaryVersion</key>
-              <string>6.0</string>
-              <key>CFBundleName</key>
-              <string>XZX</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>UIRequiredDeviceCapabilities</key>
-              <array>
-                  <string>arm64</string>
-              </array>
-          </dict>
-          </plist>
-          EOF
-          
-          # Create project.yml with proper header search paths
-          brew install xcodegen
-          
-          cat > XZXProject/project.yml << 'EOF'
-          name: XZX
-          options:
-            bundleIdPrefix: com.xzx
-            deploymentTarget:
-              iOS: 15.0
-          targets:
-            XZX:
-              type: application
-              platform: iOS
-              sources:
-                - XZX
-                - injector/dylib
-              settings:
-                base:
-                  INFOPLIST_FILE: Info.plist
-                  SWIFT_OBJC_BRIDGING_HEADER: XZX/XZX-Bridging-Header.h
-                  HEADER_SEARCH_PATHS:
-                    - $(SRCROOT)/LuaHeaders
-                    - $(SRCROOT)/injector/dylib
-                    - $(SRCROOT)/injector/dylib/Core
-                  OTHER_LDFLAGS: -lstdc++
-                  ENABLE_BITCODE: NO
-              info:
-                path: Info.plist
-          EOF
-          
-          cd XZXProject
-          xcodegen generate
-          echo "✅ Xcode project created"
+          echo "✅ Bridging header created with correct path"
       
-      - name: Build the app
+      - name: Create Swift files
         run: |
-          cd XZXProject
-          xcodebuild -project XZX.xcodeproj -scheme XZX -configuration Release -sdk iphoneos -arch arm64 build CODE_SIGNING_ALLOWED=NO
-          if [ $? -ne 0 ]; then
-            echo "❌ Build failed"
+          # Create ScriptBloxAPI.swift
+          cat > XZX/Services/ScriptBloxAPI.swift << 'EOF'
+          import Foundation
+          import UIKit
+
+          public struct ScriptItem: Decodable {
+              public let title: String
+              public let script: String
+              public let game: String?
+              public let views: Int?
+              public let likes: Int?
+              public let thumbnail: String?
+              
+              enum CodingKeys: String, CodingKey {
+                  case title, script, game, views, likes
+                  case thumbnail = "image"
+              }
+              
+              public init(from decoder: Decoder) throws {
+                  let container = try decoder.container(keyedBy: CodingKeys.self)
+                  title = try container.decode(String.self, forKey: .title)
+                  script = try container.decode(String.self, forKey: .script)
+                  game = try container.decodeIfPresent(String.self, forKey: .game)
+                  views = try container.decodeIfPresent(Int.self, forKey: .views)
+                  likes = try container.decodeIfPresent(Int.self, forKey: .likes)
+                  thumbnail = try container.decodeIfPresent(String.self, forKey: .thumbnail)
+              }
+          }
+
+          struct ScriptBloxResponse: Decodable {
+              let result: ScriptResult
+          }
+
+          struct ScriptResult: Decodable {
+              let scripts: [ScriptItem]
+          }
+
+          public class ScriptBloxAPI {
+              public static let shared = ScriptBloxAPI()
+              private var searchCache = NSCache<NSString, NSArray>()
+              private var imageCache = NSCache<NSString, UIImage>()
+              private var currentTask: URLSessionDataTask?
+              
+              private init() {}
+              
+              public func search(query: String, completion: @escaping ([ScriptItem]) -> Void) {
+                  currentTask?.cancel()
+                  
+                  let cacheKey = NSString(string: query)
+                  if let cached = searchCache.object(forKey: cacheKey) as? [ScriptItem] {
+                      completion(cached)
+                      return
+                  }
+                  
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                      guard let self = self else { return }
+                      
+                      let urlString = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
+                      guard let url = URL(string: urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else {
+                          completion([])
+                          return
+                      }
+                      
+                      self.currentTask = URLSession.shared.dataTask(with: url) { data, response, error in
+                          guard let data = data, error == nil else {
+                              DispatchQueue.main.async { completion([]) }
+                              return
+                          }
+                          
+                          do {
+                              let decoded = try JSONDecoder().decode(ScriptBloxResponse.self, from: data)
+                              let scripts = decoded.result.scripts
+                              self.searchCache.setObject(scripts as NSArray, forKey: cacheKey)
+                              DispatchQueue.main.async {
+                                  completion(scripts)
+                              }
+                          } catch {
+                              DispatchQueue.main.async { completion([]) }
+                          }
+                      }
+                      self.currentTask?.resume()
+                  }
+              }
+              
+              public func loadThumbnail(url: String, completion: @escaping (UIImage?) -> Void) {
+                  let cacheKey = NSString(string: url)
+                  
+                  if let cached = imageCache.object(forKey: cacheKey) {
+                      completion(cached)
+                      return
+                  }
+                  
+                  guard let imageUrl = URL(string: url) else {
+                      completion(nil)
+                      return
+                  }
+                  
+                  URLSession.shared.dataTask(with: imageUrl) { [weak self] data, _, _ in
+                      if let data = data, let image = UIImage(data: data) {
+                          self?.imageCache.setObject(image, forKey: cacheKey)
+                          DispatchQueue.main.async {
+                              completion(image)
+                          }
+                      } else {
+                          DispatchQueue.main.async {
+                              completion(nil)
+                          }
+                      }
+                  }.resume()
+              }
+          }
+          EOF
+          
+          # Create TabManager.swift
+          cat > XZX/Services/TabManager.swift << 'EOF'
+          import Foundation
+
+          public struct ScriptTab: Codable {
+              public var id = UUID()
+              public var name: String
+              public var content: String
+              public var isSaved: Bool = false
+              
+              public init(name: String, content: String) {
+                  self.name = name
+                  self.content = content
+              }
+          }
+
+          public class TabManager: ObservableObject {
+              public static let shared = TabManager()
+              
+              @Published public var tabs: [ScriptTab] = []
+              @Published public var selectedTabIndex: Int = 0
+              @Published public var savedScripts: [ScriptTab] = []
+              
+              private let userDefaults = UserDefaults.standard
+              private let tabsKey = "xzx_tabs"
+              private let savedKey = "xzx_saved"
+              
+              private init() {
+                  loadTabs()
+                  loadSaved()
+                  
+                  if tabs.isEmpty {
+                      tabs.append(ScriptTab(name: "Untitled 1", content: "-- XZX Executor\nprint('Hello World!')"))
+                  }
+              }
+              
+              public func addTab() {
+                  let newTab = ScriptTab(name: "Untitled \(tabs.count + 1)", content: "")
+                  tabs.append(newTab)
+                  selectedTabIndex = tabs.count - 1
+                  saveTabs()
+              }
+              
+              public func removeTab(at index: Int) {
+                  guard tabs.count > 1 else { return }
+                  tabs.remove(at: index)
+                  if selectedTabIndex >= tabs.count {
+                      selectedTabIndex = tabs.count - 1
+                  }
+                  saveTabs()
+              }
+              
+              public func updateCurrentContent(_ content: String) {
+                  guard selectedTabIndex < tabs.count else { return }
+                  tabs[selectedTabIndex].content = content
+                  saveTabs()
+              }
+              
+              public func saveScript(at index: Int) {
+                  guard index < tabs.count else { return }
+                  var script = tabs[index]
+                  script.isSaved = true
+                  savedScripts.append(script)
+                  saveSaved()
+              }
+              
+              public func loadScript(_ script: ScriptTab) {
+                  tabs.append(script)
+                  selectedTabIndex = tabs.count - 1
+                  saveTabs()
+              }
+              
+              private func saveTabs() {
+                  if let encoded = try? JSONEncoder().encode(tabs) {
+                      userDefaults.set(encoded, forKey: tabsKey)
+                  }
+              }
+              
+              private func loadTabs() {
+                  if let data = userDefaults.data(forKey: tabsKey),
+                     let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) {
+                      tabs = decoded
+                  }
+              }
+              
+              private func saveSaved() {
+                  if let encoded = try? JSONEncoder().encode(savedScripts) {
+                      userDefaults.set(encoded, forKey: savedKey)
+                  }
+              }
+              
+              private func loadSaved() {
+                  if let data = userDefaults.data(forKey: savedKey),
+                     let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) {
+                      savedScripts = decoded
+                  }
+              }
+          }
+          EOF
+          
+          # Create NeonWindow.swift
+          cat > XZX/UI/NeonWindow.swift << 'EOF'
+          import UIKit
+
+          public class NeonWindow: UIView {
+              
+              private let gradientLayer = CAGradientLayer()
+              private var dragStartPoint: CGPoint?
+              private var dragStartFrame: CGRect?
+              
+              public override init(frame: CGRect) {
+                  super.init(frame: frame)
+                  setup()
+                  setupDragging()
+              }
+              
+              required init?(coder: NSCoder) {
+                  super.init(coder: coder)
+                  setup()
+                  setupDragging()
+              }
+              
+              private func setup() {
+                  backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
+                  layer.cornerRadius = 18
+                  layer.masksToBounds = true
+                  
+                  gradientLayer.frame = bounds
+                  gradientLayer.colors = [
+                      UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor,
+                      UIColor(red: 0.45, green: 0.25, blue: 0.8, alpha: 1).cgColor,
+                      UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor
+                  ]
+                  gradientLayer.locations = [0, 0.5, 1]
+                  gradientLayer.startPoint = CGPoint(x: 0, y: 0)
+                  gradientLayer.endPoint = CGPoint(x: 1, y: 1)
+                  
+                  layer.addSublayer(gradientLayer)
+                  
+                  let animation = CABasicAnimation(keyPath: "locations")
+                  animation.fromValue = [0, 0.5, 1]
+                  animation.toValue = [0.2, 0.7, 1.2]
+                  animation.duration = 3
+                  animation.autoreverses = true
+                  animation.repeatCount = .infinity
+                  gradientLayer.add(animation, forKey: "glowAnimation")
+                  
+                  layer.shadowColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor
+                  layer.shadowOpacity = 0.8
+                  layer.shadowRadius = 25
+                  layer.shadowOffset = .zero
+              }
+              
+              private func setupDragging() {
+                  let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handleDrag(_:)))
+                  addGestureRecognizer(panGesture)
+              }
+              
+              @objc private func handleDrag(_ gesture: UIPanGestureRecognizer) {
+                  switch gesture.state {
+                  case .began:
+                      dragStartPoint = gesture.location(in: superview)
+                      dragStartFrame = frame
+                  case .changed:
+                      guard let startPoint = dragStartPoint,
+                            let startFrame = dragStartFrame else { return }
+                      
+                      let translation = gesture.location(in: superview)
+                      let dx = translation.x - startPoint.x
+                      let dy = translation.y - startPoint.y
+                      
+                      frame = CGRect(
+                          x: startFrame.origin.x + dx,
+                          y: startFrame.origin.y + dy,
+                          width: startFrame.width,
+                          height: startFrame.height
+                      )
+                  default:
+                      dragStartPoint = nil
+                      dragStartFrame = nil
+                  }
+              }
+              
+              public override func layoutSubviews() {
+                  super.layoutSubviews()
+                  gradientLayer.frame = bounds
+              }
+          }
+          EOF
+          
+          # Create SidebarView.swift
+          cat > XZX/UI/SidebarView.swift << 'EOF'
+          import UIKit
+
+          public class SidebarView: UIView {
+              
+              public var buttons: [UIButton] = []
+              public var onTabSelected: ((Int) -> Void)?
+              
+              private let items = [
+                  ("📝", "Editor"),
+                  ("🌐", "Hub"),
+                  ("📌", "Tabs"),
+                  ("💾", "Saved"),
+                  ("⚙️", "Settings")
+              ]
+              
+              public override init(frame: CGRect) {
+                  super.init(frame: frame)
+                  build()
+              }
+              
+              required init?(coder: NSCoder) {
+                  super.init(coder: coder)
+                  build()
+              }
+              
+              private func build() {
+                  backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
+                  layer.cornerRadius = 12
+                  
+                  for i in 0..<items.count {
+                      let btn = createButton(title: "\(items[i].0) \(items[i].1)", tag: i)
+                      btn.frame = CGRect(x: 10, y: 20 + (i * 55), width: 160, height: 45)
+                      addSubview(btn)
+                      buttons.append(btn)
+                  }
+                  
+                  animateButton(buttons[0])
+              }
+              
+              private func createButton(title: String, tag: Int) -> UIButton {
+                  let btn = UIButton(type: .system)
+                  btn.setTitle(title, for: .normal)
+                  btn.setTitleColor(.white, for: .normal)
+                  btn.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+                  btn.backgroundColor = UIColor(red: 0.16, green: 0.14, blue: 0.22, alpha: 1)
+                  btn.layer.cornerRadius = 10
+                  btn.tag = tag
+                  btn.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
+                  
+                  btn.layer.shadowColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.5).cgColor
+                  btn.layer.shadowOffset = .zero
+                  btn.layer.shadowRadius = 5
+                  btn.layer.shadowOpacity = 0
+                  
+                  return btn
+              }
+              
+              private func animateButton(_ button: UIButton) {
+                  let animation = CABasicAnimation(keyPath: "shadowOpacity")
+                  animation.fromValue = 0
+                  animation.toValue = 0.8
+                  animation.duration = 1.5
+                  animation.autoreverses = true
+                  animation.repeatCount = .infinity
+                  button.layer.add(animation, forKey: "buttonGlow")
+              }
+              
+              @objc private func buttonTapped(_ sender: UIButton) {
+                  buttons.forEach { btn in
+                      btn.backgroundColor = UIColor(red: 0.16, green: 0.14, blue: 0.22, alpha: 1)
+                      btn.layer.removeAnimation(forKey: "buttonGlow")
+                      btn.layer.shadowOpacity = 0
+                  }
+                  
+                  sender.backgroundColor = UIColor(red: 0.25, green: 0.2, blue: 0.35, alpha: 1)
+                  animateButton(sender)
+                  onTabSelected?(sender.tag)
+              }
+          }
+          EOF
+          
+          # Create EditorView.swift
+          cat > XZX/UI/EditorView.swift << 'EOF'
+          import UIKit
+
+          public class EditorView: UIView {
+              
+              public let textView = UITextView()
+              
+              public override init(frame: CGRect) {
+                  super.init(frame: frame)
+                  build()
+              }
+              
+              required init?(coder: NSCoder) {
+                  super.init(coder: coder)
+                  build()
+              }
+              
+              private func build() {
+                  backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1)
+                  layer.cornerRadius = 12
+                  
+                  textView.frame = bounds
+                  textView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                  textView.font = UIFont(name: "Menlo", size: 14)
+                  textView.textColor = .white
+                  textView.backgroundColor = .clear
+                  textView.text = "-- XZX Executor\nprint('Hello World!')"
+                  addSubview(textView)
+              }
+          }
+          EOF
+          
+          # Create HubView.swift
+          cat > XZX/UI/HubView.swift << 'EOF'
+          import UIKit
+
+          public class HubView: UIView {
+              
+              private let collectionView: UICollectionView
+              private let searchBar = UISearchBar()
+              private var scripts: [ScriptItem] = []
+              
+              public override init(frame: CGRect) {
+                  let layout = UICollectionViewFlowLayout()
+                  layout.itemSize = CGSize(width: 280, height: 120)
+                  layout.scrollDirection = .horizontal
+                  layout.minimumInteritemSpacing = 15
+                  layout.sectionInset = UIEdgeInsets(top: 10, left: 15, bottom: 10, right: 15)
+                  
+                  collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+                  
+                  super.init(frame: frame)
+                  build()
+              }
+              
+              required init?(coder: NSCoder) {
+                  let layout = UICollectionViewFlowLayout()
+                  layout.itemSize = CGSize(width: 280, height: 120)
+                  layout.scrollDirection = .horizontal
+                  layout.minimumInteritemSpacing = 15
+                  layout.sectionInset = UIEdgeInsets(top: 10, left: 15, bottom: 10, right: 15)
+                  
+                  collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+                  
+                  super.init(coder: coder)
+                  build()
+              }
+              
+              private func build() {
+                  backgroundColor = .clear
+                  
+                  searchBar.frame = CGRect(x: 10, y: 10, width: bounds.width - 20, height: 50)
+                  searchBar.autoresizingMask = [.flexibleWidth]
+                  searchBar.placeholder = "Search ScriptBlox..."
+                  searchBar.searchBarStyle = .minimal
+                  searchBar.barStyle = .black
+                  searchBar.tintColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1)
+                  searchBar.delegate = self
+                  addSubview(searchBar)
+                  
+                  collectionView.frame = CGRect(x: 0, y: 70, width: bounds.width, height: bounds.height - 70)
+                  collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                  collectionView.backgroundColor = .clear
+                  collectionView.register(ScriptCardCell.self, forCellWithReuseIdentifier: "cell")
+                  collectionView.dataSource = self
+                  addSubview(collectionView)
+                  
+                  search(query: "blox")
+              }
+              
+              public func search(query: String) {
+                  ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in
+                      self?.scripts = scripts
+                      self?.collectionView.reloadData()
+                  }
+              }
+          }
+
+          extension HubView: UISearchBarDelegate {
+              public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+                  searchBar.resignFirstResponder()
+                  if let query = searchBar.text, !query.isEmpty {
+                      search(query: query)
+                  }
+              }
+          }
+
+          extension HubView: UICollectionViewDataSource {
+              public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+                  return scripts.count
+              }
+              
+              public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+                  let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "cell", for: indexPath) as! ScriptCardCell
+                  let script = scripts[indexPath.item]
+                  cell.configure(with: script)
+                  return cell
+              }
+          }
+
+          public class ScriptCardCell: UICollectionViewCell {
+              
+              private let titleLabel = UILabel()
+              private let gameLabel = UILabel()
+              private let thumbnailView = UIImageView()
+              private let loadButton = UIButton(type: .system)
+              
+              public override init(frame: CGRect) {
+                  super.init(frame: frame)
+                  setup()
+              }
+              
+              required init?(coder: NSCoder) {
+                  super.init(coder: coder)
+                  setup()
+              }
+              
+              private func setup() {
+                  backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
+                  layer.cornerRadius = 12
+                  layer.borderWidth = 1
+                  layer.borderColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.3).cgColor
+                  
+                  thumbnailView.frame = CGRect(x: 8, y: 8, width: 50, height: 50)
+                  thumbnailView.backgroundColor = UIColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 1)
+                  thumbnailView.layer.cornerRadius = 8
+                  thumbnailView.clipsToBounds = true
+                  thumbnailView.contentMode = .scaleAspectFill
+                  contentView.addSubview(thumbnailView)
+                  
+                  titleLabel.frame = CGRect(x: 66, y: 8, width: frame.width - 74, height: 20)
+                  titleLabel.font = .systemFont(ofSize: 14, weight: .bold)
+                  titleLabel.textColor = .white
+                  contentView.addSubview(titleLabel)
+                  
+                  gameLabel.frame = CGRect(x: 66, y: 28, width: frame.width - 74, height: 16)
+                  gameLabel.font = .systemFont(ofSize: 12)
+                  gameLabel.textColor = .lightGray
+                  contentView.addSubview(gameLabel)
+                  
+                  loadButton.frame = CGRect(x: frame.width - 60, y: 40, width: 50, height: 30)
+                  loadButton.setTitle("Load", for: .normal)
+                  loadButton.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8)
+                  loadButton.setTitleColor(.white, for: .normal)
+                  loadButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+                  loadButton.layer.cornerRadius = 8
+                  loadButton.addTarget(self, action: #selector(loadTapped), for: .touchUpInside)
+                  contentView.addSubview(loadButton)
+              }
+              
+              public func configure(with script: ScriptItem) {
+                  titleLabel.text = script.title
+                  gameLabel.text = script.game ?? "Unknown Game"
+                  
+                  if let thumbUrl = script.thumbnail {
+                      ScriptBloxAPI.shared.loadThumbnail(url: thumbUrl) { [weak self] image in
+                          self?.thumbnailView.image = image
+                      }
+                  }
+              }
+              
+              @objc private func loadTapped() {
+                  NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), object: titleLabel.text)
+              }
+          }
+          EOF
+          
+          # Create MainViewController.swift
+          cat > XZX/MainViewController.swift << 'EOF'
+          import UIKit
+
+          public class MainViewController: UIViewController {
+              
+              private let neonWindow = NeonWindow()
+              private let sidebar = SidebarView()
+              private let editor = EditorView()
+              private let hub = HubView()
+              private let executeButton = UIButton()
+              private let clearButton = UIButton()
+              private let saveButton = UIButton()
+              
+              public override func viewDidLoad() {
+                  super.viewDidLoad()
+                  view.backgroundColor = .clear
+                  InitLua()
+                  setupWindow()
+                  setupSidebar()
+                  setupViews()
+                  setupToolbar()
+                  setupNotifications()
+              }
+              
+              private func setupWindow() {
+                  neonWindow.frame = CGRect(x: 40, y: 80, width: 900, height: 600)
+                  view.addSubview(neonWindow)
+              }
+              
+              private func setupSidebar() {
+                  sidebar.frame = CGRect(x: 0, y: 0, width: 200, height: 600)
+                  sidebar.onTabSelected = { [weak self] index in
+                      self?.switchToTab(index)
+                  }
+                  neonWindow.addSubview(sidebar)
+              }
+              
+              private func setupViews() {
+                  let views: [(UIView, Int)] = [
+                      (editor, 0),
+                      (hub, 1)
+                  ]
+                  
+                  for (view, tag) in views {
+                      view.frame = CGRect(x: 210, y: 20, width: 670, height: 500)
+                      view.tag = tag
+                      view.isHidden = tag != 0
+                      neonWindow.addSubview(view)
+                  }
+              }
+              
+              private func setupToolbar() {
+                  executeButton.frame = CGRect(x: 220, y: 530, width: 100, height: 40)
+                  executeButton.setTitle("▶️ Execute", for: .normal)
+                  executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
+                  executeButton.layer.cornerRadius = 8
+                  executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
+                  neonWindow.addSubview(executeButton)
+                  
+                  clearButton.frame = CGRect(x: 330, y: 530, width: 100, height: 40)
+                  clearButton.setTitle("🗑️ Clear", for: .normal)
+                  clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
+                  clearButton.layer.cornerRadius = 8
+                  clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
+                  neonWindow.addSubview(clearButton)
+                  
+                  saveButton.frame = CGRect(x: 440, y: 530, width: 100, height: 40)
+                  saveButton.setTitle("💾 Save", for: .normal)
+                  saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1)
+                  saveButton.layer.cornerRadius = 8
+                  saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside)
+                  neonWindow.addSubview(saveButton)
+              }
+              
+              private func setupNotifications() {
+                  NotificationCenter.default.addObserver(
+                      self,
+                      selector: #selector(loadScriptFromHub(_:)),
+                      name: NSNotification.Name("LoadScript"),
+                      object: nil
+                  )
+              }
+              
+              private func switchToTab(_ index: Int) {
+                  let views = neonWindow.subviews
+                  for view in views where view.tag < 2 {
+                      view.isHidden = view.tag != index
+                  }
+              }
+              
+              @objc private func executeScript() {
+                  let script = editor.textView.text ?? ""
+                  ExecuteScript(script)
+              }
+              
+              @objc private func clearScript() {
+                  editor.textView.text = ""
+              }
+              
+              @objc private func saveScript() {
+                  print("Script saved")
+              }
+              
+              @objc private func loadScriptFromHub(_ notification: Notification) {
+                  if let scriptTitle = notification.object as? String {
+                      switchToTab(0)
+                      editor.textView.text = "-- Loaded: \(scriptTitle)\n\nprint('Script loaded!')"
+                  }
+              }
+          }
+          EOF
+      
+      - name: Create xzx_security.h
+        run: |
+          cat > injector/dylib/xzx_security.h << 'EOF'
+          #ifndef XZX_SECURITY_H
+          #define XZX_SECURITY_H
+
+          #import <Foundation/Foundation.h>
+
+          @interface XZXSecurity : NSObject
+          + (instancetype)shared;
+          - (void)applyBypasses;
+          - (void)hideFromAdonis;
+          - (void)bypassUIchecks;
+          - (void)obfuscateMemory;
+          - (void)cleanHooks;
+
+          @property (nonatomic, assign) BOOL isHooked;
+          @property (nonatomic, strong) NSMutableDictionary *originalFunctions;
+          @end
+
+          #endif
+          EOF
+      
+      - name: Create xzx_security.m
+        run: |
+          cat > injector/dylib/xzx_security.m << 'EOF'
+          #import "xzx_security.h"
+          #import <mach/mach.h>
+          #import <dlfcn.h>
+          #import <mach-o/dyld.h>
+
+          static XZXSecurity *sharedSecurityInstance = nil;
+
+          @implementation XZXSecurity
+
+          + (instancetype)shared {
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  sharedSecurityInstance = [[self alloc] init];
+              });
+              return sharedSecurityInstance;
+          }
+
+          - (instancetype)init {
+              self = [super init];
+              if (self) {
+                  _originalFunctions = [NSMutableDictionary dictionary];
+              }
+              return self;
+          }
+
+          - (void)applyBypasses {
+              [self hideFromAdonis];
+              [self bypassUIchecks];
+              [self obfuscateMemory];
+              [self cleanHooks];
+              
+              NSLog(@"[XZX] Security bypasses applied");
+          }
+
+          - (void)hideFromAdonis {
+              // Implementation
+          }
+
+          - (void)bypassUIchecks {
+              // Implementation
+          }
+
+          - (void)obfuscateMemory {
+              uint32_t count = _dyld_image_count();
+              for (uint32_t i = 0; i < count; i++) {
+                  const char *name = _dyld_get_image_name(i);
+                  if (strstr(name, "executor.dylib")) {
+                      const struct mach_header *header = _dyld_get_image_header(i);
+                      // Obfuscation logic would go here
+                      break;
+                  }
+              }
+          }
+
+          - (void)cleanHooks {
+              // Implementation
+          }
+
+          - (void)hookFunction:(NSString *)functionName withReplacement:(id)replacement {
+              [_originalFunctions setObject:replacement forKey:functionName];
+          }
+
+          - (void)restoreOriginalFunctions {
+              // Implementation
+          }
+
+          @end
+          EOF
+      
+      - name: Compile Objective-C files
+        run: |
+          mkdir -p build
+          echo "Compiling Objective-C files..."
+          
+          for file in injector/dylib/*.m; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file" .m)
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos clang \
+                -c \
+                -I./injector/dylib \
+                -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/${filename}.o" \
+                "$file" \
+                -target arm64-apple-ios15.0
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to compile $file"
+                exit 1
+              fi
+            fi
+          done
+          echo "✅ Objective-C compilation complete"
+      
+      - name: Compile C++ files
+        run: |
+          echo "Compiling C++ files..."
+          
+          for file in injector/dylib/Core/*.mm; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file" .mm)
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos clang++ \
+                -c \
+                -std=c++11 \
+                -I./injector/dylib \
+                -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/${filename}.o" \
+                "$file" \
+                -target arm64-apple-ios15.0
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to compile $file"
+                exit 1
+              fi
+            fi
+          done
+          echo "✅ C++ compilation complete"
+      
+      - name: Compile Swift files with correct include paths
+        run: |
+          echo "Compiling Swift files..."
+          
+          # Create a directory for Swift objects
+          mkdir -p build/swift
+          
+          # Add current directory to include paths
+          SWIFT_FLAGS="-I. -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }}"
+          
+          # Compile each Swift file individually with proper include paths
+          for file in XZX/Services/*.swift XZX/UI/*.swift XZX/MainViewController.swift; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file" .swift)
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos swiftc \
+                -c \
+                -module-name XZX \
+                -import-objc-header XZX/XZX-Bridging-Header.h \
+                $SWIFT_FLAGS \
+                -target arm64-apple-ios15.0 \
+                -o "build/swift/${filename}.o" \
+                "$file"
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to compile $file"
+                exit 1
+              fi
+            fi
+          done
+          
+          # Combine all Swift object files into a library
+          if [ -n "$(ls build/swift/*.o 2>/dev/null)" ]; then
+            ar rcs build/XZXSwift.a build/swift/*.o
+            echo "✅ Swift compilation complete"
+          else
+            echo "❌ No Swift object files created"
             exit 1
           fi
-          echo "✅ App built successfully"
-          ls -la build/Release-iphoneos/
       
-      - name: Create IPA from .app
+      - name: List object files
         run: |
+          echo "Object files created:"
+          ls -la build/
+          ls -la build/swift/ 2>/dev/null || echo "No swift objects"
+      
+      - name: Link all object files
+        run: |
+          echo "Linking all object files..."
+          
+          # Collect all .o files from build directory
+          OBJECTS=$(find build -name "*.o" -type f ! -path "build/swift/*" | tr '\n' ' ')
+          
+          # Add Swift archive if it exists
+          if [ -f "build/XZXSwift.a" ]; then
+            OBJECTS="$OBJECTS build/XZXSwift.a"
+          fi
+          
+          if [ -z "$OBJECTS" ]; then
+            echo "❌ No object files found to link"
+            exit 1
+          fi
+          
+          echo "Linking objects: $OBJECTS"
+          
+          xcrun -sdk iphoneos clang++ \
+            -shared \
+            -framework UIKit \
+            -framework Foundation \
+            -framework CoreGraphics \
+            -framework WebKit \
+            -undefined dynamic_lookup \
+            -o build/executor.dylib \
+            $OBJECTS \
+            -lstdc++ \
+            -target arm64-apple-ios15.0
+          
+          if [ ! -f "build/executor.dylib" ]; then
+            echo "❌ Linking failed"
+            ls -la build/
+            exit 1
+          fi
+          
+          echo "✅ Dylib compiled successfully"
+          file build/executor.dylib
+      
+      # ========== IPA MODIFICATION STEPS ==========
+      
+      - name: Extract IPA
+        run: |
+          echo "📦 Extracting Roblox.ipa..."
           mkdir -p Payload
-          cp -r XZXProject/build/Release-iphoneos/XZX.app Payload/
-          zip -r XZX.ipa Payload/
-          echo "✅ IPA created: XZX.ipa"
-          ls -la XZX.ipa
-      
-      - name: Extract and modify Roblox IPA
-        run: |
           unzip -q Roblox.ipa -d extracted/
+          
           if [ ! -d "extracted/Payload/Roblox.app" ]; then
             echo "❌ Failed to extract IPA"
             exit 1
           fi
           
-          # Copy the XZX binary as dylib
-          cp XZXProject/build/Release-iphoneos/XZX.app/XZX extracted/Payload/Roblox.app/executor.dylib
-          
+          echo "✅ IPA extracted successfully"
+          ls -la extracted/Payload/
+      
+      - name: Copy dylib to app bundle
+        run: |
+          echo "📋 Copying executor.dylib to app bundle..."
+          cp build/executor.dylib extracted/Payload/Roblox.app/
+          echo "✅ Dylib copied"
+      
+      - name: Remove existing code signatures
+        run: |
+          echo "🔓 Removing code signatures..."
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          
+          rm -f extracted/Payload/Roblox.app/CodeResources
+          echo "✅ Signatures removed"
+      
+      - name: Inject dylib into Roblox binary
+        run: |
+          echo "💉 Injecting dylib into Roblox binary..."
           ./tools/insert_dylib @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
-            extracted/Payload/Roblox.app/Roblox_patched --all-yes
+            extracted/Payload/Roblox.app/Roblox_patched \
+            --all-yes
           
           if [ ! -f "extracted/Payload/Roblox.app/Roblox_patched" ]; then
             echo "❌ Dylib injection failed"
             exit 1
           fi
           
-          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
-          echo "✅ Roblox modification complete"
+          mv extracted/Payload/Roblox.app/Roblox_patched \
+             extracted/Payload/Roblox.app/Roblox
+          
+          echo "✅ Dylib injection complete"
       
       - name: Change app name to XZX
         run: |
+          echo "📝 Changing app name to XZX..."
           INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
           plutil -convert xml1 "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName XZX" "$INFO_PLIST" 2>/dev/null || \
@@ -220,20 +1176,34 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
-          echo "✅ App name changed"
+          echo "✅ App name changed to XZX"
       
       - name: Repackage IPA
         run: |
+          echo "📦 Repackaging IPA..."
           cd extracted
-          zip -qr ../XZX-Roblox.ipa Payload/
+          zip -qr ../XZX.ipa Payload/
           cd ..
-          echo "✅ Final IPA created: XZX-Roblox.ipa"
-          ls -la XZX-Roblox.ipa
+          
+          if [ ! -f "XZX.ipa" ]; then
+            echo "❌ Failed to create IPA"
+            exit 1
+          fi
+          
+          echo "✅ IPA created: XZX.ipa"
+          ls -la XZX.ipa
       
-      - name: Upload IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XZX-Roblox-Executor
-          path: XZX-Roblox.ipa
+          name: XZX-Executor
+          path: XZX.ipa
           if-no-files-found: error
           retention-days: 90
+      
+      - name: Debug - List all files
+        run: |
+          echo "📁 Final files:"
+          ls -la
+          echo "🔍 Searching for IPA:"
+          find . -name "*.ipa" -type f

@@ -997,6 +997,7 @@ jobs:
               xcrun -sdk iphoneos clang \
                 -c \
                 -I./injector/dylib \
+                -I./injector/dylib/Core \
                 -I${{ env.LUA_INCLUDE_DIR }} \
                 -o "build/${filename}.o" \
                 "$file" \
@@ -1021,6 +1022,7 @@ jobs:
                 -c \
                 -std=c++11 \
                 -I./injector/dylib \
+                -I./injector/dylib/Core \
                 -I${{ env.LUA_INCLUDE_DIR }} \
                 -o "build/${filename}.o" \
                 "$file" \
@@ -1033,62 +1035,46 @@ jobs:
           done
           echo "✅ C++ compilation complete"
       
-      - name: Compile Swift files with correct include paths
+      - name: Compile Swift files into a single object file
         run: |
-          echo "Compiling Swift files..."
+          echo "Compiling Swift files together..."
           
-          # Create a directory for Swift objects
-          mkdir -p build/swift
+          # Collect all Swift files
+          SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
+          echo "Compiling: $SWIFT_FILES"
           
-          # Add current directory to include paths
-          SWIFT_FLAGS="-I. -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }}"
+          # Compile all Swift files together into one object file
+          xcrun -sdk iphoneos swiftc \
+            -c \
+            -whole-module-optimization \
+            -module-name XZX \
+            -import-objc-header XZX/XZX-Bridging-Header.h \
+            -I . \
+            -I ./injector/dylib \
+            -I ./injector/dylib/Core \
+            -I ${{ env.LUA_INCLUDE_DIR }} \
+            -target arm64-apple-ios15.0 \
+            -o build/XZXSwift.o \
+            $SWIFT_FILES
           
-          # Compile each Swift file individually with proper include paths
-          for file in XZX/Services/*.swift XZX/UI/*.swift XZX/MainViewController.swift; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file" .swift)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos swiftc \
-                -c \
-                -module-name XZX \
-                -import-objc-header XZX/XZX-Bridging-Header.h \
-                $SWIFT_FLAGS \
-                -target arm64-apple-ios15.0 \
-                -o "build/swift/${filename}.o" \
-                "$file"
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
-            fi
-          done
-          
-          # Combine all Swift object files into a library
-          if [ -n "$(ls build/swift/*.o 2>/dev/null)" ]; then
-            ar rcs build/XZXSwift.a build/swift/*.o
-            echo "✅ Swift compilation complete"
-          else
-            echo "❌ No Swift object files created"
+          if [ $? -ne 0 ]; then
+            echo "❌ Swift compilation failed"
             exit 1
           fi
+          
+          echo "✅ Swift compilation complete"
       
       - name: List object files
         run: |
           echo "Object files created:"
           ls -la build/
-          ls -la build/swift/ 2>/dev/null || echo "No swift objects"
       
       - name: Link all object files
         run: |
           echo "Linking all object files..."
           
-          # Collect all .o files from build directory
-          OBJECTS=$(find build -name "*.o" -type f ! -path "build/swift/*" | tr '\n' ' ')
-          
-          # Add Swift archive if it exists
-          if [ -f "build/XZXSwift.a" ]; then
-            OBJECTS="$OBJECTS build/XZXSwift.a"
-          fi
+          # Collect all .o files
+          OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
           
           if [ -z "$OBJECTS" ]; then
             echo "❌ No object files found to link"

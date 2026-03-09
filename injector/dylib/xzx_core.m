@@ -100,9 +100,6 @@ void notify_game_left(void) {
     [[XZXCore shared] onGameLeft];
 }
 
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-    [super dealloc];
-}
+// REMOVED: - (void)dealloc method entirely - ARC handles this automatically
 
 @end

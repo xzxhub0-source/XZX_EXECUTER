@@ -51,6 +51,12 @@ static XZXBanProtection *sharedBanProtectionInstance = nil;
     [self deleteLogs];
 }
 
+- (void)spoofHardwareID {
+    // iOS doesn't allow hardware ID spoofing
+    // This method exists to satisfy the protocol
+    NSLog(@"[XZX] Hardware ID spoofing not available on iOS");
+}
+
 - (void)clearRobloxCache {
     @try {
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);

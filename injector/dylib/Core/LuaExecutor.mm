@@ -1,5 +1,9 @@
-- name: Completely replace LuaExecutor.mm with known-good version
+- name: Force overwrite LuaExecutor.mm with correct version
   run: |
+    echo "=== DELETING OLD FILE ==="
+    rm -f injector/dylib/Core/LuaExecutor.mm
+    
+    echo "=== CREATING NEW FILE ==="
     cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -28,7 +32,7 @@ static UIWindow* getKeyWindow(void) {
             }
         }
     }
-    return [UIApplication sharedApplication].keyWindow;
+    return nil;
 }
 
 static int xzx_print(lua_State *L) {
@@ -165,21 +169,6 @@ static int xzx_isexecutorclosure(lua_State *L) {
     return 1;
 }
 
-static int xzx_getrawmetatable(lua_State *L) {
-    if (!lua_getmetatable(L, 1)) {
-        lua_pushnil(L);
-    }
-    return 1;
-}
-
-static int xzx_setrawmetatable(lua_State *L) {
-    if (lua_istable(L, 1) && (lua_istable(L, 2) || lua_isnil(L, 2))) {
-        lua_pushvalue(L, 2);
-        lua_setmetatable(L, 1);
-    }
-    return 1;
-}
-
 static int xzx_setclipboard(lua_State *L) {
     const char *text = luaL_checkstring(L, 1);
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -277,13 +266,15 @@ static int xzx_messagebox(lua_State *L) {
     
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = getKeyWindow();
-        UIViewController *rootVC = keyWindow.rootViewController;
-        if (rootVC) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
-                                                                           message:[NSString stringWithUTF8String:text]
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [rootVC presentViewController:alert animated:YES completion:nil];
+        if (keyWindow) {
+            UIViewController *rootVC = keyWindow.rootViewController;
+            if (rootVC) {
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
+                                                                               message:[NSString stringWithUTF8String:text]
+                                                                        preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [rootVC presentViewController:alert animated:YES completion:nil];
+            }
         }
     });
     
@@ -343,8 +334,6 @@ void InitLua(void) {
         lua_register(L, "iscclosure", xzx_iscclosure);
         lua_register(L, "islclosure", xzx_islclosure);
         lua_register(L, "isexecutorclosure", xzx_isexecutorclosure);
-        lua_register(L, "getrawmetatable", xzx_getrawmetatable);
-        lua_register(L, "setrawmetatable", xzx_setrawmetatable);
         lua_register(L, "setclipboard", xzx_setclipboard);
         lua_register(L, "getclipboard", xzx_getclipboard);
         lua_register(L, "identifyexecutor", xzx_identifyexecutor);
@@ -388,5 +377,10 @@ void ExecuteScript(const char *script) {
 }
 EOF
 
-    echo "File replaced. First 20 lines:"
-    head -20 injector/dylib/Core/LuaExecutor.mm
+    echo "=== VERIFYING FIXES ==="
+    echo "Line with boolean (should have @true):"
+    grep -n "lua_toboolean" injector/dylib/Core/LuaExecutor.mm | head -1
+    echo "Line with getgenv (should have lua_pushglobaltable):"
+    grep -n "lua_pushglobaltable" injector/dylib/Core/LuaExecutor.mm | head -1
+    echo "Line with messagebox (should have getKeyWindow):"
+    grep -n "getKeyWindow" injector/dylib/Core/LuaExecutor.mm | head -3

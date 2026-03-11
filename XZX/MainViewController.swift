@@ -27,7 +27,7 @@ public class MainViewController: UIViewController {
     }
     
     private func setupSidebar() {
-        sidebar.frame = CGRect(x: 10, y: 10, width: 180, height: 480)
+        sidebar.frame = CGRect(x: 0, y: 0, width: 180, height: 500)
         sidebar.onTabSelected = { [weak self] index in
             self?.switchToTab(index)
         }
@@ -35,35 +35,32 @@ public class MainViewController: UIViewController {
     }
     
     private func setupViews() {
-        let views: [(UIView, Int)] = [
-            (editor, 0),
-            (hub, 1)
-        ]
+        editor.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
+        editor.tag = 0
+        neonWindow.addSubview(editor)
         
-        for (view, tag) in views {
-            view.frame = CGRect(x: 200, y: 20, width: 180, height: 400)
-            view.tag = tag
-            view.isHidden = tag != 0
-            neonWindow.addSubview(view)
-        }
+        hub.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
+        hub.tag = 1
+        hub.isHidden = true
+        neonWindow.addSubview(hub)
     }
     
     private func setupToolbar() {
-        executeButton.frame = CGRect(x: 200, y: 430, width: 50, height: 40)
+        executeButton.frame = CGRect(x: 190, y: 450, width: 60, height: 40)
         executeButton.setTitle("▶️", for: .normal)
         executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
         executeButton.layer.cornerRadius = 8
         executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
         neonWindow.addSubview(executeButton)
         
-        clearButton.frame = CGRect(x: 260, y: 430, width: 50, height: 40)
+        clearButton.frame = CGRect(x: 255, y: 450, width: 60, height: 40)
         clearButton.setTitle("🗑️", for: .normal)
         clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
         clearButton.layer.cornerRadius = 8
         clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
         neonWindow.addSubview(clearButton)
         
-        saveButton.frame = CGRect(x: 320, y: 430, width: 50, height: 40)
+        saveButton.frame = CGRect(x: 320, y: 450, width: 60, height: 40)
         saveButton.setTitle("💾", for: .normal)
         saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1)
         saveButton.layer.cornerRadius = 8
@@ -81,10 +78,8 @@ public class MainViewController: UIViewController {
     }
     
     private func switchToTab(_ index: Int) {
-        let views = neonWindow.subviews
-        for view in views where view.tag < 2 {
-            view.isHidden = view.tag != index
-        }
+        editor.isHidden = index != 0
+        hub.isHidden = index != 1
     }
     
     @objc private func executeScript() {

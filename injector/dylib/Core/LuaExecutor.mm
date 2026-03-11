@@ -1,4 +1,6 @@
-cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
+- name: Completely replace LuaExecutor.mm with known-good version
+  run: |
+    cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -15,13 +17,14 @@ cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
 static lua_State *L = nil;
 static std::mutex lua_mutex;
 
-// Helper to get the key window (iOS 13+ compatible)
 static UIWindow* getKeyWindow(void) {
     if (@available(iOS 13.0, *)) {
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if ([scene isKindOfClass:[UIWindowScene class]]) {
                 UIWindowScene *windowScene = (UIWindowScene *)scene;
-                return windowScene.windows.firstObject;
+                for (UIWindow *window in windowScene.windows) {
+                    if (window.isKeyWindow) return window;
+                }
             }
         }
     }
@@ -45,21 +48,12 @@ static int xzx_print(lua_State *L) {
             [output appendString:@"table"];
         } else if (lua_isfunction(L, i)) {
             [output appendString:@"function"];
-        } else if (lua_isuserdata(L, i)) {
-            [output appendString:@"userdata"];
-        } else if (lua_isnil(L, i)) {
-            [output appendString:@"nil"];
         } else {
-            [output appendString:@"unknown"];
+            [output appendString:@"nil"];
         }
     }
     
     NSLog(@"[XZX] %@", output);
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"XZXPrint" object:output];
-    });
-    
     return 0;
 }
 
@@ -86,18 +80,6 @@ static int xzx_error(lua_State *L) {
     return lua_error(L);
 }
 
-static int xzx_type(lua_State *L) {
-    if (lua_gettop(L) < 1) {
-        lua_pushnil(L);
-        return 1;
-    }
-    
-    int type = lua_type(L, 1);
-    const char *typeName = lua_typename(L, type);
-    lua_pushstring(L, typeName);
-    return 1;
-}
-
 static int xzx_getgenv(lua_State *L) {
     lua_pushglobaltable(L);
     return 1;
@@ -119,8 +101,7 @@ static int xzx_getgc(lua_State *L) {
         lua_pushvalue(L, -2);
         int type = lua_type(L, -2);
         
-        if (type == LUA_TFUNCTION || type == LUA_TTABLE || 
-            type == LUA_TUSERDATA || type == LUA_TTHREAD) {
+        if (type == LUA_TFUNCTION || type == LUA_TTABLE || type == LUA_TUSERDATA) {
             lua_pushinteger(L, lua_rawlen(L, table_idx) + 1);
             lua_pushvalue(L, -3);
             lua_settable(L, table_idx);
@@ -184,24 +165,6 @@ static int xzx_isexecutorclosure(lua_State *L) {
     return 1;
 }
 
-static int xzx_hookfunction(lua_State *L) {
-    if (!lua_isfunction(L, 1) || !lua_isfunction(L, 2)) {
-        luaL_error(L, "expected two functions");
-    }
-    
-    lua_pushvalue(L, 1);
-    lua_pushvalue(L, 2);
-    lua_pushcclosure(L, [](lua_State *L) -> int {
-        lua_pushvalue(L, lua_upvalueindex(2));
-        int nargs = lua_gettop(L);
-        lua_insert(L, 1);
-        lua_pcall(L, nargs, LUA_MULTRET, 0);
-        return lua_gettop(L);
-    }, 2);
-    
-    return 1;
-}
-
 static int xzx_getrawmetatable(lua_State *L) {
     if (!lua_getmetatable(L, 1)) {
         lua_pushnil(L);
@@ -214,7 +177,6 @@ static int xzx_setrawmetatable(lua_State *L) {
         lua_pushvalue(L, 2);
         lua_setmetatable(L, 1);
     }
-    lua_settop(L, 1);
     return 1;
 }
 
@@ -237,16 +199,6 @@ static int xzx_identifyexecutor(lua_State *L) {
     return 1;
 }
 
-static int xzx_getexecutorname(lua_State *L) {
-    lua_pushstring(L, "XZX");
-    return 1;
-}
-
-static int xzx_checkcaller(lua_State *L) {
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
 static int xzx_loadstring(lua_State *L) {
     const char *code = luaL_checkstring(L, 1);
     const char *chunkname = luaL_optstring(L, 2, "=xzx");
@@ -256,7 +208,6 @@ static int xzx_loadstring(lua_State *L) {
     if (status != 0) {
         lua_pushnil(L);
         lua_pushstring(L, lua_tostring(L, -1));
-        lua_remove(L, -2);
         return 2;
     }
     
@@ -268,18 +219,11 @@ static int xzx_httpget(lua_State *L) {
     
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     __block NSString *result = nil;
-    __block int status_code = 0;
     
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
-    [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
-    [request setTimeoutInterval:30];
-    
+    NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (data) {
             result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-            if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-                status_code = (int)((NSHTTPURLResponse *)response).statusCode;
-            }
         }
         dispatch_semaphore_signal(semaphore);
     }];
@@ -289,13 +233,11 @@ static int xzx_httpget(lua_State *L) {
     
     if (result) {
         lua_pushstring(L, [result UTF8String]);
-        lua_pushinteger(L, status_code);
-        return 2;
+        return 1;
     }
     
     lua_pushnil(L);
-    lua_pushstring(L, "Request failed");
-    return 2;
+    return 1;
 }
 
 static int xzx_base64_encode(lua_State *L) {
@@ -321,13 +263,10 @@ static int xzx_base64codes(lua_State *L) {
     }
     
     const char *input = luaL_checkstring(L, 1);
-    
     NSData *data = [NSData dataWithBytes:input length:strlen(input)];
     NSString *encoded = [data base64EncodedStringWithOptions:0];
-    
     NSData *decoded = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
     NSString *result = [[NSString alloc] initWithData:decoded encoding:NSUTF8StringEncoding];
-    
     lua_pushstring(L, [result UTF8String]);
     return 1;
 }
@@ -397,7 +336,6 @@ void InitLua(void) {
         lua_register(L, "print", xzx_print);
         lua_register(L, "warn", xzx_warn);
         lua_register(L, "error", xzx_error);
-        lua_register(L, "type", xzx_type);
         lua_register(L, "getgenv", xzx_getgenv);
         lua_register(L, "getreg", xzx_getreg);
         lua_register(L, "getgc", xzx_getgc);
@@ -405,14 +343,11 @@ void InitLua(void) {
         lua_register(L, "iscclosure", xzx_iscclosure);
         lua_register(L, "islclosure", xzx_islclosure);
         lua_register(L, "isexecutorclosure", xzx_isexecutorclosure);
-        lua_register(L, "hookfunction", xzx_hookfunction);
         lua_register(L, "getrawmetatable", xzx_getrawmetatable);
         lua_register(L, "setrawmetatable", xzx_setrawmetatable);
         lua_register(L, "setclipboard", xzx_setclipboard);
         lua_register(L, "getclipboard", xzx_getclipboard);
         lua_register(L, "identifyexecutor", xzx_identifyexecutor);
-        lua_register(L, "getexecutorname", xzx_getexecutorname);
-        lua_register(L, "checkcaller", xzx_checkcaller);
         lua_register(L, "loadstring", xzx_loadstring);
         lua_register(L, "HttpGet", xzx_httpget);
         lua_register(L, "game_HttpGet", xzx_httpget);
@@ -440,32 +375,18 @@ void ExecuteScript(const char *script) {
     
     if (!L) InitLua();
     
-    lua_State *thread = lua_newthread(L);
-    int threadRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    
-    int status = luaL_loadstring(thread, script);
+    int status = luaL_loadstring(L, script);
     
     if (status != 0) {
-        const char *error = lua_tostring(thread, -1);
+        const char *error = lua_tostring(L, -1);
         NSLog(@"[XZX] Error: %s", error);
-        luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
+        lua_pop(L, 1);
         return;
     }
     
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
-        lua_State *exec_thread = lua_tothread(L, -1);
-        
-        if (exec_thread) {
-            int result = lua_pcall(exec_thread, 0, 0, 0);
-            
-            if (result != 0) {
-                const char *error = lua_tostring(exec_thread, -1);
-                NSLog(@"[XZX] Execution error: %s", error);
-            }
-        }
-        
-        luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
-    });
+    lua_pcall(L, 0, 0, 0);
 }
 EOF
+
+    echo "File replaced. First 20 lines:"
+    head -20 injector/dylib/Core/LuaExecutor.mm

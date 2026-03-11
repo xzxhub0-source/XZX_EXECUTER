@@ -1,7 +1,3 @@
-# First, delete the existing file
-rm -f injector/dylib/Core/LuaExecutor.mm
-
-# Then create the fixed file with proper escaping
 cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,6 +14,19 @@ cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
 
 static lua_State *L = nil;
 static std::mutex lua_mutex;
+
+// Helper to get the key window (iOS 13+ compatible)
+static UIWindow* getKeyWindow(void) {
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *windowScene = (UIWindowScene *)scene;
+                return windowScene.windows.firstObject;
+            }
+        }
+    }
+    return [UIApplication sharedApplication].keyWindow;
+}
 
 static int xzx_print(lua_State *L) {
     int n = lua_gettop(L);
@@ -90,7 +99,7 @@ static int xzx_type(lua_State *L) {
 }
 
 static int xzx_getgenv(lua_State *L) {
-    lua_pushvalue(L, LUA_GLOBALSINDEX);
+    lua_pushglobaltable(L);
     return 1;
 }
 
@@ -328,19 +337,7 @@ static int xzx_messagebox(lua_State *L) {
     const char *caption = luaL_optstring(L, 2, "XZX");
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *keyWindow = nil;
-        if (@available(iOS 13.0, *)) {
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    UIWindowScene *windowScene = (UIWindowScene *)scene;
-                    keyWindow = windowScene.windows.firstObject;
-                    break;
-                }
-            }
-        } else {
-            keyWindow = [UIApplication sharedApplication].keyWindow;
-        }
-        
+        UIWindow *keyWindow = getKeyWindow();
         UIViewController *rootVC = keyWindow.rootViewController;
         if (rootVC) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
@@ -472,7 +469,3 @@ void ExecuteScript(const char *script) {
     });
 }
 EOF
-
-# Verify the file was created correctly
-echo "=== First 50 lines of LuaExecutor.mm for verification ==="
-head -50 injector/dylib/Core/LuaExecutor.mm

@@ -40,6 +40,19 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "✅ Lua headers installed successfully"
       
+      - name: Compile Lua source files
+        run: |
+          mkdir -p build
+          cd lua-5.4.6/src
+          for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c loadlib.c linit.c; do
+            if [ -f "$file" ]; then
+              echo "Compiling $file..."
+              xcrun -sdk iphoneos clang -c -I. -o "../../build/lua_${file%.c}.o" "$file" -target arm64-apple-ios15.0
+            fi
+          done
+          cd ../..
+          echo "✅ Lua compilation complete"
+      
       - name: Download Roblox IPA
         run: |
           FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
@@ -365,61 +378,68 @@ jobs:
               std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) {
                   L = luaL_newstate();
-                  luaL_openlibs(L);
-                  lua_register(L, "print", xzx_print);
-                  lua_register(L, "warn", xzx_warn);
-                  lua_register(L, "error", xzx_error);
-                  lua_register(L, "getgenv", xzx_getgenv);
-                  lua_register(L, "getreg", xzx_getreg);
-                  lua_register(L, "getgc", xzx_getgc);
-                  lua_register(L, "newcclosure", xzx_newcclosure);
-                  lua_register(L, "iscclosure", xzx_iscclosure);
-                  lua_register(L, "islclosure", xzx_islclosure);
-                  lua_register(L, "isexecutorclosure", xzx_isexecutorclosure);
-                  lua_register(L, "getrawmetatable", xzx_getrawmetatable);
-                  lua_register(L, "setrawmetatable", xzx_setrawmetatable);
-                  lua_register(L, "setclipboard", xzx_setclipboard);
-                  lua_register(L, "getclipboard", xzx_getclipboard);
-                  lua_register(L, "identifyexecutor", xzx_identifyexecutor);
-                  lua_register(L, "getexecutorname", xzx_getexecutorname);
-                  lua_register(L, "checkcaller", xzx_checkcaller);
-                  lua_register(L, "loadstring", xzx_loadstring);
-                  lua_register(L, "HttpGet", xzx_httpget);
-                  lua_register(L, "game_HttpGet", xzx_httpget);
-                  lua_register(L, "base64encode", xzx_base64_encode);
-                  lua_register(L, "base64decode", xzx_base64_decode);
-                  lua_register(L, "base64codes", xzx_base64codes);
-                  lua_register(L, "messagebox", xzx_messagebox);
-                  luaL_dostring(L, "xzx = { version = '3.0.0', unc = 95, sunc = 85 }");
+                  if (L) {
+                      luaL_openlibs(L);
+                      lua_register(L, "print", xzx_print);
+                      lua_register(L, "warn", xzx_warn);
+                      lua_register(L, "error", xzx_error);
+                      lua_register(L, "getgenv", xzx_getgenv);
+                      lua_register(L, "getreg", xzx_getreg);
+                      lua_register(L, "getgc", xzx_getgc);
+                      lua_register(L, "newcclosure", xzx_newcclosure);
+                      lua_register(L, "iscclosure", xzx_iscclosure);
+                      lua_register(L, "islclosure", xzx_islclosure);
+                      lua_register(L, "isexecutorclosure", xzx_isexecutorclosure);
+                      lua_register(L, "getrawmetatable", xzx_getrawmetatable);
+                      lua_register(L, "setrawmetatable", xzx_setrawmetatable);
+                      lua_register(L, "setclipboard", xzx_setclipboard);
+                      lua_register(L, "getclipboard", xzx_getclipboard);
+                      lua_register(L, "identifyexecutor", xzx_identifyexecutor);
+                      lua_register(L, "getexecutorname", xzx_getexecutorname);
+                      lua_register(L, "checkcaller", xzx_checkcaller);
+                      lua_register(L, "loadstring", xzx_loadstring);
+                      lua_register(L, "HttpGet", xzx_httpget);
+                      lua_register(L, "game_HttpGet", xzx_httpget);
+                      lua_register(L, "base64encode", xzx_base64_encode);
+                      lua_register(L, "base64decode", xzx_base64_decode);
+                      lua_register(L, "base64codes", xzx_base64codes);
+                      lua_register(L, "messagebox", xzx_messagebox);
+                      luaL_dostring(L, "xzx = { version = '3.0.0', unc = 95, sunc = 85 }");
+                      NSLog(@"[XZX] Lua initialized successfully");
+                  } else {
+                      NSLog(@"[XZX] Failed to create Lua state");
+                  }
               }
           }
 
           void ExecuteScript(const char *script) {
               std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) InitLua();
-              [[XZXAntiDetection shared] randomizeInjectionPattern];
-              [[XZXBanProtection shared] simulateHumanBehavior];
-              lua_State *thread = lua_newthread(L);
-              int threadRef = luaL_ref(L, LUA_REGISTRYINDEX);
-              int status = luaL_loadstring(thread, script);
-              if (status != 0) {
-                  const char *error = lua_tostring(thread, -1);
-                  NSLog(@"[XZX] Error: %s", error);
-                  luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
-                  return;
-              }
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                  lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
-                  lua_State *exec_thread = lua_tothread(L, -1);
-                  if (exec_thread) {
-                      int result = lua_pcall(exec_thread, 0, 0, 0);
-                      if (result != 0) {
-                          const char *error = lua_tostring(exec_thread, -1);
-                          NSLog(@"[XZX] Execution error: %s", error);
-                      }
+              if (L) {
+                  [[XZXAntiDetection shared] randomizeInjectionPattern];
+                  [[XZXBanProtection shared] simulateHumanBehavior];
+                  lua_State *thread = lua_newthread(L);
+                  int threadRef = luaL_ref(L, LUA_REGISTRYINDEX);
+                  int status = luaL_loadstring(thread, script);
+                  if (status != 0) {
+                      const char *error = lua_tostring(thread, -1);
+                      NSLog(@"[XZX] Error: %s", error);
+                      luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
+                      return;
                   }
-                  luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
-              });
+                  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                      lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
+                      lua_State *exec_thread = lua_tothread(L, -1);
+                      if (exec_thread) {
+                          int result = lua_pcall(exec_thread, 0, 0, 0);
+                          if (result != 0) {
+                              const char *error = lua_tostring(exec_thread, -1);
+                              NSLog(@"[XZX] Execution error: %s", error);
+                          }
+                      }
+                      luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
+                  });
+              }
           }
           EOF
       
@@ -492,49 +512,149 @@ jobs:
           }
 
           + (void)load {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 
+              NSLog(@"[XZX] Library loaded - delaying initialization");
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), 
                              dispatch_get_main_queue(), ^{
-                  [[XZXCore shared] initialize];
+                  @try {
+                      NSLog(@"[XZX] Starting initialization...");
+                      [[XZXCore shared] initialize];
+                  } @catch (NSException *exception) {
+                      NSLog(@"[XZX] INITIALIZATION CRASH: %@", exception);
+                      NSLog(@"[XZX] Reason: %@", exception.reason);
+                      NSLog(@"[XZX] Stack: %@", exception.callStackSymbols);
+                  }
               });
           }
 
           - (void)initialize {
-              [[XZXAntiDetection shared] initializeProtection];
-              [[XZXBanProtection shared] protectAccount];
-              [[XZXInjectionRandomizer shared] randomizeNextInjection];
-              [[XZXHookManager shared] initializeHookSystem];
-              [self scanRobloxMemory];
-              [self startGameStateMonitoring];
-              InitLua();
+              NSLog(@"[XZX] initialize started");
+              
+              @try {
+                  NSLog(@"[XZX] Testing Objective-C runtime...");
+                  if (![NSObject class]) {
+                      NSLog(@"[XZX] CRITICAL: Objective-C runtime not available");
+                      return;
+                  }
+                  
+                  NSLog(@"[XZX] Initializing AntiDetection...");
+                  id antiDetection = [XZXAntiDetection shared];
+                  if (antiDetection) {
+                      [antiDetection initializeProtection];
+                      NSLog(@"[XZX] AntiDetection OK");
+                  } else {
+                      NSLog(@"[XZX] WARNING: AntiDetection returned nil");
+                  }
+                  
+                  NSLog(@"[XZX] Initializing BanProtection...");
+                  id banProtection = [XZXBanProtection shared];
+                  if (banProtection) {
+                      [banProtection protectAccount];
+                      NSLog(@"[XZX] BanProtection OK");
+                  } else {
+                      NSLog(@"[XZX] WARNING: BanProtection returned nil");
+                  }
+                  
+                  NSLog(@"[XZX] Initializing InjectionRandomizer...");
+                  id injectionRandomizer = [XZXInjectionRandomizer shared];
+                  if (injectionRandomizer) {
+                      [injectionRandomizer randomizeNextInjection];
+                      NSLog(@"[XZX] InjectionRandomizer OK");
+                  } else {
+                      NSLog(@"[XZX] WARNING: InjectionRandomizer returned nil");
+                  }
+                  
+                  NSLog(@"[XZX] Initializing HookManager...");
+                  id hookManager = [XZXHookManager shared];
+                  if (hookManager) {
+                      [hookManager initializeHookSystem];
+                      NSLog(@"[XZX] HookManager OK");
+                  } else {
+                      NSLog(@"[XZX] WARNING: HookManager returned nil");
+                  }
+                  
+                  NSLog(@"[XZX] Scanning Roblox memory...");
+                  [self scanRobloxMemory];
+                  NSLog(@"[XZX] Memory scan complete");
+                  
+                  NSLog(@"[XZX] Starting game state monitoring...");
+                  [self startGameStateMonitoring];
+                  NSLog(@"[XZX] Monitoring started");
+                  
+                  NSLog(@"[XZX] Initializing Lua...");
+                  InitLua();
+                  NSLog(@"[XZX] Lua initialized successfully");
+                  
+                  NSLog(@"[XZX] All systems initialized successfully");
+                  
+              } @catch (NSException *exception) {
+                  NSLog(@"[XZX] CRASH DURING INITIALIZATION: %@", exception);
+                  NSLog(@"[XZX] Exception name: %@", exception.name);
+                  NSLog(@"[XZX] Exception reason: %@", exception.reason);
+                  NSLog(@"[XZX] Call stack: %@", exception.callStackSymbols);
+              } @finally {
+                  NSLog(@"[XZX] Initialize completed");
+              }
           }
 
           - (void)scanRobloxMemory {
-              uint32_t count = _dyld_image_count();
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
-                      roblox_base = (uintptr_t)_dyld_get_image_header(i);
-                      break;
+              @try {
+                  uint32_t count = _dyld_image_count();
+                  NSLog(@"[XZX] Found %u loaded images", count);
+                  
+                  for (uint32_t i = 0; i < count; i++) {
+                      const char *name = _dyld_get_image_name(i);
+                      if (name) {
+                          if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
+                              roblox_base = (uintptr_t)_dyld_get_image_header(i);
+                              NSLog(@"[XZX] Found Roblox at base: 0x%lx", (unsigned long)roblox_base);
+                              break;
+                          }
+                      }
                   }
+                  
+                  if (roblox_base == 0) {
+                      NSLog(@"[XZX] WARNING: Could not find Roblox binary");
+                  }
+              } @catch (NSException *exception) {
+                  NSLog(@"[XZX] Memory scan error: %@", exception);
               }
           }
 
           - (void)startGameStateMonitoring {
               dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  BOOL lastInGame = NO;
-                  while (YES) {
-                      BOOL currentlyInGame = [self checkIfInGame];
-                      if (currentlyInGame && !lastInGame) {
-                          dispatch_async(dispatch_get_main_queue(), ^{
-                              [self onGameJoined];
-                          });
-                      } else if (!currentlyInGame && lastInGame) {
-                          dispatch_async(dispatch_get_main_queue(), ^{
-                              [self onGameLeft];
-                          });
+                  @autoreleasepool {
+                      BOOL lastInGame = NO;
+                      int checkCount = 0;
+                      
+                      while (YES) {
+                          @try {
+                              checkCount++;
+                              BOOL currentlyInGame = [self checkIfInGame];
+                              
+                              if (currentlyInGame && !lastInGame) {
+                                  NSLog(@"[XZX] Game joined detected");
+                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                      [self onGameJoined];
+                                  });
+                              } else if (!currentlyInGame && lastInGame) {
+                                  NSLog(@"[XZX] Game left detected");
+                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                      [self onGameLeft];
+                                  });
+                              }
+                              
+                              lastInGame = currentlyInGame;
+                              
+                              if (checkCount % 60 == 0) {
+                                  NSLog(@"[XZX] Monitor running, inGame: %d", currentlyInGame);
+                              }
+                              
+                          } @catch (NSException *exception) {
+                              NSLog(@"[XZX] Monitor thread error: %@", exception);
+                          }
+                          
+                          [NSThread sleepForTimeInterval:1.0];
                       }
-                      lastInGame = currentlyInGame;
-                      [NSThread sleepForTimeInterval:1.0];
                   }
               });
           }
@@ -544,22 +664,40 @@ jobs:
           }
 
           - (void)onGameJoined {
-              if (self.isInGame) return;
-              self.isInGame = YES;
-              [[XZXAntiDetection shared] randomizeInjectionPattern];
-              [[XZXBanProtection shared] simulateHumanBehavior];
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [[NSNotificationCenter defaultCenter] postNotificationName:@"GameJoined" object:nil];
-              });
+              if (self.isInGame) {
+                  NSLog(@"[XZX] Already in game, ignoring duplicate join");
+                  return;
+              }
+              
+              @try {
+                  self.isInGame = YES;
+                  NSLog(@"[XZX] Game joined event fired");
+                  
+                  [[XZXAntiDetection shared] randomizeInjectionPattern];
+                  [[XZXBanProtection shared] simulateHumanBehavior];
+                  
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      [[NSNotificationCenter defaultCenter] postNotificationName:@"GameJoined" object:nil];
+                  });
+              } @catch (NSException *exception) {
+                  NSLog(@"[XZX] onGameJoined error: %@", exception);
+              }
           }
 
           - (void)onGameLeft {
-              self.isInGame = NO;
-              [[XZXAntiDetection shared] cleanTraces];
-              [[XZXBanProtection shared] removeTraces];
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [[NSNotificationCenter defaultCenter] postNotificationName:@"GameLeft" object:nil];
-              });
+              @try {
+                  self.isInGame = NO;
+                  NSLog(@"[XZX] Game left event fired");
+                  
+                  [[XZXAntiDetection shared] cleanTraces];
+                  [[XZXBanProtection shared] removeTraces];
+                  
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      [[NSNotificationCenter defaultCenter] postNotificationName:@"GameLeft" object:nil];
+                  });
+              } @catch (NSException *exception) {
+                  NSLog(@"[XZX] onGameLeft error: %@", exception);
+              }
           }
 
           void notify_game_joined(void) {
@@ -670,7 +808,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_antidetection.m (FIXED VERSION)
+      - name: Create xzx_antidetection.m
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
@@ -1457,7 +1595,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_hook_manager.m (FIXED VERSION)
+      - name: Create xzx_hook_manager.m
         run: |
           cat > injector/dylib/xzx_hook_manager.m << 'EOF'
           #import "xzx_hook_manager.h"

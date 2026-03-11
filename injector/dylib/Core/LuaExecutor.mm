@@ -27,7 +27,7 @@ static int xzx_print(lua_State *L) {
         } else if (lua_isnumber(L, i)) {
             [output appendFormat:@"%g", lua_tonumber(L, i)];
         } else if (lua_isboolean(L, i)) {
-            [output appendString:lua_toboolean(L, i) ? @"true" : @"false"];
+            [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
         } else if (lua_istable(L, i)) {
             [output appendString:@"table"];
         } else if (lua_isfunction(L, i)) {
@@ -324,22 +324,28 @@ static int xzx_messagebox(lua_State *L) {
     const char *caption = luaL_optstring(L, 2, "XZX");
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindowScene *windowScene = nil;
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                windowScene = (UIWindowScene *)scene;
-                break;
+        UIWindow *keyWindow = nil;
+        
+        if (@available(iOS 13.0, *)) {
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    UIWindowScene *windowScene = (UIWindowScene *)scene;
+                    for (UIWindow *window in windowScene.windows) {
+                        if (window.isKeyWindow) {
+                            keyWindow = window;
+                            break;
+                        }
+                    }
+                }
+                if (keyWindow) break;
             }
         }
         
-        UIViewController *rootVC = nil;
-        if (windowScene) {
-            rootVC = windowScene.windows.firstObject.rootViewController;
+        if (!keyWindow) {
+            keyWindow = [UIApplication sharedApplication].windows.firstObject;
         }
         
-        if (!rootVC) {
-            rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-        }
+        UIViewController *rootVC = keyWindow.rootViewController;
         
         if (rootVC) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]

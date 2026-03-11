@@ -670,7 +670,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_antidetection.m
+      - name: Create xzx_antidetection.m (FIXED VERSION)
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
@@ -760,11 +760,18 @@ jobs:
                       return YES;
                   }
               }
+              
               NSArray *suspiciousProcesses = @[@"debugserver", @"gdb", @"lldb"];
               for (NSString *proc in suspiciousProcesses) {
-                  if (system([[NSString stringWithFormat:@"ps -A | grep %@", proc] UTF8String]) == 0) {
-                      _currentStrikes += 2;
-                      return YES;
+                  FILE *pipe = popen([[NSString stringWithFormat:@"ps -A | grep %@", proc] UTF8String], "r");
+                  if (pipe) {
+                      char buffer[128];
+                      if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+                          pclose(pipe);
+                          _currentStrikes += 2;
+                          return YES;
+                      }
+                      pclose(pipe);
                   }
               }
               return NO;
@@ -774,10 +781,13 @@ jobs:
               [[XZXHookManager shared] restoreAllFunctions];
               [self cleanTraces];
               dispatch_async(dispatch_get_main_queue(), ^{
+                  UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+                  UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
+                  
                   UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XZX Security"
                                                                                  message:@"Security breach detected. Cleaning traces..."
                                                                           preferredStyle:UIAlertControllerStyleAlert];
-                  [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:^{
+                  [rootVC presentViewController:alert animated:YES completion:^{
                       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                           [alert dismissViewControllerAnimated:YES completion:nil];
                       });
@@ -811,7 +821,8 @@ jobs:
               for (NSString *url in connections) {
                   NSURL *spoofUrl = [NSURL URLWithString:url];
                   NSURLRequest *request = [NSURLRequest requestWithURL:spoofUrl];
-                  [NSURLConnection sendAsynchronousRequest:request queue:[NSOperationQueue mainQueue] completionHandler:nil];
+                  NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:nil];
+                  [task resume];
               }
           }
 
@@ -819,10 +830,12 @@ jobs:
               [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXExecutionHistory"];
               [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXSavedScripts"];
               [[NSUserDefaults standardUserDefaults] synchronize];
+              
               NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
               NSString *cachePath = [paths firstObject];
               NSFileManager *fm = [NSFileManager defaultManager];
               NSArray *cacheFiles = [fm contentsOfDirectoryAtPath:cachePath error:nil];
+              
               for (NSString *file in cacheFiles) {
                   if ([file hasPrefix:@"xzx_"] || [file containsString:@"executor"]) {
                       [fm removeItemAtPath:[cachePath stringByAppendingPathComponent:file] error:nil];

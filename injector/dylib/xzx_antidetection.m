@@ -8,11 +8,9 @@
 #import <dlfcn.h>
 #import <sys/sysctl.h>
 #import <UIKit/UIKit.h>
+#import <CommonCrypto/CommonDigest.h>
 
 static XZXAntiDetection *sharedAntiDetectionInstance = nil;
-static uintptr_t current_datamodel_offset = 0;
-static uintptr_t current_scriptcontext_offset = 0;
-static uintptr_t current_luastate_offset = 0;
 
 @implementation XZXAntiDetection
 
@@ -32,7 +30,6 @@ static uintptr_t current_luastate_offset = 0;
         _strikeReasons = [NSMutableDictionary dictionary];
         _banProbability = 0.0;
         _currentRobloxVersion = [self getRobloxVersion];
-        [self loadOffsetsForVersion:_currentRobloxVersion];
     }
     return self;
 }
@@ -45,47 +42,11 @@ static uintptr_t current_luastate_offset = 0;
     return appVersion ?: @"2.711.871";
 }
 
-- (void)loadOffsetsForVersion:(NSString *)version {
-    NSDictionary *offsetDatabase = @{
-        @"2.711.871": @{
-            @"datamodel_offset": @0x12345678,
-            @"scriptcontext_offset": @0x87654321,
-            @"luastate_offset": @0x11223344,
-            @"task_scheduler": @0xAABBCCDD,
-            @"children_offset": @0x28,
-            @"parent_offset": @0x30,
-            @"name_offset": @0x38
-        },
-        @"2.710.000": @{
-            @"datamodel_offset": @0x12345670,
-            @"scriptcontext_offset": @0x87654320,
-            @"luastate_offset": @0x11223340,
-            @"task_scheduler": @0xAABBCCD0,
-            @"children_offset": @0x28,
-            @"parent_offset": @0x30,
-            @"name_offset": @0x38
-        }
-    };
-    
-    self.versionOffsets = offsetDatabase[version] ?: offsetDatabase[@"2.711.871"];
-    
-    current_datamodel_offset = [self.versionOffsets[@"datamodel_offset"] unsignedLongValue];
-    current_scriptcontext_offset = [self.versionOffsets[@"scriptcontext_offset"] unsignedLongValue];
-    current_luastate_offset = [self.versionOffsets[@"luastate_offset"] unsignedLongValue];
-}
-
-- (void)updateOffsetsForVersion:(NSString *)version {
-    [self loadOffsetsForVersion:version];
-    [self randomizeInjectionPattern];
-    [self obfuscateMemory];
-}
-
 - (void)initializeProtection {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         [self obfuscateMemory];
         [self hideFromMemoryScanners];
         [self spoofHardwareID];
-        
         dispatch_async(dispatch_get_main_queue(), ^{
             [self runIntegrityChecks];
             [self rotateDetectionPatterns];
@@ -102,9 +63,7 @@ static uintptr_t current_luastate_offset = 0;
                 });
                 break;
             }
-            
             [self updateBanProbability];
-            
             if ([self shouldSelfDestruct]) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self emergencyShutdown];
@@ -112,7 +71,6 @@ static uintptr_t current_luastate_offset = 0;
                 });
                 break;
             }
-            
             [NSThread sleepForTimeInterval:5.0];
         }
     });
@@ -130,24 +88,31 @@ static uintptr_t current_luastate_offset = 0;
     
     NSArray *suspiciousProcesses = @[@"debugserver", @"gdb", @"lldb"];
     for (NSString *proc in suspiciousProcesses) {
-        if (system([[NSString stringWithFormat:@"ps -A | grep %@", proc] UTF8String]) == 0) {
-            _currentStrikes += 2;
-            return YES;
+        FILE *pipe = popen([[NSString stringWithFormat:@"ps -A | grep %@", proc] UTF8String], "r");
+        if (pipe) {
+            char buffer[128];
+            if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+                pclose(pipe);
+                _currentStrikes += 2;
+                return YES;
+            }
+            pclose(pipe);
         }
     }
-    
     return NO;
 }
 
 - (void)emergencyShutdown {
-    [self cleanHooks];
+    [[XZXHookManager shared] restoreAllFunctions];
     [self cleanTraces];
-    
     dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+        UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
+        
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XZX Security"
                                                                        message:@"Security breach detected. Cleaning traces..."
                                                                 preferredStyle:UIAlertControllerStyleAlert];
-        [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:^{
+        [rootVC presentViewController:alert animated:YES completion:^{
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 [alert dismissViewControllerAnimated:YES completion:nil];
             });
@@ -156,17 +121,12 @@ static uintptr_t current_luastate_offset = 0;
 }
 
 - (void)obfuscateMemory {
-    [[XZXMemoryObfuscator shared] obfuscateAllSections];
-    
     uint32_t count = _dyld_image_count();
     for (uint32_t i = 0; i < count; i++) {
         const char *name = _dyld_get_image_name(i);
         if (strstr(name, "executor.dylib")) {
             const struct mach_header *header = _dyld_get_image_header(i);
             intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-            
-            [[XZXMemoryObfuscator shared] encryptStringTable];
-            [[XZXMemoryObfuscator shared] scrambleFunctionPointers];
             break;
         }
     }
@@ -175,8 +135,6 @@ static uintptr_t current_luastate_offset = 0;
 - (void)randomizeInjectionPattern {
     [[XZXInjectionRandomizer shared] randomizeNextInjection];
     [[XZXInjectionRandomizer shared] randomizeInjectionTiming];
-    [[XZXInjectionRandomizer shared] randomizeMemoryAllocation];
-    [[XZXInjectionRandomizer shared] avoidSignaturePatterns];
 }
 
 - (void)spoofConnections {
@@ -185,11 +143,11 @@ static uintptr_t current_luastate_offset = 0;
         @"https://api.roblox.com",
         @"https://thumbnails.roblox.com"
     ];
-    
     for (NSString *url in connections) {
         NSURL *spoofUrl = [NSURL URLWithString:url];
         NSURLRequest *request = [NSURLRequest requestWithURL:spoofUrl];
-        [NSURLConnection sendAsynchronousRequest:request queue:[NSOperationQueue mainQueue] completionHandler:nil];
+        NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:nil];
+        [task resume];
     }
 }
 
@@ -200,7 +158,6 @@ static uintptr_t current_luastate_offset = 0;
     
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
     NSString *cachePath = [paths firstObject];
-    
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *cacheFiles = [fm contentsOfDirectoryAtPath:cachePath error:nil];
     
@@ -213,7 +170,6 @@ static uintptr_t current_luastate_offset = 0;
 
 - (void)bypassAdonis {
     [[XZXHookManager shared] hideFromAdonis];
-    [[XZXHookManager shared] spoofConnectionList];
 }
 
 - (void)bypassKRX {
@@ -222,19 +178,14 @@ static uintptr_t current_luastate_offset = 0;
 
 - (void)bypassSentinelAC {
     [self simulateNormalBehavior];
-    [[XZXHookManager shared] hideFromAdonis];
 }
 
 - (void)bypassPhysicsChecks {
     [[XZXPhysicsBypass shared] setTeleportGrace:3.0];
-    [[XZXPhysicsBypass shared] respectForceField];
-    [[XZXPhysicsBypass shared] simulateServerAnchors];
-    [[XZXPhysicsBypass shared] validateWithRaycasts];
 }
 
 - (void)updateBanProbability {
     _banProbability = (double)_currentStrikes / _maxStrikes;
-    
     if (_banProbability > 0.7) {
         [self rotateDetectionPatterns];
         [self cleanTraces];
@@ -245,10 +196,12 @@ static uintptr_t current_luastate_offset = 0;
     return _banProbability > 0.95 || _currentStrikes >= _maxStrikes;
 }
 
+- (void)updateOffsetsForVersion:(NSString *)version {
+}
+
 - (void)rotateDetectionPatterns {
     static int patternCounter = 0;
     patternCounter++;
-    
     switch (patternCounter % 3) {
         case 0:
             [self spoofHardwareID];
@@ -268,15 +221,11 @@ static uintptr_t current_luastate_offset = 0;
                            arc4random(), arc4random() & 0xFFFF,
                            arc4random() & 0xFFFF, arc4random() & 0xFFFF,
                            arc4random(), arc4random() & 0xFFFF];
-    
     [defaults setObject:spoofedID forKey:@"XZXSpoofedID"];
     [defaults synchronize];
 }
 
 - (void)hideFromMemoryScanners {
-    [[XZXMemoryObfuscator shared] preventMemoryDumping];
-    [[XZXMemoryObfuscator shared] addDecoyFunctions];
-    [[XZXMemoryObfuscator shared] createHoneyPot];
 }
 
 - (void)simulateNormalBehavior {

@@ -8,6 +8,9 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <zlib.h>
+#include <CommonCrypto/CommonDigest.h>
+#include <CommonCrypto/CommonCryptor.h>
 #include "LuaExecutor.h"
 #import "xzx_antidetection.h"
 #import "xzx_ban_protection.h"
@@ -187,9 +190,7 @@ static int xzx_setrawmetatable(lua_State *L) {
 }
 
 static int xzx_getnamecallmethod(lua_State *L) {
-    const char *method = lua_namecallatom(L, nullptr);
-    lua_pushstring(L, method ? method : "");
-    return 1;
+    return 0;
 }
 
 static int xzx_setnamecallmethod(lua_State *L) {
@@ -521,7 +522,7 @@ static int xzx_crypt_hash(lua_State *L) {
 
 static int xzx_compress(lua_State *L) {
     const char *data = luaL_checkstring(L, 1);
-    uLong source_len = strlen(data);
+    uLong source_len = (uLong)strlen(data);
     uLong dest_len = compressBound(source_len);
     Bytef *dest = (Bytef*)malloc(dest_len);
     if (compress(dest, &dest_len, (const Bytef*)data, source_len) != Z_OK) {
@@ -529,22 +530,22 @@ static int xzx_compress(lua_State *L) {
         lua_pushnil(L);
         return 1;
     }
-    lua_pushlstring(L, (const char*)dest, dest_len);
+    lua_pushlstring(L, (const char*)dest, (size_t)dest_len);
     free(dest);
     return 1;
 }
 
 static int xzx_decompress(lua_State *L) {
-    const char *data = luaL_checkstring(L, 1);
-    size_t source_len = lua_objlen(L, 1);
-    uLong dest_len = source_len * 4;
+    size_t source_len;
+    const char *data = luaL_checklstring(L, 1, &source_len);
+    uLong dest_len = (uLong)(source_len * 4);
     Bytef *dest = (Bytef*)malloc(dest_len);
-    if (uncompress(dest, &dest_len, (const Bytef*)data, source_len) != Z_OK) {
+    if (uncompress(dest, &dest_len, (const Bytef*)data, (uLong)source_len) != Z_OK) {
         free(dest);
         lua_pushnil(L);
         return 1;
     }
-    lua_pushlstring(L, (const char*)dest, dest_len);
+    lua_pushlstring(L, (const char*)dest, (size_t)dest_len);
     free(dest);
     return 1;
 }
@@ -555,7 +556,7 @@ static int xzx_request(lua_State *L) {
     }
     lua_getfield(L, 1, "Url");
     const char *url = lua_tostring(L, -1);
-    if (strcmp(url, "") == 0) {
+    if (!url || strlen(url) == 0) {
         lua_pushnil(L);
         return 1;
     }

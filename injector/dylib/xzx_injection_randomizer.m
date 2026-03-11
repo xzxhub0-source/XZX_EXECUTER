@@ -230,4 +230,18 @@ static int current_method_index = 0;
 }
 
 - (void)rotateInjectionMethod {
-    current_method_index = (current_method_index + 1) % (sizeof(injection_method
+    current_method_index = (current_method_index + 1) % (sizeof(injection_methods) / sizeof(int));
+    _lastInjectionMethod = injection_methods[current_method_index];
+    [_injectionHistory addObject:@(_lastInjectionMethod)];
+}
+
+- (void)simulateLegitimateBehavior {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        for (int i = 0; i < 3; i++) {
+            [NSThread sleepForTimeInterval:0.5 + (arc4random_uniform(100) / 100.0)];
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"UIApplicationDidBecomeActiveNotification" object:nil];
+        }
+    });
+}
+
+@end

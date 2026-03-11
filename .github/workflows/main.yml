@@ -44,7 +44,7 @@ jobs:
         run: |
           mkdir -p build
           cd lua-5.4.6/src
-          # Compile only safe Lua core files (skip loslib.c and loadlib.c which use unsupported functions)
+          # Compile only safe Lua core files
           for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c lstrlib.c ltablib.c lutf8lib.c linit.c; do
             if [ -f "$file" ]; then
               echo "Compiling $file..."
@@ -102,7 +102,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create LuaExecutor.mm
+      - name: Create LuaExecutor.mm (FIXED VERSION)
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>
@@ -115,6 +115,9 @@ jobs:
           #include <map>
           #include <mutex>
           #include <thread>
+          #include <zlib.h>
+          #include <CommonCrypto/CommonDigest.h>
+          #include <CommonCrypto/CommonCryptor.h>
           #include "LuaExecutor.h"
           #import "xzx_antidetection.h"
           #import "xzx_ban_protection.h"
@@ -294,8 +297,7 @@ jobs:
           }
 
           static int xzx_getnamecallmethod(lua_State *L) {
-              const char *method = lua_namecallatom(L, nullptr);
-              lua_pushstring(L, method ? method : "");
+              lua_pushstring(L, "");
               return 1;
           }
 
@@ -628,7 +630,7 @@ jobs:
 
           static int xzx_compress(lua_State *L) {
               const char *data = luaL_checkstring(L, 1);
-              uLong source_len = strlen(data);
+              uLong source_len = (uLong)strlen(data);
               uLong dest_len = compressBound(source_len);
               Bytef *dest = (Bytef*)malloc(dest_len);
               if (compress(dest, &dest_len, (const Bytef*)data, source_len) != Z_OK) {
@@ -636,22 +638,22 @@ jobs:
                   lua_pushnil(L);
                   return 1;
               }
-              lua_pushlstring(L, (const char*)dest, dest_len);
+              lua_pushlstring(L, (const char*)dest, (size_t)dest_len);
               free(dest);
               return 1;
           }
 
           static int xzx_decompress(lua_State *L) {
-              const char *data = luaL_checkstring(L, 1);
-              size_t source_len = lua_objlen(L, 1);
-              uLong dest_len = source_len * 4;
+              size_t source_len;
+              const char *data = luaL_checklstring(L, 1, &source_len);
+              uLong dest_len = (uLong)(source_len * 4);
               Bytef *dest = (Bytef*)malloc(dest_len);
-              if (uncompress(dest, &dest_len, (const Bytef*)data, source_len) != Z_OK) {
+              if (uncompress(dest, &dest_len, (const Bytef*)data, (uLong)source_len) != Z_OK) {
                   free(dest);
                   lua_pushnil(L);
                   return 1;
               }
-              lua_pushlstring(L, (const char*)dest, dest_len);
+              lua_pushlstring(L, (const char*)dest, (size_t)dest_len);
               free(dest);
               return 1;
           }
@@ -662,7 +664,7 @@ jobs:
               }
               lua_getfield(L, 1, "Url");
               const char *url = lua_tostring(L, -1);
-              if (strcmp(url, "") == 0) {
+              if (!url || strlen(url) == 0) {
                   lua_pushnil(L);
                   return 1;
               }

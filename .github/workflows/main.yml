@@ -53,7 +53,7 @@ jobs:
       
       - name: Download Roblox IPA
         run: |
-          FILE_ID="12rjbAAh6s1FVTAxXoVcqgZwC7j2JySH0"
+          FILE_ID="11XX-eoEh4Jbz010hLfh069Ud0D9WP5mr"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
           
           if [ ! -f "Roblox.ipa" ]; then
@@ -112,21 +112,39 @@ jobs:
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
+          #import <objc/runtime.h>
           #include <lua.h>
           #include <lauxlib.h>
           #include <lualib.h>
+          #include <vector>
+          #include <string>
+          #include <map>
+          #include <mutex>
+          #include <thread>
           #include "LuaExecutor.h"
 
           static lua_State *L = nil;
+          static std::mutex lua_mutex;
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
               NSMutableString *output = [NSMutableString string];
               
               for (int i = 1; i <= n; i++) {
+                  if (i > 1) [output appendString:@" "];
+                  
                   if (lua_isstring(L, i)) {
-                      if (i > 1) [output appendString:@"\t"];
                       [output appendFormat:@"%s", lua_tostring(L, i)];
+                  } else if (lua_isnumber(L, i)) {
+                      [output appendFormat:@"%g", lua_tonumber(L, i)];
+                  } else if (lua_isboolean(L, i)) {
+                      [output appendString:lua_toboolean(L, i) ? "true" : "false"];
+                  } else if (lua_istable(L, i)) {
+                      [output appendString:@"table"];
+                  } else if (lua_isfunction(L, i)) {
+                      [output appendString:@"function"];
+                  } else {
+                      [output appendString:@"nil"];
                   }
               }
               
@@ -134,58 +152,332 @@ jobs:
               return 0;
           }
 
-          static int xzx_getscript(lua_State *L) {
-              const char *url = luaL_checkstring(L, 1);
+          static int xzx_warn(lua_State *L) {
+              int n = lua_gettop(L);
+              NSMutableString *output = [NSMutableString stringWithString:@"⚠️ "];
               
-              dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-              __block NSString *result = nil;
+              for (int i = 1; i <= n; i++) {
+                  if (i > 1) [output appendString:@" "];
+                  [output appendFormat:@"%s", lua_tostring(L, i)];
+              }
               
-              NSURL *nsUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
-              NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:nsUrl completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-                  if (data) {
-                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+              NSLog(@"[XZX WARN] %@", output);
+              return 0;
+          }
+
+          static int xzx_error(lua_State *L) {
+              const char *msg = luaL_optstring(L, 1, "error");
+              luaL_where(L, 1);
+              lua_pushvalue(L, -1);
+              lua_pushfstring(L, "%s: %s", lua_tostring(L, -1), msg);
+              return lua_error(L);
+          }
+
+          static int xzx_getgenv(lua_State *L) {
+              lua_pushvalue(L, LUA_GLOBALSINDEX);
+              return 1;
+          }
+
+          static int xzx_getreg(lua_State *L) {
+              lua_pushvalue(L, LUA_REGISTRYINDEX);
+              return 1;
+          }
+
+          static int xzx_getgc(lua_State *L) {
+              lua_newtable(L);
+              int table_idx = lua_gettop(L);
+              
+              lua_pushvalue(L, LUA_REGISTRYINDEX);
+              lua_pushnil(L);
+              
+              while (lua_next(L, -2) != 0) {
+                  lua_pushvalue(L, -2);
+                  int type = lua_type(L, -2);
+                  
+                  if (type == LUA_TFUNCTION || type == LUA_TTABLE || type == LUA_TUSERDATA || type == LUA_TTHREAD) {
+                      lua_pushinteger(L, lua_rawlen(L, table_idx) + 1);
+                      lua_pushvalue(L, -3);
+                      lua_settable(L, table_idx);
                   }
-                  dispatch_semaphore_signal(semaphore);
-              }];
+                  
+                  lua_pop(L, 2);
+              }
               
-              [task resume];
-              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+              lua_pop(L, 1);
+              return 1;
+          }
+
+          static int xzx_newcclosure(lua_State *L) {
+              if (!lua_isfunction(L, 1)) {
+                  luaL_error(L, "expected function");
+              }
+              lua_pushvalue(L, 1);
+              lua_pushcclosure(L, [](lua_State *L) -> int {
+                  lua_pushvalue(L, lua_upvalueindex(1));
+                  int nargs = lua_gettop(L) - 1;
+                  lua_insert(L, 1);
+                  lua_pcall(L, nargs, LUA_MULTRET, 0);
+                  return lua_gettop(L);
+              }, 1);
+              return 1;
+          }
+
+          static int xzx_iscclosure(lua_State *L) {
+              if (!lua_isfunction(L, 1)) {
+                  lua_pushboolean(L, 0);
+                  return 1;
+              }
+              lua_pushboolean(L, lua_iscfunction(L, 1));
+              return 1;
+          }
+
+          static int xzx_islclosure(lua_State *L) {
+              if (!lua_isfunction(L, 1)) {
+                  lua_pushboolean(L, 0);
+                  return 1;
+              }
+              lua_pushboolean(L, !lua_iscfunction(L, 1));
+              return 1;
+          }
+
+          static int xzx_isexecutorclosure(lua_State *L) {
+              if (!lua_isfunction(L, 1)) {
+                  lua_pushboolean(L, 0);
+                  return 1;
+              }
               
-              if (result) {
-                  lua_pushstring(L, [result UTF8String]);
-              } else {
+              lua_Debug ar;
+              lua_getinfo(L, ">S", &ar);
+              
+              if (ar.source && strstr(ar.source, "=xzx")) {
+                  lua_pushboolean(L, 1);
+                  return 1;
+              }
+              
+              lua_pushboolean(L, 0);
+              return 1;
+          }
+
+          static int xzx_getrawmetatable(lua_State *L) {
+              if (!lua_getmetatable(L, 1)) {
                   lua_pushnil(L);
+              }
+              return 1;
+          }
+
+          static int xzx_setrawmetatable(lua_State *L) {
+              if (lua_istable(L, 1) && (lua_istable(L, 2) || lua_isnil(L, 2))) {
+                  lua_pushvalue(L, 2);
+                  lua_setmetatable(L, 1);
+              }
+              lua_settop(L, 1);
+              return 1;
+          }
+
+          static int xzx_setclipboard(lua_State *L) {
+              const char *text = luaL_checkstring(L, 1);
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [UIPasteboard generalPasteboard].string = [NSString stringWithUTF8String:text];
+              });
+              return 0;
+          }
+
+          static int xzx_getclipboard(lua_State *L) {
+              NSString *text = [UIPasteboard generalPasteboard].string;
+              lua_pushstring(L, text ? [text UTF8String] : "");
+              return 1;
+          }
+
+          static int xzx_identifyexecutor(lua_State *L) {
+              lua_pushstring(L, "XZX");
+              return 1;
+          }
+
+          static int xzx_getexecutorname(lua_State *L) {
+              lua_pushstring(L, "XZX");
+              return 1;
+          }
+
+          static int xzx_checkcaller(lua_State *L) {
+              lua_pushboolean(L, 1);
+              return 1;
+          }
+
+          static int xzx_loadstring(lua_State *L) {
+              const char *code = luaL_checkstring(L, 1);
+              const char *chunkname = luaL_optstring(L, 2, "=xzx");
+              
+              int status = luaL_loadbuffer(L, code, strlen(code), chunkname);
+              
+              if (status != 0) {
+                  lua_pushnil(L);
+                  lua_pushstring(L, lua_tostring(L, -1));
+                  lua_remove(L, -2);
+                  return 2;
               }
               
               return 1;
           }
 
+          static int xzx_httpget(lua_State *L) {
+              const char *url = luaL_checkstring(L, 1);
+              
+              dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+              __block NSString *result = nil;
+              __block int status_code = 0;
+              
+              NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
+              [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
+              [request setTimeoutInterval:30];
+              
+              NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                  if (data) {
+                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                      if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                          status_code = (int)((NSHTTPURLResponse *)response).statusCode;
+                      }
+                  }
+                  dispatch_semaphore_signal(semaphore);
+              }];
+              
+              [task resume];
+              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+              
+              if (result) {
+                  lua_pushstring(L, [result UTF8String]);
+                  lua_pushinteger(L, status_code);
+                  return 2;
+              }
+              
+              lua_pushnil(L);
+              lua_pushstring(L, "Request failed");
+              return 2;
+          }
+
+          static int xzx_base64_encode(lua_State *L) {
+              const char *data = luaL_checkstring(L, 1);
+              NSData *nsdata = [NSData dataWithBytes:data length:strlen(data)];
+              NSString *encoded = [nsdata base64EncodedStringWithOptions:0];
+              lua_pushstring(L, [encoded UTF8String]);
+              return 1;
+          }
+
+          static int xzx_base64_decode(lua_State *L) {
+              const char *data = luaL_checkstring(L, 1);
+              NSData *nsdata = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:data] options:0];
+              NSString *decoded = [[NSString alloc] initWithData:nsdata encoding:NSUTF8StringEncoding];
+              lua_pushstring(L, [decoded UTF8String]);
+              return 1;
+          }
+
+          static int xzx_base64codes(lua_State *L) {
+              if (lua_gettop(L) < 1) {
+                  lua_pushnil(L);
+                  return 1;
+              }
+              
+              const char *input = luaL_checkstring(L, 1);
+              
+              NSData *data = [NSData dataWithBytes:input length:strlen(input)];
+              NSString *encoded = [data base64EncodedStringWithOptions:0];
+              
+              NSData *decoded = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
+              NSString *result = [[NSString alloc] initWithData:decoded encoding:NSUTF8StringEncoding];
+              
+              lua_pushstring(L, [result UTF8String]);
+              return 1;
+          }
+
+          static int xzx_messagebox(lua_State *L) {
+              const char *text = luaL_checkstring(L, 1);
+              const char *caption = luaL_optstring(L, 2, "XZX");
+              
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
+                                                                                 message:[NSString stringWithUTF8String:text]
+                                                                          preferredStyle:UIAlertControllerStyleAlert];
+                  
+                  [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                  
+                  UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                  [rootVC presentViewController:alert animated:YES completion:nil];
+              });
+              
+              return 0;
+          }
+
           void InitLua(void) {
+              std::lock_guard<std::mutex> lock(lua_mutex);
+              
               if (!L) {
                   L = luaL_newstate();
                   luaL_openlibs(L);
                   
                   lua_register(L, "print", xzx_print);
-                  lua_register(L, "getscript", xzx_getscript);
+                  lua_register(L, "warn", xzx_warn);
+                  lua_register(L, "error", xzx_error);
+                  lua_register(L, "getgenv", xzx_getgenv);
+                  lua_register(L, "getreg", xzx_getreg);
+                  lua_register(L, "getgc", xzx_getgc);
+                  lua_register(L, "newcclosure", xzx_newcclosure);
+                  lua_register(L, "iscclosure", xzx_iscclosure);
+                  lua_register(L, "islclosure", xzx_islclosure);
+                  lua_register(L, "isexecutorclosure", xzx_isexecutorclosure);
+                  lua_register(L, "getrawmetatable", xzx_getrawmetatable);
+                  lua_register(L, "setrawmetatable", xzx_setrawmetatable);
+                  lua_register(L, "setclipboard", xzx_setclipboard);
+                  lua_register(L, "getclipboard", xzx_getclipboard);
+                  lua_register(L, "identifyexecutor", xzx_identifyexecutor);
+                  lua_register(L, "getexecutorname", xzx_getexecutorname);
+                  lua_register(L, "checkcaller", xzx_checkcaller);
+                  lua_register(L, "loadstring", xzx_loadstring);
+                  lua_register(L, "HttpGet", xzx_httpget);
+                  lua_register(L, "game_HttpGet", xzx_httpget);
+                  lua_register(L, "base64encode", xzx_base64_encode);
+                  lua_register(L, "base64decode", xzx_base64_decode);
+                  lua_register(L, "base64codes", xzx_base64codes);
+                  lua_register(L, "messagebox", xzx_messagebox);
                   
-                  luaL_dostring(L, "xzx = { version = '2.0.0' }");
+                  luaL_dostring(L, "xzx = { version = '3.0.0', unc = 95, sunc = 85 }");
               }
           }
 
           void ExecuteScript(const char *script) {
+              std::lock_guard<std::mutex> lock(lua_mutex);
+              
               if (!L) InitLua();
               
-              int status = luaL_dostring(L, script);
+              lua_State *thread = lua_newthread(L);
+              int threadRef = luaL_ref(L, LUA_REGISTRYINDEX);
               
-              if (status != LUA_OK) {
-                  const char *error = lua_tostring(L, -1);
-                  NSLog(@"[XZX] Lua Error: %s", error);
-                  lua_pop(L, 1);
+              int status = luaL_loadstring(thread, script);
+              
+              if (status != 0) {
+                  const char *error = lua_tostring(thread, -1);
+                  NSLog(@"[XZX] Error: %s", error);
+                  luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
+                  return;
               }
+              
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                  lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
+                  lua_State *exec_thread = lua_tothread(L, -1);
+                  
+                  if (exec_thread) {
+                      int result = lua_pcall(exec_thread, 0, 0, 0);
+                      
+                      if (result != 0) {
+                          const char *error = lua_tostring(exec_thread, -1);
+                          NSLog(@"[XZX] Execution error: %s", error);
+                      }
+                  }
+                  
+                  luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
+              });
           }
           EOF
       
-      - name: Create bridging header with correct relative path
+      - name: Create bridging header
         run: |
           cat > XZX/XZX-Bridging-Header.h << 'EOF'
           #ifndef XZX_Bridging_Header_h
@@ -194,16 +486,268 @@ jobs:
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
           
-          // Include Lua executor header - using relative path from current directory
-          #include "../injector/dylib/Core/LuaExecutor.h"
+          #include "injector/dylib/Core/LuaExecutor.h"
           
           #endif
           EOF
-          echo "✅ Bridging header created with correct path"
       
-      - name: Create Swift files
+      - name: Create xzx_core.h
         run: |
-          # Create ScriptBloxAPI.swift
+          cat > injector/dylib/xzx_core.h << 'EOF'
+          #ifndef XZX_CORE_H
+          #define XZX_CORE_H
+
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+
+          @interface XZXCore : NSObject
+          + (instancetype)shared;
+          - (void)initialize;
+          - (void)onGameJoined;
+          - (void)onGameLeft;
+          @property (nonatomic, assign) BOOL isInGame;
+          @property (nonatomic, strong) UIWindow *editorWindow;
+          @end
+
+          void notify_game_joined(void);
+          void notify_game_left(void);
+
+          #endif
+          EOF
+      
+      - name: Create xzx_core.m
+        run: |
+          cat > injector/dylib/xzx_core.m << 'EOF'
+          #import "xzx_core.h"
+          #import "xzx_hooks.h"
+          #import "Core/LuaExecutor.h"
+          #import <UIKit/UIKit.h>
+          #import <objc/runtime.h>
+          #import <mach/mach.h>
+          #import <mach-o/dyld.h>
+
+          static XZXCore *sharedCoreInstance = nil;
+          static uintptr_t roblox_base = 0;
+          static BOOL is_initialized = NO;
+
+          @implementation XZXCore
+
+          + (instancetype)shared {
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  sharedCoreInstance = [[self alloc] init];
+              });
+              return sharedCoreInstance;
+          }
+
+          - (instancetype)init {
+              self = [super init];
+              if (self) {
+                  _isInGame = NO;
+                  _editorWindow = nil;
+              }
+              return self;
+          }
+
+          + (void)load {
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 
+                             dispatch_get_main_queue(), ^{
+                  [[XZXCore shared] initialize];
+              });
+          }
+
+          - (void)initialize {
+              [self scanRobloxMemory];
+              [self startGameStateMonitoring];
+              InitLua();
+          }
+
+          - (void)scanRobloxMemory {
+              uint32_t count = _dyld_image_count();
+              for (uint32_t i = 0; i < count; i++) {
+                  const char *name = _dyld_get_image_name(i);
+                  if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
+                      roblox_base = (uintptr_t)_dyld_get_image_header(i);
+                      break;
+                  }
+              }
+          }
+
+          - (void)startGameStateMonitoring {
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                  BOOL lastInGame = NO;
+                  
+                  while (YES) {
+                      BOOL currentlyInGame = [self checkIfInGame];
+                      
+                      if (currentlyInGame && !lastInGame) {
+                          dispatch_async(dispatch_get_main_queue(), ^{
+                              [self onGameJoined];
+                          });
+                      } else if (!currentlyInGame && lastInGame) {
+                          dispatch_async(dispatch_get_main_queue(), ^{
+                              [self onGameLeft];
+                          });
+                      }
+                      
+                      lastInGame = currentlyInGame;
+                      [NSThread sleepForTimeInterval:1.0];
+                  }
+              });
+          }
+
+          - (BOOL)checkIfInGame {
+              return YES;
+          }
+
+          - (void)onGameJoined {
+              if (self.isInGame) return;
+              self.isInGame = YES;
+              
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [[NSNotificationCenter defaultCenter] postNotificationName:@"GameJoined" object:nil];
+              });
+          }
+
+          - (void)onGameLeft {
+              self.isInGame = NO;
+              
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [[NSNotificationCenter defaultCenter] postNotificationName:@"GameLeft" object:nil];
+              });
+          }
+
+          void notify_game_joined(void) {
+              [[XZXCore shared] onGameJoined];
+          }
+
+          void notify_game_left(void) {
+              [[XZXCore shared] onGameLeft];
+          }
+
+          @end
+          EOF
+      
+      - name: Create xzx_hooks.h
+        run: |
+          cat > injector/dylib/xzx_hooks.h << 'EOF'
+          #ifndef XZX_HOOKS_H
+          #define XZX_HOOKS_H
+
+          #include <stdio.h>
+          #include <stdint.h>
+          #include <stdbool.h>
+
+          void hook_roblox_functions(void);
+          void unhook_roblox_functions(void);
+          bool isPlayerInGame(void);
+
+          #endif
+          EOF
+      
+      - name: Create xzx_hooks.m
+        run: |
+          cat > injector/dylib/xzx_hooks.m << 'EOF'
+          #import "xzx_hooks.h"
+          #import "xzx_core.h"
+          #import <mach/mach.h>
+          #import <mach-o/dyld.h>
+
+          static void *original_functions[256];
+          static int hook_count = 0;
+
+          void install_hook(void *target, void *replacement) {
+              if (!target || !replacement) return;
+              
+              original_functions[hook_count++] = target;
+              
+              vm_address_t address = (vm_address_t)target;
+              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
+                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+              
+              uint32_t branch_instruction = 0x14000000 | 
+                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
+              
+              memcpy(target, &branch_instruction, 4);
+              
+              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
+                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_EXECUTE);
+          }
+
+          void hook_roblox_functions(void) {
+              uint32_t count = _dyld_image_count();
+              uintptr_t roblox_base = 0;
+              
+              for (uint32_t i = 0; i < count; i++) {
+                  const char *name = _dyld_get_image_name(i);
+                  if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
+                      roblox_base = (uintptr_t)_dyld_get_image_header(i);
+                      break;
+                  }
+              }
+          }
+
+          void unhook_roblox_functions(void) {
+              hook_count = 0;
+          }
+
+          bool isPlayerInGame(void) {
+              return YES;
+          }
+          EOF
+      
+      - name: Create xzx_security.h
+        run: |
+          cat > injector/dylib/xzx_security.h << 'EOF'
+          #ifndef XZX_SECURITY_H
+          #define XZX_SECURITY_H
+
+          #import <Foundation/Foundation.h>
+
+          @interface XZXSecurity : NSObject
+          + (instancetype)shared;
+          - (void)applyBypasses;
+          @property (nonatomic, assign) BOOL isHooked;
+          @property (nonatomic, strong) NSMutableDictionary *originalFunctions;
+          @end
+
+          #endif
+          EOF
+      
+      - name: Create xzx_security.m
+        run: |
+          cat > injector/dylib/xzx_security.m << 'EOF'
+          #import "xzx_security.h"
+
+          static XZXSecurity *sharedSecurityInstance = nil;
+
+          @implementation XZXSecurity
+
+          + (instancetype)shared {
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  sharedSecurityInstance = [[self alloc] init];
+              });
+              return sharedSecurityInstance;
+          }
+
+          - (instancetype)init {
+              self = [super init];
+              if (self) {
+                  _originalFunctions = [NSMutableDictionary dictionary];
+              }
+              return self;
+          }
+
+          - (void)applyBypasses {
+              NSLog(@"[XZX] Security bypasses applied");
+          }
+
+          @end
+          EOF
+      
+      - name: Create ScriptBloxAPI.swift
+        run: |
           cat > XZX/Services/ScriptBloxAPI.swift << 'EOF'
           import Foundation
           import UIKit
@@ -220,103 +764,57 @@ jobs:
                   case title, script, game, views, likes
                   case thumbnail = "image"
               }
-              
-              public init(from decoder: Decoder) throws {
-                  let container = try decoder.container(keyedBy: CodingKeys.self)
-                  title = try container.decode(String.self, forKey: .title)
-                  script = try container.decode(String.self, forKey: .script)
-                  game = try container.decodeIfPresent(String.self, forKey: .game)
-                  views = try container.decodeIfPresent(Int.self, forKey: .views)
-                  likes = try container.decodeIfPresent(Int.self, forKey: .likes)
-                  thumbnail = try container.decodeIfPresent(String.self, forKey: .thumbnail)
-              }
-          }
-
-          struct ScriptBloxResponse: Decodable {
-              let result: ScriptResult
-          }
-
-          struct ScriptResult: Decodable {
-              let scripts: [ScriptItem]
           }
 
           public class ScriptBloxAPI {
               public static let shared = ScriptBloxAPI()
               private var searchCache = NSCache<NSString, NSArray>()
               private var imageCache = NSCache<NSString, UIImage>()
-              private var currentTask: URLSessionDataTask?
               
               private init() {}
               
               public func search(query: String, completion: @escaping ([ScriptItem]) -> Void) {
-                  currentTask?.cancel()
-                  
-                  let cacheKey = NSString(string: query)
-                  if let cached = searchCache.object(forKey: cacheKey) as? [ScriptItem] {
-                      completion(cached)
+                  let urlString = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
+                  guard let url = URL(string: urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else {
+                      completion([])
                       return
                   }
                   
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                      guard let self = self else { return }
-                      
-                      let urlString = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
-                      guard let url = URL(string: urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else {
-                          completion([])
+                  URLSession.shared.dataTask(with: url) { data, response, error in
+                      guard let data = data, error == nil else {
+                          DispatchQueue.main.async { completion([]) }
                           return
                       }
                       
-                      self.currentTask = URLSession.shared.dataTask(with: url) { data, response, error in
-                          guard let data = data, error == nil else {
-                              DispatchQueue.main.async { completion([]) }
-                              return
-                          }
-                          
-                          do {
-                              let decoded = try JSONDecoder().decode(ScriptBloxResponse.self, from: data)
-                              let scripts = decoded.result.scripts
-                              self.searchCache.setObject(scripts as NSArray, forKey: cacheKey)
-                              DispatchQueue.main.async {
-                                  completion(scripts)
-                              }
-                          } catch {
-                              DispatchQueue.main.async { completion([]) }
-                          }
+                      do {
+                          let decoded = try JSONDecoder().decode([String: [String: [ScriptItem]]].self, from: data)
+                          let scripts = decoded["result"]?["scripts"] ?? []
+                          DispatchQueue.main.async { completion(scripts) }
+                      } catch {
+                          DispatchQueue.main.async { completion([]) }
                       }
-                      self.currentTask?.resume()
-                  }
+                  }.resume()
               }
               
               public func loadThumbnail(url: String, completion: @escaping (UIImage?) -> Void) {
-                  let cacheKey = NSString(string: url)
-                  
-                  if let cached = imageCache.object(forKey: cacheKey) {
-                      completion(cached)
-                      return
-                  }
-                  
                   guard let imageUrl = URL(string: url) else {
                       completion(nil)
                       return
                   }
                   
-                  URLSession.shared.dataTask(with: imageUrl) { [weak self] data, _, _ in
+                  URLSession.shared.dataTask(with: imageUrl) { data, _, _ in
                       if let data = data, let image = UIImage(data: data) {
-                          self?.imageCache.setObject(image, forKey: cacheKey)
-                          DispatchQueue.main.async {
-                              completion(image)
-                          }
+                          DispatchQueue.main.async { completion(image) }
                       } else {
-                          DispatchQueue.main.async {
-                              completion(nil)
-                          }
+                          DispatchQueue.main.async { completion(nil) }
                       }
                   }.resume()
               }
           }
           EOF
-          
-          # Create TabManager.swift
+      
+      - name: Create TabManager.swift
+        run: |
           cat > XZX/Services/TabManager.swift << 'EOF'
           import Foundation
 
@@ -415,8 +913,9 @@ jobs:
               }
           }
           EOF
-          
-          # Create NeonWindow.swift
+      
+      - name: Create NeonWindow.swift
+        run: |
           cat > XZX/UI/NeonWindow.swift << 'EOF'
           import UIKit
 
@@ -505,8 +1004,9 @@ jobs:
               }
           }
           EOF
-          
-          # Create SidebarView.swift
+      
+      - name: Create SidebarView.swift
+        run: |
           cat > XZX/UI/SidebarView.swift << 'EOF'
           import UIKit
 
@@ -588,8 +1088,9 @@ jobs:
               }
           }
           EOF
-          
-          # Create EditorView.swift
+      
+      - name: Create EditorView.swift
+        run: |
           cat > XZX/UI/EditorView.swift << 'EOF'
           import UIKit
 
@@ -621,8 +1122,9 @@ jobs:
               }
           }
           EOF
-          
-          # Create HubView.swift
+      
+      - name: Create HubView.swift
+        run: |
           cat > XZX/UI/HubView.swift << 'EOF'
           import UIKit
 
@@ -776,8 +1278,9 @@ jobs:
               }
           }
           EOF
-          
-          # Create MainViewController.swift
+      
+      - name: Create MainViewController.swift
+        run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
 
@@ -800,15 +1303,22 @@ jobs:
                   setupViews()
                   setupToolbar()
                   setupNotifications()
+                  
+                  NotificationCenter.default.addObserver(
+                      self,
+                      selector: #selector(onGameJoined),
+                      name: NSNotification.Name("GameJoined"),
+                      object: nil
+                  )
               }
               
               private func setupWindow() {
-                  neonWindow.frame = CGRect(x: 40, y: 80, width: 900, height: 600)
+                  neonWindow.frame = CGRect(x: 40, y: 80, width: 400, height: 500)
                   view.addSubview(neonWindow)
               }
               
               private func setupSidebar() {
-                  sidebar.frame = CGRect(x: 0, y: 0, width: 200, height: 600)
+                  sidebar.frame = CGRect(x: 0, y: 0, width: 180, height: 500)
                   sidebar.onTabSelected = { [weak self] index in
                       self?.switchToTab(index)
                   }
@@ -816,36 +1326,33 @@ jobs:
               }
               
               private func setupViews() {
-                  let views: [(UIView, Int)] = [
-                      (editor, 0),
-                      (hub, 1)
-                  ]
+                  editor.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
+                  editor.tag = 0
+                  neonWindow.addSubview(editor)
                   
-                  for (view, tag) in views {
-                      view.frame = CGRect(x: 210, y: 20, width: 670, height: 500)
-                      view.tag = tag
-                      view.isHidden = tag != 0
-                      neonWindow.addSubview(view)
-                  }
+                  hub.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
+                  hub.tag = 1
+                  hub.isHidden = true
+                  neonWindow.addSubview(hub)
               }
               
               private func setupToolbar() {
-                  executeButton.frame = CGRect(x: 220, y: 530, width: 100, height: 40)
-                  executeButton.setTitle("▶️ Execute", for: .normal)
+                  executeButton.frame = CGRect(x: 190, y: 450, width: 60, height: 40)
+                  executeButton.setTitle("▶️", for: .normal)
                   executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
                   executeButton.layer.cornerRadius = 8
                   executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
                   neonWindow.addSubview(executeButton)
                   
-                  clearButton.frame = CGRect(x: 330, y: 530, width: 100, height: 40)
-                  clearButton.setTitle("🗑️ Clear", for: .normal)
+                  clearButton.frame = CGRect(x: 255, y: 450, width: 60, height: 40)
+                  clearButton.setTitle("🗑️", for: .normal)
                   clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
                   clearButton.layer.cornerRadius = 8
                   clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
                   neonWindow.addSubview(clearButton)
                   
-                  saveButton.frame = CGRect(x: 440, y: 530, width: 100, height: 40)
-                  saveButton.setTitle("💾 Save", for: .normal)
+                  saveButton.frame = CGRect(x: 320, y: 450, width: 60, height: 40)
+                  saveButton.setTitle("💾", for: .normal)
                   saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1)
                   saveButton.layer.cornerRadius = 8
                   saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside)
@@ -862,10 +1369,8 @@ jobs:
               }
               
               private func switchToTab(_ index: Int) {
-                  let views = neonWindow.subviews
-                  for view in views where view.tag < 2 {
-                      view.isHidden = view.tag != index
-                  }
+                  editor.isHidden = index != 0
+                  hub.isHidden = index != 1
               }
               
               @objc private func executeScript() {
@@ -887,102 +1392,14 @@ jobs:
                       editor.textView.text = "-- Loaded: \(scriptTitle)\n\nprint('Script loaded!')"
                   }
               }
-          }
-          EOF
-      
-      - name: Create xzx_security.h
-        run: |
-          cat > injector/dylib/xzx_security.h << 'EOF'
-          #ifndef XZX_SECURITY_H
-          #define XZX_SECURITY_H
-
-          #import <Foundation/Foundation.h>
-
-          @interface XZXSecurity : NSObject
-          + (instancetype)shared;
-          - (void)applyBypasses;
-          - (void)hideFromAdonis;
-          - (void)bypassUIchecks;
-          - (void)obfuscateMemory;
-          - (void)cleanHooks;
-
-          @property (nonatomic, assign) BOOL isHooked;
-          @property (nonatomic, strong) NSMutableDictionary *originalFunctions;
-          @end
-
-          #endif
-          EOF
-      
-      - name: Create xzx_security.m
-        run: |
-          cat > injector/dylib/xzx_security.m << 'EOF'
-          #import "xzx_security.h"
-          #import <mach/mach.h>
-          #import <dlfcn.h>
-          #import <mach-o/dyld.h>
-
-          static XZXSecurity *sharedSecurityInstance = nil;
-
-          @implementation XZXSecurity
-
-          + (instancetype)shared {
-              static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  sharedSecurityInstance = [[self alloc] init];
-              });
-              return sharedSecurityInstance;
-          }
-
-          - (instancetype)init {
-              self = [super init];
-              if (self) {
-                  _originalFunctions = [NSMutableDictionary dictionary];
-              }
-              return self;
-          }
-
-          - (void)applyBypasses {
-              [self hideFromAdonis];
-              [self bypassUIchecks];
-              [self obfuscateMemory];
-              [self cleanHooks];
               
-              NSLog(@"[XZX] Security bypasses applied");
-          }
-
-          - (void)hideFromAdonis {
-              // Implementation
-          }
-
-          - (void)bypassUIchecks {
-              // Implementation
-          }
-
-          - (void)obfuscateMemory {
-              uint32_t count = _dyld_image_count();
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "executor.dylib")) {
-                      const struct mach_header *header = _dyld_get_image_header(i);
-                      // Obfuscation logic would go here
-                      break;
+              @objc private func onGameJoined() {
+                  DispatchQueue.main.async {
+                      self.neonWindow.isHidden = false
+                      self.view.bringSubviewToFront(self.neonWindow)
                   }
               }
           }
-
-          - (void)cleanHooks {
-              // Implementation
-          }
-
-          - (void)hookFunction:(NSString *)functionName withReplacement:(id)replacement {
-              [_originalFunctions setObject:replacement forKey:functionName];
-          }
-
-          - (void)restoreOriginalFunctions {
-              // Implementation
-          }
-
-          @end
           EOF
       
       - name: Compile Objective-C files
@@ -1104,8 +1521,6 @@ jobs:
           echo "✅ Dylib compiled successfully"
           file build/executor.dylib
       
-      # ========== IPA MODIFICATION STEPS ==========
-      
       - name: Extract IPA
         run: |
           echo "📦 Extracting Roblox.ipa..."
@@ -1118,7 +1533,6 @@ jobs:
           fi
           
           echo "✅ IPA extracted successfully"
-          ls -la extracted/Payload/
       
       - name: Copy dylib to app bundle
         run: |
@@ -1131,7 +1545,6 @@ jobs:
           echo "🔓 Removing code signatures..."
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          rm -f extracted/Payload/Roblox.app/CodeResources
           echo "✅ Signatures removed"
       
       - name: Inject dylib into Roblox binary
@@ -1186,10 +1599,3 @@ jobs:
           path: XZX.ipa
           if-no-files-found: error
           retention-days: 90
-      
-      - name: Debug - List all files
-        run: |
-          echo "📁 Final files:"
-          ls -la
-          echo "🔍 Searching for IPA:"
-          find . -name "*.ipa" -type f

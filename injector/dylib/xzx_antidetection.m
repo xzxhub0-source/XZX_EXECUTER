@@ -146,7 +146,8 @@ static XZXAntiDetection *sharedAntiDetectionInstance = nil;
     for (NSString *url in connections) {
         NSURL *spoofUrl = [NSURL URLWithString:url];
         NSURLRequest *request = [NSURLRequest requestWithURL:spoofUrl];
-        NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:nil];
+        NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        }];
         [task resume];
     }
 }

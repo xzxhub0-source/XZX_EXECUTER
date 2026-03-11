@@ -1,7 +1,7 @@
-#import "xzx_hook_manager.h"
+import "xzx_hook_manager.h"
 #import <objc/runtime.h>
 #import <mach/mach.h>
-#import <mach-o/dyld.h>
+#import <mach-o/dyld.h>  // This was missing!
 #import <sys/mman.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <UIKit/UIKit.h>

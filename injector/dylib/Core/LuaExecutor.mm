@@ -1,3 +1,7 @@
+# First, delete the existing file
+rm -f injector/dylib/Core/LuaExecutor.mm
+
+# Then create the fixed file with proper escaping
 cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -325,35 +329,24 @@ static int xzx_messagebox(lua_State *L) {
     
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = nil;
-        
         if (@available(iOS 13.0, *)) {
             for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
                 if ([scene isKindOfClass:[UIWindowScene class]]) {
                     UIWindowScene *windowScene = (UIWindowScene *)scene;
-                    for (UIWindow *window in windowScene.windows) {
-                        if (window.isKeyWindow) {
-                            keyWindow = window;
-                            break;
-                        }
-                    }
+                    keyWindow = windowScene.windows.firstObject;
+                    break;
                 }
-                if (keyWindow) break;
             }
-        }
-        
-        if (!keyWindow) {
-            keyWindow = [UIApplication sharedApplication].windows.firstObject;
+        } else {
+            keyWindow = [UIApplication sharedApplication].keyWindow;
         }
         
         UIViewController *rootVC = keyWindow.rootViewController;
-        
         if (rootVC) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
                                                                            message:[NSString stringWithUTF8String:text]
                                                                     preferredStyle:UIAlertControllerStyleAlert];
-            
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            
             [rootVC presentViewController:alert animated:YES completion:nil];
         }
     });
@@ -479,3 +472,7 @@ void ExecuteScript(const char *script) {
     });
 }
 EOF
+
+# Verify the file was created correctly
+echo "=== First 50 lines of LuaExecutor.mm for verification ==="
+head -50 injector/dylib/Core/LuaExecutor.mm

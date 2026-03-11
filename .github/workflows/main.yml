@@ -40,9 +40,9 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "✅ Lua headers installed successfully"
       
-      - name: Download Roblox IPA (NEW LINK)
+      - name: Download Roblox IPA
         run: |
-          FILE_ID="11XX-eoEh4Jbz010hLfh069Ud0D9WP5mr"
+          FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
           if [ ! -f "Roblox.ipa" ]; then
             echo "❌ Download failed"

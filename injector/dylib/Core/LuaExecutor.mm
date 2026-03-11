@@ -20,6 +20,20 @@
 static lua_State *L = nil;
 static std::mutex lua_mutex;
 
+// Custom library loader that skips OS library
+static const luaL_Reg loadedlibs[] = {
+  {"_G", luaopen_base},
+  {LUA_LOADLIBNAME, luaopen_package},
+  {LUA_COLIBNAME, luaopen_coroutine},
+  {LUA_TABLIBNAME, luaopen_table},
+  {LUA_IOLIBNAME, luaopen_io},
+  {LUA_STRLIBNAME, luaopen_string},
+  {LUA_MATHLIBNAME, luaopen_math},
+  {LUA_DBLIBNAME, luaopen_debug},
+  {LUA_UTF8LIBNAME, luaopen_utf8},
+  {NULL, NULL}
+};
+
 static int xzx_print(lua_State *L) {
     int n = lua_gettop(L);
     NSMutableString *output = [NSMutableString string];
@@ -190,7 +204,8 @@ static int xzx_setrawmetatable(lua_State *L) {
 }
 
 static int xzx_getnamecallmethod(lua_State *L) {
-    return 0;
+    lua_pushstring(L, "");
+    return 1;
 }
 
 static int xzx_setnamecallmethod(lua_State *L) {
@@ -743,7 +758,12 @@ void InitLua(void) {
     if (!L) {
         L = luaL_newstate();
         if (L) {
-            luaL_openlibs(L);
+            // Load only safe libraries (skip OS library)
+            const luaL_Reg *lib = loadedlibs;
+            for (; lib->func; lib++) {
+                luaL_requiref(L, lib->name, lib->func, 1);
+                lua_pop(L, 1);
+            }
             
             lua_register(L, "print", xzx_print);
             lua_register(L, "warn", xzx_warn);

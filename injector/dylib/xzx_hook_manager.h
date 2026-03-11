@@ -22,10 +22,14 @@
 - (NSArray *)getSignalArguments:(NSString *)signal;
 - (BOOL)canSignalReplicate:(NSString *)signal;
 - (void)replicateSignal:(NSString *)signal withArguments:(NSArray *)args;
+- (void)obfuscateHookPointers;
+- (void)rotateHookPatterns;
+- (void)simulateNormalHooks;
 
 @property (nonatomic, strong) NSMutableDictionary *hooks;
 @property (nonatomic, strong) NSMutableDictionary *originalFunctions;
 @property (nonatomic, strong) NSMutableArray *exposedHooks;
+@property (nonatomic, strong) NSMutableDictionary *hookHistory;
 @end
 
 #endif

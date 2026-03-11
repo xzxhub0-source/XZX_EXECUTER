@@ -40,7 +40,7 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "✅ Lua headers installed successfully"
       
-      - name: Download Roblox IPA
+      - name: Download Roblox IPA (NEW LINK)
         run: |
           FILE_ID="11XX-eoEh4Jbz010hLfh069Ud0D9WP5mr"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
@@ -92,7 +92,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create LuaExecutor.mm (FIXED)
+      - name: Create LuaExecutor.mm
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>

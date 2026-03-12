@@ -44,8 +44,8 @@ jobs:
         run: |
           mkdir -p build
           cd lua-5.4.6/src
-          # Compile only safe Lua core files
-          for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c lstrlib.c ltablib.c lutf8lib.c linit.c; do
+          # Compile only safe Lua core files (skip loslib.c, loadlib.c, and linit.c)
+          for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c lstrlib.c ltablib.c lutf8lib.c; do
             if [ -f "$file" ]; then
               echo "Compiling $file..."
               xcrun -sdk iphoneos clang -c -I. -o "../../build/lua_${file%.c}.o" "$file" -target arm64-apple-ios15.0
@@ -126,6 +126,19 @@ jobs:
 
           static lua_State *L = nil;
           static std::mutex lua_mutex;
+
+          // Custom library loader that skips OS library
+          static const luaL_Reg loadedlibs[] = {
+            {"_G", luaopen_base},
+            {LUA_COLIBNAME, luaopen_coroutine},
+            {LUA_TABLIBNAME, luaopen_table},
+            {LUA_IOLIBNAME, luaopen_io},
+            {LUA_STRLIBNAME, luaopen_string},
+            {LUA_MATHLIBNAME, luaopen_math},
+            {LUA_DBLIBNAME, luaopen_debug},
+            {LUA_UTF8LIBNAME, luaopen_utf8},
+            {NULL, NULL}
+          };
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
@@ -851,7 +864,12 @@ jobs:
               if (!L) {
                   L = luaL_newstate();
                   if (L) {
-                      luaL_openlibs(L);
+                      // Load only safe libraries (skip OS library)
+                      const luaL_Reg *lib = loadedlibs;
+                      for (; lib->func; lib++) {
+                          luaL_requiref(L, lib->name, lib->func, 1);
+                          lua_pop(L, 1);
+                      }
                       
                       lua_register(L, "print", xzx_print);
                       lua_register(L, "warn", xzx_warn);

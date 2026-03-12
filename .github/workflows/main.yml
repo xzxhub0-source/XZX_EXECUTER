@@ -40,19 +40,21 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "✅ Lua headers installed successfully"
       
-      - name: Compile Lua source files (excluding problematic modules)
+      - name: Compile minimal Lua core (NO libraries)
         run: |
           mkdir -p build
           cd lua-5.4.6/src
-          # Compile only safe Lua core files (skip loslib.c, loadlib.c, and linit.c)
-          for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c lstrlib.c ltablib.c lutf8lib.c; do
+          # Compile ONLY the absolute core Lua files (no libraries at all)
+          for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c; do
             if [ -f "$file" ]; then
               echo "Compiling $file..."
               xcrun -sdk iphoneos clang -c -I. -o "../../build/lua_${file%.c}.o" "$file" -target arm64-apple-ios15.0
             fi
           done
+          # Also compile lauxlib.c which is needed for luaL_* functions
+          xcrun -sdk iphoneos clang -c -I. -o "../../build/lua_lauxlib.o" lauxlib.c -target arm64-apple-ios15.0
           cd ../..
-          echo "✅ Lua compilation complete"
+          echo "✅ Minimal Lua core compiled"
       
       - name: Download Roblox IPA
         run: |
@@ -102,22 +104,18 @@ jobs:
           #endif
           EOF
       
-      - name: Create LuaExecutor.mm (FIXED VERSION)
+      - name: Create LuaExecutor.mm (MINIMAL VERSION)
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
           #include <lua.h>
           #include <lauxlib.h>
-          #include <lualib.h>
           #include <vector>
           #include <string>
           #include <map>
           #include <mutex>
           #include <thread>
-          #include <zlib.h>
-          #include <CommonCrypto/CommonDigest.h>
-          #include <CommonCrypto/CommonCryptor.h>
           #include "LuaExecutor.h"
           #import "xzx_antidetection.h"
           #import "xzx_ban_protection.h"
@@ -126,19 +124,6 @@ jobs:
 
           static lua_State *L = nil;
           static std::mutex lua_mutex;
-
-          // Custom library loader that skips OS library
-          static const luaL_Reg loadedlibs[] = {
-            {"_G", luaopen_base},
-            {LUA_COLIBNAME, luaopen_coroutine},
-            {LUA_TABLIBNAME, luaopen_table},
-            {LUA_IOLIBNAME, luaopen_io},
-            {LUA_STRLIBNAME, luaopen_string},
-            {LUA_MATHLIBNAME, luaopen_math},
-            {LUA_DBLIBNAME, luaopen_debug},
-            {LUA_UTF8LIBNAME, luaopen_utf8},
-            {NULL, NULL}
-          };
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
@@ -309,15 +294,6 @@ jobs:
               return 1;
           }
 
-          static int xzx_getnamecallmethod(lua_State *L) {
-              lua_pushstring(L, "");
-              return 1;
-          }
-
-          static int xzx_setnamecallmethod(lua_State *L) {
-              return 0;
-          }
-
           static int xzx_setclipboard(lua_State *L) {
               const char *text = luaL_checkstring(L, 1);
               dispatch_async(dispatch_get_main_queue(), ^{
@@ -344,115 +320,6 @@ jobs:
 
           static int xzx_checkcaller(lua_State *L) {
               lua_pushboolean(L, 1);
-              return 1;
-          }
-
-          static int xzx_getthreadidentity(lua_State *L) {
-              lua_pushinteger(L, 8);
-              return 1;
-          }
-
-          static int xzx_setthreadidentity(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_getthreadcontext(lua_State *L) {
-              lua_pushinteger(L, 8);
-              return 1;
-          }
-
-          static int xzx_setthreadcontext(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_getfpscap(lua_State *L) {
-              lua_pushinteger(L, 60);
-              return 1;
-          }
-
-          static int xzx_setfpscap(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_isrbxactive(lua_State *L) {
-              lua_pushboolean(L, 1);
-              return 1;
-          }
-
-          static int xzx_gethui(lua_State *L) {
-              lua_newtable(L);
-              return 1;
-          }
-
-          static int xzx_getinstances(lua_State *L) {
-              lua_newtable(L);
-              return 1;
-          }
-
-          static int xzx_getnilinstances(lua_State *L) {
-              lua_newtable(L);
-              return 1;
-          }
-
-          static int xzx_getscripts(lua_State *L) {
-              lua_newtable(L);
-              return 1;
-          }
-
-          static int xzx_getloadedmodules(lua_State *L) {
-              lua_newtable(L);
-              return 1;
-          }
-
-          static int xzx_getcallingscript(lua_State *L) {
-              lua_pushnil(L);
-              return 1;
-          }
-
-          static int xzx_getscriptbytecode(lua_State *L) {
-              lua_pushnil(L);
-              return 1;
-          }
-
-          static int xzx_getscriptclosure(lua_State *L) {
-              lua_pushnil(L);
-              return 1;
-          }
-
-          static int xzx_getscriptfunction(lua_State *L) {
-              lua_pushnil(L);
-              return 1;
-          }
-
-          static int xzx_fireclickdetector(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_firetouchinterest(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_fireproximityprompt(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_gethiddenproperty(lua_State *L) {
-              lua_pushnil(L);
-              return 1;
-          }
-
-          static int xzx_sethiddenproperty(lua_State *L) {
-              return 0;
-          }
-
-          static int xzx_compareinstances(lua_State *L) {
-              if (!lua_isuserdata(L, 1) || !lua_isuserdata(L, 2)) {
-                  lua_pushboolean(L, 0);
-                  return 1;
-              }
-              void *a = lua_touserdata(L, 1);
-              void *b = lua_touserdata(L, 2);
-              lua_pushboolean(L, a == b);
               return 1;
           }
 
@@ -572,363 +439,34 @@ jobs:
               return 0;
           }
 
-          static int xzx_task_spawn(lua_State *L) {
-              return xzx_spawn(L);
-          }
-
-          static int xzx_task_delay(lua_State *L) {
-              return xzx_delay(L);
-          }
-
-          static int xzx_task_wait(lua_State *L) {
-              double seconds = luaL_optnumber(L, 1, 0);
-              usleep(seconds * 1000000);
-              return 0;
-          }
-
-          static int xzx_task_defer(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  luaL_error(L, "expected function");
-              }
-              lua_pushvalue(L, 1);
-              int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-                  lua_pcall(L, 0, 0, 0);
-                  luaL_unref(L, LUA_REGISTRYINDEX, ref);
-              });
-              return 0;
-          }
-
-          static int xzx_crypt_encrypt(lua_State *L) {
-              const char *data = luaL_checkstring(L, 1);
-              const char *key = luaL_optstring(L, 2, "xzx");
-              NSMutableString *result = [NSMutableString string];
-              size_t data_len = strlen(data);
-              size_t key_len = strlen(key);
-              for (size_t i = 0; i < data_len; i++) {
-                  char c = data[i] ^ key[i % key_len];
-                  [result appendFormat:@"%c", c];
-              }
-              lua_pushstring(L, [result UTF8String]);
-              return 1;
-          }
-
-          static int xzx_crypt_decrypt(lua_State *L) {
-              return xzx_crypt_encrypt(L);
-          }
-
-          static int xzx_crypt_hash(lua_State *L) {
-              const char *data = luaL_checkstring(L, 1);
-              const char *algorithm = luaL_optstring(L, 2, "sha256");
-              NSData *nsdata = [NSData dataWithBytes:data length:strlen(data)];
-              unsigned char hash[32];
-              size_t hash_len = 32;
-              if (strcmp(algorithm, "sha256") == 0) {
-                  CC_SHA256(nsdata.bytes, (CC_LONG)nsdata.length, hash);
-              } else if (strcmp(algorithm, "sha1") == 0) {
-                  CC_SHA1(nsdata.bytes, (CC_LONG)nsdata.length, hash);
-                  hash_len = 20;
-              } else if (strcmp(algorithm, "md5") == 0) {
-                  CC_MD5(nsdata.bytes, (CC_LONG)nsdata.length, hash);
-                  hash_len = 16;
-              }
-              NSMutableString *result = [NSMutableString string];
-              for (size_t i = 0; i < hash_len; i++) {
-                  [result appendFormat:@"%02x", hash[i]];
-              }
-              lua_pushstring(L, [result UTF8String]);
-              return 1;
-          }
-
-          static int xzx_compress(lua_State *L) {
-              const char *data = luaL_checkstring(L, 1);
-              uLong source_len = (uLong)strlen(data);
-              uLong dest_len = compressBound(source_len);
-              Bytef *dest = (Bytef*)malloc(dest_len);
-              if (compress(dest, &dest_len, (const Bytef*)data, source_len) != Z_OK) {
-                  free(dest);
-                  lua_pushnil(L);
-                  return 1;
-              }
-              lua_pushlstring(L, (const char*)dest, (size_t)dest_len);
-              free(dest);
-              return 1;
-          }
-
-          static int xzx_decompress(lua_State *L) {
-              size_t source_len;
-              const char *data = luaL_checklstring(L, 1, &source_len);
-              uLong dest_len = (uLong)(source_len * 4);
-              Bytef *dest = (Bytef*)malloc(dest_len);
-              if (uncompress(dest, &dest_len, (const Bytef*)data, (uLong)source_len) != Z_OK) {
-                  free(dest);
-                  lua_pushnil(L);
-                  return 1;
-              }
-              lua_pushlstring(L, (const char*)dest, (size_t)dest_len);
-              free(dest);
-              return 1;
-          }
-
-          static int xzx_request(lua_State *L) {
-              if (!lua_istable(L, 1)) {
-                  luaL_error(L, "expected table");
-              }
-              lua_getfield(L, 1, "Url");
-              const char *url = lua_tostring(L, -1);
-              if (!url || strlen(url) == 0) {
-                  lua_pushnil(L);
-                  return 1;
-              }
-              return xzx_httpget(L);
-          }
-
-          static int xzx_readfile(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              NSError *error = nil;
-              NSString *content = [NSString stringWithContentsOfFile:filePath encoding:NSUTF8StringEncoding error:&error];
-              if (error) {
-                  lua_pushnil(L);
-                  lua_pushstring(L, [[error localizedDescription] UTF8String]);
-                  return 2;
-              }
-              lua_pushstring(L, [content UTF8String]);
-              return 1;
-          }
-
-          static int xzx_writefile(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              const char *data = luaL_checkstring(L, 2);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              NSError *error = nil;
-              [[NSString stringWithUTF8String:data] writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:&error];
-              lua_pushboolean(L, error == nil);
-              return 1;
-          }
-
-          static int xzx_appendfile(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              const char *data = luaL_checkstring(L, 2);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:filePath];
-              if (file) {
-                  [file seekToEndOfFile];
-                  [file writeData:[[NSString stringWithUTF8String:data] dataUsingEncoding:NSUTF8StringEncoding]];
-                  [file closeFile];
-                  lua_pushboolean(L, 1);
-              } else {
-                  lua_pushboolean(L, 0);
-              }
-              return 1;
-          }
-
-          static int xzx_listfiles(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              NSString *dirPath = [NSString stringWithUTF8String:path];
-              if (![dirPath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  dirPath = [docPath stringByAppendingPathComponent:dirPath];
-              }
-              NSError *error = nil;
-              NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dirPath error:&error];
-              if (error) {
-                  lua_pushnil(L);
-                  lua_pushstring(L, [[error localizedDescription] UTF8String]);
-                  return 2;
-              }
-              lua_newtable(L);
-              for (int i = 0; i < files.count; i++) {
-                  lua_pushinteger(L, i + 1);
-                  lua_pushstring(L, [files[i] UTF8String]);
-                  lua_settable(L, -3);
-              }
-              return 1;
-          }
-
-          static int xzx_isfile(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              BOOL isDir = NO;
-              BOOL exists = [[NSFileManager defaultManager] fileExistsAtPath:filePath isDirectory:&isDir];
-              lua_pushboolean(L, exists && !isDir);
-              return 1;
-          }
-
-          static int xzx_isfolder(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              BOOL isDir = NO;
-              BOOL exists = [[NSFileManager defaultManager] fileExistsAtPath:filePath isDirectory:&isDir];
-              lua_pushboolean(L, exists && isDir);
-              return 1;
-          }
-
-          static int xzx_makefolder(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              NSError *error = nil;
-              [[NSFileManager defaultManager] createDirectoryAtPath:filePath withIntermediateDirectories:YES attributes:nil error:&error];
-              lua_pushboolean(L, error == nil);
-              return 1;
-          }
-
-          static int xzx_delfile(lua_State *L) {
-              const char *path = luaL_checkstring(L, 1);
-              NSString *filePath = [NSString stringWithUTF8String:path];
-              if (![filePath isAbsolutePath]) {
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = paths.firstObject;
-                  filePath = [docPath stringByAppendingPathComponent:filePath];
-              }
-              NSError *error = nil;
-              [[NSFileManager defaultManager] removeItemAtPath:filePath error:&error];
-              lua_pushboolean(L, error == nil);
-              return 1;
-          }
-
-          static int xzx_debug_getregistry(lua_State *L) {
-              lua_pushvalue(L, LUA_REGISTRYINDEX);
-              return 1;
-          }
-
-          static int xzx_debug_getupvalue(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  lua_pushnil(L);
-                  return 1;
-              }
-              int index = luaL_checkinteger(L, 2);
-              const char *name = lua_getupvalue(L, 1, index);
-              if (name) {
-                  lua_pushstring(L, name);
-                  lua_insert(L, -2);
-                  return 2;
-              }
-              lua_pushnil(L);
-              return 1;
-          }
-
-          static int xzx_debug_setupvalue(lua_State *L) {
-              if (!lua_isfunction(L, 1)) return 0;
-              int index = luaL_checkinteger(L, 2);
-              lua_pushvalue(L, 3);
-              const char *name = lua_setupvalue(L, 1, index);
-              lua_pushstring(L, name ? name : "");
-              return 1;
-          }
-
-          static int xzx_debug_getinfo(lua_State *L) {
-              lua_newtable(L);
-              return 1;
-          }
-
-          static int xzx_debug_traceback(lua_State *L) {
-              luaL_traceback(L, L, nullptr, 0);
-              return 1;
-          }
-
           void InitLua(void) {
               std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) {
                   L = luaL_newstate();
                   if (L) {
-                      // Load only safe libraries (skip OS library)
-                      const luaL_Reg *lib = loadedlibs;
-                      for (; lib->func; lib++) {
-                          luaL_requiref(L, lib->name, lib->func, 1);
-                          lua_pop(L, 1);
-                      }
-                      
+                      // Register our functions directly - no standard libraries loaded at all
                       lua_register(L, "print", xzx_print);
                       lua_register(L, "warn", xzx_warn);
                       lua_register(L, "error", xzx_error);
                       lua_register(L, "type", xzx_type);
                       lua_register(L, "typeof", xzx_typeof);
-                      
                       lua_register(L, "getgenv", xzx_getgenv);
                       lua_register(L, "getrenv", xzx_getrenv);
                       lua_register(L, "getreg", xzx_getreg);
                       lua_register(L, "getgc", xzx_getgc);
-                      lua_register(L, "getinstances", xzx_getinstances);
-                      lua_register(L, "getnilinstances", xzx_getnilinstances);
-                      lua_register(L, "getscripts", xzx_getscripts);
-                      lua_register(L, "getloadedmodules", xzx_getloadedmodules);
-                      lua_register(L, "gethui", xzx_gethui);
-                      
                       lua_register(L, "newcclosure", xzx_newcclosure);
                       lua_register(L, "iscclosure", xzx_iscclosure);
                       lua_register(L, "islclosure", xzx_islclosure);
                       lua_register(L, "isexecutorclosure", xzx_isexecutorclosure);
                       lua_register(L, "hookfunction", xzx_hookfunction);
                       lua_register(L, "clonefunction", xzx_clonefunction);
-                      
                       lua_register(L, "getrawmetatable", xzx_getrawmetatable);
                       lua_register(L, "setrawmetatable", xzx_setrawmetatable);
-                      
-                      lua_register(L, "getnamecallmethod", xzx_getnamecallmethod);
-                      lua_register(L, "setnamecallmethod", xzx_setnamecallmethod);
-                      
                       lua_register(L, "setclipboard", xzx_setclipboard);
                       lua_register(L, "getclipboard", xzx_getclipboard);
-                      
                       lua_register(L, "identifyexecutor", xzx_identifyexecutor);
                       lua_register(L, "getexecutorname", xzx_getexecutorname);
                       lua_register(L, "checkcaller", xzx_checkcaller);
-                      
-                      lua_register(L, "getthreadidentity", xzx_getthreadidentity);
-                      lua_register(L, "setthreadidentity", xzx_setthreadidentity);
-                      lua_register(L, "getthreadcontext", xzx_getthreadcontext);
-                      lua_register(L, "setthreadcontext", xzx_setthreadcontext);
-                      
-                      lua_register(L, "getfpscap", xzx_getfpscap);
-                      lua_register(L, "setfpscap", xzx_setfpscap);
-                      lua_register(L, "isrbxactive", xzx_isrbxactive);
-                      
-                      lua_register(L, "getcallingscript", xzx_getcallingscript);
-                      lua_register(L, "getscriptbytecode", xzx_getscriptbytecode);
-                      lua_register(L, "getscriptclosure", xzx_getscriptclosure);
-                      lua_register(L, "getscriptfunction", xzx_getscriptfunction);
-                      
-                      lua_register(L, "fireclickdetector", xzx_fireclickdetector);
-                      lua_register(L, "firetouchinterest", xzx_firetouchinterest);
-                      lua_register(L, "fireproximityprompt", xzx_fireproximityprompt);
-                      
-                      lua_register(L, "gethiddenproperty", xzx_gethiddenproperty);
-                      lua_register(L, "sethiddenproperty", xzx_sethiddenproperty);
-                      lua_register(L, "compareinstances", xzx_compareinstances);
-                      
                       lua_register(L, "loadstring", xzx_loadstring);
                       lua_register(L, "HttpGet", xzx_httpget);
                       lua_register(L, "game_HttpGet", xzx_httpget);
@@ -936,82 +474,17 @@ jobs:
                       lua_register(L, "base64decode", xzx_base64_decode);
                       lua_register(L, "base64codes", xzx_base64codes);
                       lua_register(L, "messagebox", xzx_messagebox);
-                      
                       lua_register(L, "delay", xzx_delay);
                       lua_register(L, "spawn", xzx_spawn);
-                      
-                      lua_newtable(L);
-                      lua_pushcfunction(L, xzx_task_spawn);
-                      lua_setfield(L, -2, "spawn");
-                      lua_pushcfunction(L, xzx_task_delay);
-                      lua_setfield(L, -2, "delay");
-                      lua_pushcfunction(L, xzx_task_wait);
-                      lua_setfield(L, -2, "wait");
-                      lua_pushcfunction(L, xzx_task_defer);
-                      lua_setfield(L, -2, "defer");
-                      lua_setglobal(L, "task");
-                      
-                      lua_newtable(L);
-                      lua_pushcfunction(L, xzx_crypt_encrypt);
-                      lua_setfield(L, -2, "encrypt");
-                      lua_pushcfunction(L, xzx_crypt_decrypt);
-                      lua_setfield(L, -2, "decrypt");
-                      lua_pushcfunction(L, xzx_crypt_hash);
-                      lua_setfield(L, -2, "hash");
-                      lua_pushcfunction(L, xzx_base64_encode);
-                      lua_setfield(L, -2, "base64_encode");
-                      lua_pushcfunction(L, xzx_base64_decode);
-                      lua_setfield(L, -2, "base64_decode");
-                      lua_setglobal(L, "crypt");
-                      
-                      lua_register(L, "compress", xzx_compress);
-                      lua_register(L, "decompress", xzx_decompress);
-                      
-                      lua_register(L, "request", xzx_request);
-                      
-                      lua_register(L, "readfile", xzx_readfile);
-                      lua_register(L, "writefile", xzx_writefile);
-                      lua_register(L, "appendfile", xzx_appendfile);
-                      lua_register(L, "listfiles", xzx_listfiles);
-                      lua_register(L, "isfile", xzx_isfile);
-                      lua_register(L, "isfolder", xzx_isfolder);
-                      lua_register(L, "makefolder", xzx_makefolder);
-                      lua_register(L, "delfile", xzx_delfile);
-                      
-                      lua_newtable(L);
-                      lua_pushcfunction(L, xzx_debug_getregistry);
-                      lua_setfield(L, -2, "getregistry");
-                      lua_pushcfunction(L, xzx_debug_getupvalue);
-                      lua_setfield(L, -2, "getupvalue");
-                      lua_pushcfunction(L, xzx_debug_setupvalue);
-                      lua_setfield(L, -2, "setupvalue");
-                      lua_pushcfunction(L, xzx_debug_getinfo);
-                      lua_setfield(L, -2, "getinfo");
-                      lua_pushcfunction(L, xzx_debug_traceback);
-                      lua_setfield(L, -2, "traceback");
-                      lua_setglobal(L, "debug");
                       
                       lua_newtable(L);
                       lua_pushstring(L, "XZX");
                       lua_setfield(L, -2, "name");
                       lua_pushstring(L, "3.0.0");
                       lua_setfield(L, -2, "version");
-                      lua_pushnumber(L, 95);
-                      lua_setfield(L, -2, "unc");
-                      lua_pushnumber(L, 85);
-                      lua_setfield(L, -2, "sunc");
                       lua_setglobal(L, "xzx");
                       
-                      lua_newtable(L);
-                      lua_setglobal(L, "game");
-                      lua_newtable(L);
-                      lua_setglobal(L, "workspace");
-                      lua_newtable(L);
-                      lua_setglobal(L, "Players");
-                      lua_newtable(L);
-                      lua_setglobal(L, "CoreGui");
-                      
-                      NSLog(@"[XZX] Lua initialized successfully");
+                      NSLog(@"[XZX] Minimal Lua initialized successfully");
                   } else {
                       NSLog(@"[XZX] Failed to create Lua state");
                   }

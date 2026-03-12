@@ -14,11 +14,10 @@ public class MainViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         
-        // Manually initialize the core after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            print("[XZX] Manually initializing core...")
+        // Initialize after UI is ready
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            print("[XZX] Starting initialization...")
             XZXCore.shared().initialize()
-            InitLua()
         }
         
         setupWindow()

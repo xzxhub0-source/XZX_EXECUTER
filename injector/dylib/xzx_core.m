@@ -1,196 +1,125 @@
-#import "xzx_core.h"
-#import "xzx_antidetection.h"
-#import "xzx_ban_protection.h"
-#import "xzx_injection_randomizer.h"
-#import "xzx_hook_manager.h"
-#import "Core/LuaExecutor.h"
-#import <UIKit/UIKit.h>
-#import <objc/runtime.h>
-#import <mach/mach.h>
-#import <mach-o/dyld.h>
+import UIKit
 
-static XZXCore *sharedCoreInstance = nil;
-static uintptr_t roblox_base = 0;
-
-@implementation XZXCore
-
-+ (instancetype)shared {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        sharedCoreInstance = [[self alloc] init];
-    });
-    return sharedCoreInstance;
-}
-
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _isInGame = NO;
-        _editorWindow = nil;
-    }
-    return self;
-}
-
-+ (void)load {
-    // Don't do anything in +load - it's too early
-    NSLog(@"[XZX] Library loaded");
-}
-
-- (void)initialize {
-    NSLog(@"[XZX] Starting initialization...");
+public class MainViewController: UIViewController {
     
-    @try {
-        // Initialize each component safely with checks
-        [self safeInitAntiDetection];
-        [self safeInitBanProtection];
-        [self safeInitInjectionRandomizer];
-        [self safeInitHookManager];
-        
-        [self scanRobloxMemory];
-        [self startGameStateMonitoring];
-        
-        // Initialize Lua last
-        InitLua();
-        
-        NSLog(@"[XZX] All systems initialized");
-        
-    } @catch (NSException *exception) {
-        NSLog(@"[XZX] INIT FAILED: %@", exception);
-        NSLog(@"[XZX] Reason: %@", exception.reason);
-    }
-}
-
-- (void)safeInitAntiDetection {
-    @try {
-        Class cls = NSClassFromString(@"XZXAntiDetection");
-        if (cls && [cls respondsToSelector:@selector(shared)]) {
-            id instance = [cls shared];
-            if (instance && [instance respondsToSelector:@selector(initializeProtection)]) {
-                [instance initializeProtection];
-                NSLog(@"[XZX] AntiDetection OK");
-            } else {
-                NSLog(@"[XZX] AntiDetection methods not found");
-            }
-        } else {
-            NSLog(@"[XZX] AntiDetection class not found");
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] AntiDetection init failed: %@", e);
-    }
-}
-
-- (void)safeInitBanProtection {
-    @try {
-        Class cls = NSClassFromString(@"XZXBanProtection");
-        if (cls && [cls respondsToSelector:@selector(shared)]) {
-            id instance = [cls shared];
-            if (instance && [instance respondsToSelector:@selector(protectAccount)]) {
-                [instance protectAccount];
-                NSLog(@"[XZX] BanProtection OK");
-            }
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] BanProtection init failed: %@", e);
-    }
-}
-
-- (void)safeInitInjectionRandomizer {
-    @try {
-        Class cls = NSClassFromString(@"XZXInjectionRandomizer");
-        if (cls && [cls respondsToSelector:@selector(shared)]) {
-            id instance = [cls shared];
-            if (instance && [instance respondsToSelector:@selector(randomizeNextInjection)]) {
-                [instance randomizeNextInjection];
-                NSLog(@"[XZX] InjectionRandomizer OK");
-            }
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] InjectionRandomizer init failed: %@", e);
-    }
-}
-
-- (void)safeInitHookManager {
-    @try {
-        Class cls = NSClassFromString(@"XZXHookManager");
-        if (cls && [cls respondsToSelector:@selector(shared)]) {
-            id instance = [cls shared];
-            if (instance && [instance respondsToSelector:@selector(initializeHookSystem)]) {
-                [instance initializeHookSystem];
-                NSLog(@"[XZX] HookManager OK");
-            }
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] HookManager init failed: %@", e);
-    }
-}
-
-- (void)scanRobloxMemory {
-    @try {
-        uint32_t count = _dyld_image_count();
-        for (uint32_t i = 0; i < count; i++) {
-            const char *name = _dyld_get_image_name(i);
-            if (name && (strstr(name, "Roblox") || strstr(name, "RobloxPlayer"))) {
-                roblox_base = (uintptr_t)_dyld_get_image_header(i);
-                NSLog(@"[XZX] Found Roblox at: 0x%lx", (unsigned long)roblox_base);
-                break;
-            }
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Memory scan failed: %@", e);
-    }
-}
-
-- (void)startGameStateMonitoring {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        @autoreleasepool {
-            BOOL lastInGame = NO;
-            while (YES) {
-                @try {
-                    BOOL currentlyInGame = [self checkIfInGame];
-                    if (currentlyInGame && !lastInGame) {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            [self onGameJoined];
-                        });
-                    } else if (!currentlyInGame && lastInGame) {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            [self onGameLeft];
-                        });
-                    }
-                    lastInGame = currentlyInGame;
-                } @catch (NSException *e) {
-                    NSLog(@"[XZX] Monitor error: %@", e);
-                }
-                [NSThread sleepForTimeInterval:1.0];
-            }
-        }
-    });
-}
-
-- (BOOL)checkIfInGame {
-    return YES;
-}
-
-- (void)onGameJoined {
-    if (self.isInGame) return;
-    self.isInGame = YES;
-    NSLog(@"[XZX] Game joined");
+    private let neonWindow = NeonWindow()
+    private let sidebar = SidebarView()
+    private let editor = EditorView()
+    private let hub = HubView()
+    private let executeButton = UIButton()
+    private let clearButton = UIButton()
+    private let saveButton = UIButton()
     
-    @try {
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"GameJoined" object:nil];
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Failed to post notification: %@", e);
+    public override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        
+        // Manually initialize the core after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            print("[XZX] Manually initializing core...")
+            XZXCore.shared().initialize()
+            InitLua()
+        }
+        
+        setupWindow()
+        setupSidebar()
+        setupViews()
+        setupToolbar()
+        setupNotifications()
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onGameJoined),
+            name: NSNotification.Name("GameJoined"),
+            object: nil
+        )
     }
-}
-
-- (void)onGameLeft {
-    self.isInGame = NO;
-    NSLog(@"[XZX] Game left");
     
-    @try {
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"GameLeft" object:nil];
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Failed to post notification: %@", e);
+    private func setupWindow() {
+        neonWindow.frame = CGRect(x: 40, y: 80, width: 400, height: 500)
+        view.addSubview(neonWindow)
+    }
+    
+    private func setupSidebar() {
+        sidebar.frame = CGRect(x: 0, y: 0, width: 180, height: 500)
+        sidebar.onTabSelected = { [weak self] index in
+            self?.switchToTab(index)
+        }
+        neonWindow.addSubview(sidebar)
+    }
+    
+    private func setupViews() {
+        editor.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
+        editor.tag = 0
+        neonWindow.addSubview(editor)
+        
+        hub.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
+        hub.tag = 1
+        hub.isHidden = true
+        neonWindow.addSubview(hub)
+    }
+    
+    private func setupToolbar() {
+        executeButton.frame = CGRect(x: 190, y: 450, width: 60, height: 40)
+        executeButton.setTitle("▶️", for: .normal)
+        executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
+        executeButton.layer.cornerRadius = 8
+        executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
+        neonWindow.addSubview(executeButton)
+        
+        clearButton.frame = CGRect(x: 255, y: 450, width: 60, height: 40)
+        clearButton.setTitle("🗑️", for: .normal)
+        clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
+        clearButton.layer.cornerRadius = 8
+        clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
+        neonWindow.addSubview(clearButton)
+        
+        saveButton.frame = CGRect(x: 320, y: 450, width: 60, height: 40)
+        saveButton.setTitle("💾", for: .normal)
+        saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1)
+        saveButton.layer.cornerRadius = 8
+        saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside)
+        neonWindow.addSubview(saveButton)
+    }
+    
+    private func setupNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(loadScriptFromHub(_:)),
+            name: NSNotification.Name("LoadScript"),
+            object: nil
+        )
+    }
+    
+    private func switchToTab(_ index: Int) {
+        editor.isHidden = index != 0
+        hub.isHidden = index != 1
+    }
+    
+    @objc private func executeScript() {
+        let script = editor.textView.text ?? ""
+        ExecuteScript(script)
+    }
+    
+    @objc private func clearScript() {
+        editor.textView.text = ""
+    }
+    
+    @objc private func saveScript() {
+        print("Script saved")
+    }
+    
+    @objc private func loadScriptFromHub(_ notification: Notification) {
+        if let scriptTitle = notification.object as? String {
+            switchToTab(0)
+            editor.textView.text = "-- Loaded: \(scriptTitle)\n\nprint('Script loaded!')"
+        }
+    }
+    
+    @objc private func onGameJoined() {
+        DispatchQueue.main.async {
+            self.neonWindow.isHidden = false
+            self.view.bringSubviewToFront(self.neonWindow)
+        }
     }
 }
-
-@end

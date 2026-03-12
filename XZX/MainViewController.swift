@@ -13,12 +13,26 @@ public class MainViewController: UIViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        InitLua()
+        
+        // Manually initialize the core after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            print("[XZX] Manually initializing core...")
+            XZXCore.shared().initialize()
+            InitLua()
+        }
+        
         setupWindow()
         setupSidebar()
         setupViews()
         setupToolbar()
         setupNotifications()
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onGameJoined),
+            name: NSNotification.Name("GameJoined"),
+            object: nil
+        )
     }
     
     private func setupWindow() {
@@ -99,6 +113,13 @@ public class MainViewController: UIViewController {
         if let scriptTitle = notification.object as? String {
             switchToTab(0)
             editor.textView.text = "-- Loaded: \(scriptTitle)\n\nprint('Script loaded!')"
+        }
+    }
+    
+    @objc private func onGameJoined() {
+        DispatchQueue.main.async {
+            self.neonWindow.isHidden = false
+            self.view.bringSubviewToFront(self.neonWindow)
         }
     }
 }

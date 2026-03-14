@@ -21,25 +21,22 @@ static XZXCore *sharedCoreInstance = nil;
     self = [super init];
     if (self) {
         _isInGame = NO;
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self 
-                                                 selector:@selector(applicationDidBecomeActive) 
-                                                     name:UIApplicationDidBecomeActiveNotification 
-                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidBecomeActive) name:UIApplicationDidBecomeActiveNotification object:nil];
     }
     return self;
 }
 
 + (void)load {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 
-                   dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         [[XZXCore shared] initialize];
     });
 }
 
 - (void)initialize {
     [[XZXAntiDetection shared] initializeProtection];
-    [self startGameStateMonitoring];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        [self startGameStateMonitoring];
+    });
     hook_roblox_functions();
     InitLua();
 }
@@ -52,7 +49,6 @@ static XZXCore *sharedCoreInstance = nil;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         while (YES) {
             BOOL currentlyInGame = [self checkIfInGame];
-            
             if (currentlyInGame && !self.isInGame) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self onGameJoined];
@@ -62,19 +58,25 @@ static XZXCore *sharedCoreInstance = nil;
                     [self onGameLeft];
                 });
             }
-            
             [NSThread sleepForTimeInterval:1.0];
         }
     });
 }
 
 - (BOOL)checkIfInGame {
-    return isPlayerInGame();
+    Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+    if (dataModelClass) {
+        id dataModel = [dataModelClass performSelector:NSSelectorFromString(@"sharedDataModel")];
+        if (dataModel) {
+            id placeId = [dataModel performSelector:NSSelectorFromString(@"placeId")];
+            return placeId != nil;
+        }
+    }
+    return NO;
 }
 
 - (void)onGameJoined {
     self.isInGame = YES;
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self.editorWindow) {
             MainViewController *vc = [[MainViewController alloc] init];
@@ -83,7 +85,6 @@ static XZXCore *sharedCoreInstance = nil;
             self.editorWindow.rootViewController = vc;
             self.editorWindow.backgroundColor = [UIColor clearColor];
         }
-        
         self.editorWindow.hidden = NO;
         [self.editorWindow makeKeyAndVisible];
     });
@@ -91,7 +92,6 @@ static XZXCore *sharedCoreInstance = nil;
 
 - (void)onGameLeft {
     self.isInGame = NO;
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         self.editorWindow.hidden = YES;
     });

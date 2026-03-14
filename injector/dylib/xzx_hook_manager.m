@@ -1,6 +1,4 @@
 #import "xzx_hook_manager.h"
-#import <mach/mach.h>
-#import <mach-o/dyld.h>
 
 static XZXHookManager *sharedHookManagerInstance = nil;
 
@@ -9,7 +7,7 @@ static XZXHookManager *sharedHookManagerInstance = nil;
 + (instancetype)shared {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        sharedHookManagerInstance = [[XZXHookManager alloc] init];
+        sharedHookManagerInstance = [[self alloc] init];
     });
     return sharedHookManagerInstance;
 }
@@ -20,22 +18,29 @@ static XZXHookManager *sharedHookManagerInstance = nil;
         _hooks = [NSMutableDictionary dictionary];
         _originalFunctions = [NSMutableDictionary dictionary];
         _exposedHooks = [NSMutableArray array];
-        _hookHistory = [NSMutableDictionary dictionary];
     }
     return self;
 }
 
 - (void)initializeHookSystem {
-    NSLog(@"[XZX] HookManager initialized");
+    return;
 }
 
 - (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook {
+    if (functionName && hook) {
+        [_hooks setObject:[NSValue valueWithPointer:hook] forKey:functionName];
+        if (original) {
+            [_originalFunctions setObject:[NSValue valueWithPointer:original] forKey:functionName];
+        }
+    }
 }
 
 - (void)removeHook:(NSString *)functionName {
+    [_hooks removeObjectForKey:functionName];
 }
 
 - (void)restoreAllFunctions {
+    return;
 }
 
 - (BOOL)areHooksExposed {
@@ -43,12 +48,15 @@ static XZXHookManager *sharedHookManagerInstance = nil;
 }
 
 - (void)hideFromAdonis {
+    return;
 }
 
 - (void)spoofConnectionList {
+    return;
 }
 
 - (void)randomizeHookOrder {
+    return;
 }
 
 - (double)exposureRatio {
@@ -56,10 +64,11 @@ static XZXHookManager *sharedHookManagerInstance = nil;
 }
 
 - (void *)cloneFunction:(void *)original {
-    return NULL;
+    return original;
 }
 
 - (void)restoreFunction:(NSString *)functionName {
+    return;
 }
 
 - (NSString *)getFunctionHash:(void *)function {
@@ -71,6 +80,7 @@ static XZXHookManager *sharedHookManagerInstance = nil;
 }
 
 - (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args {
+    return;
 }
 
 - (NSArray *)getSignalArguments:(NSString *)signal {
@@ -78,19 +88,11 @@ static XZXHookManager *sharedHookManagerInstance = nil;
 }
 
 - (BOOL)canSignalReplicate:(NSString *)signal {
-    return NO;
+    return YES;
 }
 
 - (void)replicateSignal:(NSString *)signal withArguments:(NSArray *)args {
-}
-
-- (void)obfuscateHookPointers {
-}
-
-- (void)rotateHookPatterns {
-}
-
-- (void)simulateNormalHooks {
+    return;
 }
 
 @end

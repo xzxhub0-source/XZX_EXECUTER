@@ -1,35 +1,70 @@
-#ifndef XZX_HOOK_MANAGER_H
-#define XZX_HOOK_MANAGER_H
+#import "xzx_hook_manager.h"
 
-#import <Foundation/Foundation.h>
+static XZXHookManager *sharedHookManagerInstance = nil;
 
-@interface XZXHookManager : NSObject
-+ (instancetype)shared;
-- (void)initializeHookSystem;
-- (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook;
-- (void)removeHook:(NSString *)functionName;
-- (void)restoreAllFunctions;
-- (BOOL)areHooksExposed;
-- (void)hideFromAdonis;
-- (void)spoofConnectionList;
-- (void)randomizeHookOrder;
-- (double)exposureRatio;
-- (void *)cloneFunction:(void *)original;
-- (void)restoreFunction:(NSString *)functionName;
-- (NSString *)getFunctionHash:(void *)function;
-- (NSArray *)getConnections:(NSString *)signal;
-- (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args;
-- (NSArray *)getSignalArguments:(NSString *)signal;
-- (BOOL)canSignalReplicate:(NSString *)signal;
-- (void)replicateSignal:(NSString *)signal withArguments:(NSArray *)args;
-- (void)obfuscateHookPointers;
-- (void)rotateHookPatterns;
-- (void)simulateNormalHooks;
+@implementation XZXHookManager
 
-@property (nonatomic, strong) NSMutableDictionary *hooks;
-@property (nonatomic, strong) NSMutableDictionary *originalFunctions;
-@property (nonatomic, strong) NSMutableArray *exposedHooks;
-@property (nonatomic, strong) NSMutableDictionary *hookHistory;
++ (instancetype)shared {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sharedHookManagerInstance = [[self alloc] init];
+    });
+    return sharedHookManagerInstance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _hooks = [NSMutableDictionary dictionary];
+        _originalFunctions = [NSMutableDictionary dictionary];
+        _exposedHooks = [NSMutableArray array];
+    }
+    return self;
+}
+
+- (void)initializeHookSystem {}
+
+- (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook {
+    if (functionName && hook) {
+        [_hooks setObject:[NSValue valueWithPointer:hook] forKey:functionName];
+        if (original) {
+            [_originalFunctions setObject:[NSValue valueWithPointer:original] forKey:functionName];
+        }
+    }
+}
+
+- (void)removeHook:(NSString *)functionName {
+    [_hooks removeObjectForKey:functionName];
+}
+
+- (void)restoreAllFunctions {}
+
+- (BOOL)areHooksExposed {
+    return NO;
+}
+
+- (void)hideFromAdonis {}
+
+- (void)spoofConnectionList {}
+
+- (void)randomizeHookOrder {}
+
+- (double)exposureRatio {
+    return 0.0;
+}
+
+- (void *)cloneFunction:(void *)original {
+    return NULL;
+}
+
+- (NSString *)getFunctionHash:(void *)function {
+    return @"";
+}
+
+- (NSArray *)getConnections:(NSString *)signal {
+    return @[];
+}
+
+- (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args {}
+
 @end
-
-#endif

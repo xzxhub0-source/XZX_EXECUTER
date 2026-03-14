@@ -1,12 +1,12 @@
 import UIKit
 
-public class HubView: UIView {
+class HubView: UIView {
     
     private let collectionView: UICollectionView
     private let searchBar = UISearchBar()
     private var scripts: [ScriptItem] = []
     
-    public override init(frame: CGRect) {
+    override init(frame: CGRect) {
         let layout = UICollectionViewFlowLayout()
         layout.itemSize = CGSize(width: 280, height: 120)
         layout.scrollDirection = .horizontal
@@ -49,12 +49,13 @@ public class HubView: UIView {
         collectionView.backgroundColor = .clear
         collectionView.register(ScriptCardCell.self, forCellWithReuseIdentifier: "cell")
         collectionView.dataSource = self
+        collectionView.delegate = self
         addSubview(collectionView)
         
         search(query: "blox")
     }
     
-    public func search(query: String) {
+    func search(query: String) {
         ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in
             self?.scripts = scripts
             self?.collectionView.reloadData()
@@ -63,7 +64,7 @@ public class HubView: UIView {
 }
 
 extension HubView: UISearchBarDelegate {
-    public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         searchBar.resignFirstResponder()
         if let query = searchBar.text, !query.isEmpty {
             search(query: query)
@@ -71,27 +72,32 @@ extension HubView: UISearchBarDelegate {
     }
 }
 
-extension HubView: UICollectionViewDataSource {
-    public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+extension HubView: UICollectionViewDataSource, UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         return scripts.count
     }
     
-    public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "cell", for: indexPath) as! ScriptCardCell
-        let script = scripts[indexPath.item]
-        cell.configure(with: script)
+        cell.configure(with: scripts[indexPath.item])
         return cell
+    }
+    
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        let script = scripts[indexPath.item]
+        NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), 
+                                        object: script)
     }
 }
 
-public class ScriptCardCell: UICollectionViewCell {
+class ScriptCardCell: UICollectionViewCell {
     
     private let titleLabel = UILabel()
     private let gameLabel = UILabel()
     private let thumbnailView = UIImageView()
     private let loadButton = UIButton(type: .system)
     
-    public override init(frame: CGRect) {
+    override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
     }
@@ -111,7 +117,6 @@ public class ScriptCardCell: UICollectionViewCell {
         thumbnailView.backgroundColor = UIColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 1)
         thumbnailView.layer.cornerRadius = 8
         thumbnailView.clipsToBounds = true
-        thumbnailView.contentMode = .scaleAspectFill
         contentView.addSubview(thumbnailView)
         
         titleLabel.frame = CGRect(x: 66, y: 8, width: frame.width - 74, height: 20)
@@ -130,11 +135,10 @@ public class ScriptCardCell: UICollectionViewCell {
         loadButton.setTitleColor(.white, for: .normal)
         loadButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
         loadButton.layer.cornerRadius = 8
-        loadButton.addTarget(self, action: #selector(loadTapped), for: .touchUpInside)
         contentView.addSubview(loadButton)
     }
     
-    public func configure(with script: ScriptItem) {
+    func configure(with script: ScriptItem) {
         titleLabel.text = script.title
         gameLabel.text = script.game ?? "Unknown Game"
         
@@ -143,9 +147,5 @@ public class ScriptCardCell: UICollectionViewCell {
                 self?.thumbnailView.image = image
             }
         }
-    }
-    
-    @objc private func loadTapped() {
-        NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), object: titleLabel.text)
     }
 }

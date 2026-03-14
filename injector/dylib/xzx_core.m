@@ -34,45 +34,56 @@ static XZXCore *sharedCoreInstance = nil;
 
 - (void)initialize {
     [[XZXAntiDetection shared] initializeProtection];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        [self startGameStateMonitoring];
-    });
-    hook_roblox_functions();
+    
+    // Start polling instead of hooking
+    [self startGameStatePolling];
+    
+    // Initialize Lua safely
     InitLua();
 }
 
 - (void)applicationDidBecomeActive {
-    [self startGameStateMonitoring];
+    // Refresh state when app becomes active
 }
 
-- (void)startGameStateMonitoring {
+- (void)startGameStatePolling {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         while (YES) {
-            BOOL currentlyInGame = [self checkIfInGame];
-            if (currentlyInGame && !self.isInGame) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self onGameJoined];
-                });
-            } else if (!currentlyInGame && self.isInGame) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self onGameLeft];
-                });
+            @autoreleasepool {
+                BOOL currentlyInGame = [self checkIfInGameSafely];
+                if (currentlyInGame && !self.isInGame) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self onGameJoined];
+                    });
+                } else if (!currentlyInGame && self.isInGame) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self onGameLeft];
+                    });
+                }
+                self.isInGame = currentlyInGame;
             }
             [NSThread sleepForTimeInterval:1.0];
         }
     });
 }
 
-- (BOOL)checkIfInGame {
-    Class dataModelClass = NSClassFromString(@"RobloxDataModel");
-    if (dataModelClass) {
+- (BOOL)checkIfInGameSafely {
+    @try {
+        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+        if (!dataModelClass) return NO;
+        
         id dataModel = [dataModelClass performSelector:NSSelectorFromString(@"sharedDataModel")];
-        if (dataModel) {
-            id placeId = [dataModel performSelector:NSSelectorFromString(@"placeId")];
-            return placeId != nil;
-        }
+        if (!dataModel) return NO;
+        
+        id placeId = [dataModel performSelector:NSSelectorFromString(@"placeId")];
+        return (placeId != nil);
+    } @catch (NSException *exception) {
+        return NO;
     }
-    return NO;
+}
+
+- (BOOL)checkIfInGame {
+    return [self checkIfInGameSafely];
 }
 
 - (void)onGameJoined {

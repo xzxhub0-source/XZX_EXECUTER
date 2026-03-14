@@ -1,12 +1,12 @@
 import UIKit
 
-public class NeonWindow: UIView {
+class NeonWindow: UIView {
     
     private let gradientLayer = CAGradientLayer()
     private var dragStartPoint: CGPoint?
     private var dragStartFrame: CGRect?
     
-    public override init(frame: CGRect) {
+    override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
         setupDragging()
@@ -32,7 +32,6 @@ public class NeonWindow: UIView {
         gradientLayer.locations = [0, 0.5, 1]
         gradientLayer.startPoint = CGPoint(x: 0, y: 0)
         gradientLayer.endPoint = CGPoint(x: 1, y: 1)
-        
         layer.addSublayer(gradientLayer)
         
         let animation = CABasicAnimation(keyPath: "locations")
@@ -79,7 +78,7 @@ public class NeonWindow: UIView {
         }
     }
     
-    public override func layoutSubviews() {
+    override func layoutSubviews() {
         super.layoutSubviews()
         gradientLayer.frame = bounds
     }

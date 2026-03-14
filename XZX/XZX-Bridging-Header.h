@@ -4,11 +4,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// Include Lua executor header - relative path from repository root
-#include "injector/dylib/Core/LuaExecutor.h"
-
-// C functions from LuaExecutor.mm
-void InitLua(void);
-void ExecuteScript(const char *script);
+#import "../injector/dylib/Core/LuaExecutor.h"
 
 #endif

@@ -1,35 +1,23 @@
-#ifndef XZX_HOOK_MANAGER_H
-#define XZX_HOOK_MANAGER_H
+#ifndef XZX_EDITOR_H
+#define XZX_EDITOR_H
 
-#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
-@interface XZXHookManager : NSObject
+#define NEON_PURPLE [UIColor colorWithRed:0.8 green:0.2 blue:1.0 alpha:1.0]
+
+@interface XZXEditor : NSObject
 + (instancetype)shared;
-- (void)initializeHookSystem;
-- (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook;
-- (void)removeHook:(NSString *)functionName;
-- (void)restoreAllFunctions;
-- (BOOL)areHooksExposed;
-- (void)hideFromAdonis;
-- (void)spoofConnectionList;
-- (void)randomizeHookOrder;
-- (double)exposureRatio;
-- (void *)cloneFunction:(void *)original;
-- (void)restoreFunction:(NSString *)functionName;
-- (NSString *)getFunctionHash:(void *)function;
-- (NSArray *)getConnections:(NSString *)signal;
-- (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args;
-- (NSArray *)getSignalArguments:(NSString *)signal;
-- (BOOL)canSignalReplicate:(NSString *)signal;
-- (void)replicateSignal:(NSString *)signal withArguments:(NSArray *)args;
-- (void)obfuscateHookPointers;
-- (void)rotateHookPatterns;
-- (void)simulateNormalHooks;
+- (UIWindow *)createEditorWindow;
+- (void)show;
+- (void)hide;
+- (void)executeScript;
+- (void)clearScript;
+- (void)saveScript;
+- (void)loadScript;
 
-@property (nonatomic, strong) NSMutableDictionary *hooks;
-@property (nonatomic, strong) NSMutableDictionary *originalFunctions;
-@property (nonatomic, strong) NSMutableArray *exposedHooks;
-@property (nonatomic, strong) NSMutableDictionary *hookHistory;
+@property (nonatomic, strong) UIWindow *window;
+@property (nonatomic, strong) UITextView *scriptView;
+@property (nonatomic, strong) NSMutableArray *savedScripts;
 @end
 
 #endif

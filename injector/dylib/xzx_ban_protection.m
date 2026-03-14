@@ -1,4 +1,5 @@
 #import "xzx_ban_protection.h"
+#import <UIKit/UIKit.h>
 
 static XZXBanProtection *sharedBanProtectionInstance = nil;
 
@@ -7,7 +8,7 @@ static XZXBanProtection *sharedBanProtectionInstance = nil;
 + (instancetype)shared {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        sharedBanProtectionInstance = [[XZXBanProtection alloc] init];
+        sharedBanProtectionInstance = [[self alloc] init];
     });
     return sharedBanProtectionInstance;
 }
@@ -17,56 +18,74 @@ static XZXBanProtection *sharedBanProtectionInstance = nil;
     if (self) {
         _isBanned = NO;
         _accountPool = [NSMutableArray array];
-        _actionHistory = [NSMutableArray array];
-        _actionCount = 0;
-        _lastActionTime = 0;
-        _currentHWID = @"";
+        [self getCurrentHWID];
     }
     return self;
 }
 
-- (void)protectAccount {
-    NSLog(@"[XZX] BanProtection initialized");
+- (void)getCurrentHWID {
+    @try {
+        UIDevice *currentDevice = [UIDevice currentDevice];
+        NSUUID *vendorId = [currentDevice identifierForVendor];
+        _currentHWID = vendorId.UUIDString ?: @"unknown";
+    } @catch (NSException *exception) {
+        _currentHWID = @"unknown";
+    }
 }
 
-- (void)spoofHardwareID {
-}
-
-- (void)useAlternateAccount {
-}
-
-- (void)rotateAccounts {
-}
+- (void)protectAccount {}
 
 - (BOOL)checkBanStatus {
     return NO;
 }
 
-- (void)detectBanWave {
-}
+- (void)detectBanWave {}
 
 - (void)emergencyLogout {
+    [self clearRobloxCache];
+    [self deleteLogs];
 }
 
 - (void)clearRobloxCache {
+    @try {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
+        NSString *libraryPath = paths.firstObject;
+        if (!libraryPath) return;
+        
+        NSArray *cachePaths = @[
+            [libraryPath stringByAppendingPathComponent:@"Caches/com.roblox.Roblox"],
+            [libraryPath stringByAppendingPathComponent:@"Preferences/com.roblox.Roblox.plist"],
+        ];
+        
+        NSFileManager *fm = [NSFileManager defaultManager];
+        for (NSString *path in cachePaths) {
+            if ([fm fileExistsAtPath:path]) {
+                [fm removeItemAtPath:path error:nil];
+            }
+        }
+    } @catch (NSException *exception) {}
 }
 
 - (void)deleteLogs {
+    @try {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *docPath = paths.firstObject;
+        if (!docPath) return;
+        
+        NSString *logPath = [docPath stringByAppendingPathComponent:@"xzx_logs"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
+            [[NSFileManager defaultManager] removeItemAtPath:logPath error:nil];
+        }
+    } @catch (NSException *exception) {}
 }
 
 - (void)removeTraces {
+    [self clearRobloxCache];
+    [self deleteLogs];
 }
 
-- (void)updateBanPatterns {
-}
-
-- (void)simulateHumanBehavior {
-}
-
-- (void)randomizeActionTiming {
-}
-
-- (void)avoidPatternRecognition {
-}
+- (void)spoofHardwareID {}
+- (void)useAlternateAccount {}
+- (void)rotateAccounts {}
 
 @end

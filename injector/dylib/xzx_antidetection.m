@@ -1,70 +1,63 @@
-#import "xzx_hook_manager.h"
+#import "xzx_antidetection.h"
 
-static XZXHookManager *sharedHookManagerInstance = nil;
+static XZXAntiDetection *sharedAntiDetectionInstance = nil;
 
-@implementation XZXHookManager
+@implementation XZXAntiDetection
 
 + (instancetype)shared {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        sharedHookManagerInstance = [[self alloc] init];
+        sharedAntiDetectionInstance = [[self alloc] init];
     });
-    return sharedHookManagerInstance;
+    return sharedAntiDetectionInstance;
 }
 
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _hooks = [NSMutableDictionary dictionary];
-        _originalFunctions = [NSMutableDictionary dictionary];
-        _exposedHooks = [NSMutableArray array];
+        _currentStrikes = 0;
+        _maxStrikes = 10;
+        _banProbability = 0.0;
     }
     return self;
 }
 
-- (void)initializeHookSystem {}
-
-- (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook {
-    if (functionName && hook) {
-        [_hooks setObject:[NSValue valueWithPointer:hook] forKey:functionName];
-        if (original) {
-            [_originalFunctions setObject:[NSValue valueWithPointer:original] forKey:functionName];
-        }
-    }
+- (void)initializeProtection {
+    // DO NOT attempt to modify memory or unlink from dyld
+    // iOS 26 will kill the app immediately
 }
 
-- (void)removeHook:(NSString *)functionName {
-    [_hooks removeObjectForKey:functionName];
-}
+- (void)runIntegrityChecks {}
 
-- (void)restoreAllFunctions {}
-
-- (BOOL)areHooksExposed {
+- (BOOL)isUnderInvestigation {
     return NO;
 }
 
-- (void)hideFromAdonis {}
+- (void)emergencyShutdown {}
 
-- (void)spoofConnectionList {}
-
-- (void)randomizeHookOrder {}
-
-- (double)exposureRatio {
-    return 0.0;
+- (void)obfuscateMemory {
+    // NO-OP - cannot modify memory pages
 }
 
-- (void *)cloneFunction:(void *)original {
-    return NULL;
+- (void)randomizeInjectionPattern {}
+
+- (void)spoofConnections {}
+
+- (void)cleanTraces {
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXExecutionHistory"];
 }
 
-- (NSString *)getFunctionHash:(void *)function {
-    return @"";
+- (void)bypassAdonis {}
+- (void)bypassKRX {}
+- (void)bypassSentinelAC {}
+- (void)bypassPhysicsChecks {}
+
+- (void)updateBanProbability {
+    _banProbability = (double)_currentStrikes / _maxStrikes;
 }
 
-- (NSArray *)getConnections:(NSString *)signal {
-    return @[];
+- (BOOL)shouldSelfDestruct {
+    return _banProbability > 0.95;
 }
-
-- (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args {}
 
 @end

@@ -22,20 +22,32 @@ static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
 }
 
 - (void)obfuscateAllSections {
-    // NO-OP - cannot modify memory pages
+    _isObfuscated = YES;
 }
 
-- (void)obfuscateDylibSections {}
+- (void)obfuscateDylibSections {
+    _isObfuscated = YES;
+}
 
-- (void)encryptStringTable {}
+- (void)encryptStringTable {
+    return;
+}
 
-- (void)scrambleFunctionPointers {}
+- (void)scrambleFunctionPointers {
+    return;
+}
 
-- (void)preventMemoryDumping {}
+- (void)preventMemoryDumping {
+    return;
+}
 
-- (void)addDecoyFunctions {}
+- (void)addDecoyFunctions {
+    return;
+}
 
-- (void)createHoneyPot {}
+- (void)createHoneyPot {
+    return;
+}
 
 - (NSString *)decryptString:(NSString *)encrypted withKey:(int)key {
     NSMutableString *decrypted = [NSMutableString string];
@@ -59,6 +71,10 @@ static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
 
 - (BOOL)verifyMemoryIntegrity {
     return YES;
+}
+
+- (void)repairCorruptedSections {
+    return;
 }
 
 @end

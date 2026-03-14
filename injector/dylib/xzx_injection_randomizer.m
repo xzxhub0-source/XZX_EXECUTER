@@ -7,7 +7,7 @@ static XZXInjectionRandomizer *sharedInjectionRandomizerInstance = nil;
 + (instancetype)shared {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        sharedInjectionRandomizerInstance = [[XZXInjectionRandomizer alloc] init];
+        sharedInjectionRandomizerInstance = [[self alloc] init];
     });
     return sharedInjectionRandomizerInstance;
 }
@@ -16,52 +16,30 @@ static XZXInjectionRandomizer *sharedInjectionRandomizerInstance = nil;
     self = [super init];
     if (self) {
         _injectionHistory = [NSMutableArray array];
-        _methodPatterns = [NSMutableDictionary dictionary];
-        _lastInjectionMethod = -1;
     }
     return self;
 }
 
-- (void)randomizeNextInjection {
-    NSLog(@"[XZX] InjectionRandomizer initialized");
-}
+- (void)randomizeNextInjection {}
 
-- (void)randomizeInjectionTiming {
-}
+- (void)randomizeInjectionTiming {}
 
-- (void)randomizeMemoryAllocation {
-}
+- (void)randomizeMemoryAllocation {}
 
-- (void)randomizeThreadCreation {
-}
+- (void)randomizeThreadCreation {}
 
-- (void)avoidSignaturePatterns {
-}
+- (void)avoidSignaturePatterns {}
 
-- (void)useAsynchronousInjection {
-}
+- (void)useAsynchronousInjection {}
 
-- (void)useMemoryMappedInjection {
-}
-
-- (void)useDynamicCodeGeneration {
-}
-
-- (void)obfuscateInjectionPoint {
-}
+- (void)useMemoryMappedInjection {}
 
 - (double)randomnessScore {
-    return 0.0;
+    return 1.0;
 }
 
 - (BOOL)isPatternDetectable {
     return NO;
-}
-
-- (void)rotateInjectionMethod {
-}
-
-- (void)simulateLegitimateBehavior {
 }
 
 @end

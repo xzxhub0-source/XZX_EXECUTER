@@ -18,32 +18,49 @@ static XZXBanProtection *sharedBanProtectionInstance = nil;
     if (self) {
         _isBanned = NO;
         _accountPool = [NSMutableArray array];
-        [self getCurrentHWID];
+        _currentHWID = @"";
     }
     return self;
 }
 
-- (void)getCurrentHWID {
-    @try {
-        UIDevice *currentDevice = [UIDevice currentDevice];
-        NSUUID *vendorId = [currentDevice identifierForVendor];
-        _currentHWID = vendorId.UUIDString ?: @"unknown";
-    } @catch (NSException *exception) {
-        _currentHWID = @"unknown";
-    }
+- (void)protectAccount {
+    return;
 }
 
-- (void)protectAccount {}
+- (void)spoofHardwareID {
+    return;
+}
+
+- (void)useAlternateAccount {
+    return;
+}
+
+- (void)rotateAccounts {
+    return;
+}
 
 - (BOOL)checkBanStatus {
     return NO;
 }
 
-- (void)detectBanWave {}
+- (void)detectBanWave {
+    return;
+}
 
 - (void)emergencyLogout {
-    [self clearRobloxCache];
-    [self deleteLogs];
+    return;
+}
+
+- (void)spoofMACAddress {
+    return;
+}
+
+- (void)spoofDiskSerial {
+    return;
+}
+
+- (void)spoofVolumeID {
+    return;
 }
 
 - (void)clearRobloxCache {
@@ -63,7 +80,8 @@ static XZXBanProtection *sharedBanProtectionInstance = nil;
                 [fm removeItemAtPath:path error:nil];
             }
         }
-    } @catch (NSException *exception) {}
+    } @catch (NSException *exception) {
+    }
 }
 
 - (void)deleteLogs {
@@ -76,16 +94,13 @@ static XZXBanProtection *sharedBanProtectionInstance = nil;
         if ([[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
             [[NSFileManager defaultManager] removeItemAtPath:logPath error:nil];
         }
-    } @catch (NSException *exception) {}
+    } @catch (NSException *exception) {
+    }
 }
 
 - (void)removeTraces {
     [self clearRobloxCache];
     [self deleteLogs];
 }
-
-- (void)spoofHardwareID {}
-- (void)useAlternateAccount {}
-- (void)rotateAccounts {}
 
 @end

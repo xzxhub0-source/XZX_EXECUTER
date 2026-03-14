@@ -19,18 +19,10 @@
 - (void)bypassPhysicsChecks;
 - (void)updateBanProbability;
 - (BOOL)shouldSelfDestruct;
-- (void)updateOffsetsForVersion:(NSString *)version;
-- (void)rotateDetectionPatterns;
-- (void)spoofHardwareID;
-- (void)hideFromMemoryScanners;
-- (void)simulateNormalBehavior;
 
 @property (nonatomic, assign) NSInteger currentStrikes;
 @property (nonatomic, assign) NSInteger maxStrikes;
-@property (nonatomic, strong) NSMutableDictionary *strikeReasons;
 @property (nonatomic, assign) double banProbability;
-@property (nonatomic, strong) NSString *currentRobloxVersion;
-@property (nonatomic, strong) NSDictionary *versionOffsets;
 @end
 
 #endif

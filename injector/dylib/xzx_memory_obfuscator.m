@@ -1,11 +1,4 @@
 #import "xzx_memory_obfuscator.h"
-#import <mach-o/dyld.h>
-#import <mach-o/loader.h>
-#import <sys/mman.h>
-
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 16384
-#endif
 
 static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
 
@@ -36,26 +29,18 @@ static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
     [self obfuscateAllSections];
 }
 
-- (void)encryptStringTable {
-    // Implementation
-}
+- (void)encryptStringTable {}
 
-- (void)scrambleFunctionPointers {
-    // Implementation
-}
+- (void)scrambleFunctionPointers {}
 
 - (void)preventMemoryDumping {
     [self addDecoyFunctions];
     [self createHoneyPot];
 }
 
-- (void)addDecoyFunctions {
-    // Implementation
-}
+- (void)addDecoyFunctions {}
 
-- (void)createHoneyPot {
-    // Implementation
-}
+- (void)createHoneyPot {}
 
 - (NSString *)decryptString:(NSString *)encrypted withKey:(int)key {
     NSMutableString *decrypted = [NSMutableString string];
@@ -79,10 +64,6 @@ static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
 
 - (BOOL)verifyMemoryIntegrity {
     return YES;
-}
-
-- (void)repairCorruptedSections {
-    // Implementation
 }
 
 @end

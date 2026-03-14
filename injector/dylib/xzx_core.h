@@ -4,6 +4,8 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+@class XZXEditor;
+
 @interface XZXCore : NSObject
 + (instancetype)shared;
 - (void)initialize;

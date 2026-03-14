@@ -1,7 +1,4 @@
 #import "xzx_physics_bypass.h"
-#import "xzx_hook_manager.h"
-#import <CoreGraphics/CoreGraphics.h>
-#import <UIKit/UIKit.h>
 
 static XZXPhysicsBypass *sharedPhysicsBypassInstance = nil;
 
@@ -38,40 +35,22 @@ static XZXPhysicsBypass *sharedPhysicsBypassInstance = nil;
     });
 }
 
-- (void)simulateServerAnchors {
-    // Implementation
-}
+- (void)simulateServerAnchors {}
 
-- (void)validateWithRaycasts {
-    // Implementation
-}
+- (void)validateWithRaycasts {}
 
-- (void)bypassSpeedDetection {
-    // Implementation
-}
+- (void)bypassSpeedDetection {}
 
-- (void)bypassFlyDetection {
-    // Implementation
-}
+- (void)bypassFlyDetection {}
 
-- (void)bypassNoclipDetection {
-    // Implementation
-}
+- (void)bypassNoclipDetection {}
 
-- (void)bypassTeleportDetection {
-    // Implementation
-}
+- (void)bypassTeleportDetection {}
 
-- (void)gradualSpeedIncrease {
-    // Implementation
-}
+- (void)gradualSpeedIncrease {}
 
-- (void)smoothTeleport {
-    // Implementation
-}
+- (void)smoothTeleport {}
 
-- (void)simulatePhysicsLag {
-    // Implementation
-}
+- (void)simulatePhysicsLag {}
 
 @end

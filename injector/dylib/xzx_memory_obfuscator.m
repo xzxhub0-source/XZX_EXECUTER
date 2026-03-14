@@ -22,21 +22,16 @@ static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
 }
 
 - (void)obfuscateAllSections {
-    _isObfuscated = YES;
+    // NO-OP - cannot modify memory pages
 }
 
-- (void)obfuscateDylibSections {
-    [self obfuscateAllSections];
-}
+- (void)obfuscateDylibSections {}
 
 - (void)encryptStringTable {}
 
 - (void)scrambleFunctionPointers {}
 
-- (void)preventMemoryDumping {
-    [self addDecoyFunctions];
-    [self createHoneyPot];
-}
+- (void)preventMemoryDumping {}
 
 - (void)addDecoyFunctions {}
 

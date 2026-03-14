@@ -1,4 +1,8 @@
 #import "xzx_antidetection.h"
+#import "xzx_memory_obfuscator.h"
+#import "xzx_hook_manager.h"
+#import "xzx_injection_randomizer.h"
+#import "xzx_physics_bypass.h"
 
 static XZXAntiDetection *sharedAntiDetectionInstance = nil;
 
@@ -7,7 +11,7 @@ static XZXAntiDetection *sharedAntiDetectionInstance = nil;
 + (instancetype)shared {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        sharedAntiDetectionInstance = [[XZXAntiDetection alloc] init];
+        sharedAntiDetectionInstance = [[self alloc] init];
     });
     return sharedAntiDetectionInstance;
 }
@@ -16,73 +20,53 @@ static XZXAntiDetection *sharedAntiDetectionInstance = nil;
     self = [super init];
     if (self) {
         _currentStrikes = 0;
-        _maxStrikes = 15;
-        _strikeReasons = [NSMutableDictionary dictionary];
+        _maxStrikes = 10;
         _banProbability = 0.0;
-        _currentRobloxVersion = @"2.711.871";
-        _versionOffsets = [NSDictionary dictionary];
     }
     return self;
 }
 
 - (void)initializeProtection {
-    NSLog(@"[XZX] AntiDetection initialized");
+    [self obfuscateMemory];
+    [self randomizeInjectionPattern];
 }
 
-- (void)runIntegrityChecks {
-}
+- (void)runIntegrityChecks {}
 
 - (BOOL)isUnderInvestigation {
     return NO;
 }
 
-- (void)emergencyShutdown {
-}
+- (void)emergencyShutdown {}
 
 - (void)obfuscateMemory {
+    [[XZXMemoryObfuscator shared] obfuscateAllSections];
 }
 
 - (void)randomizeInjectionPattern {
+    [[XZXInjectionRandomizer shared] randomizeNextInjection];
 }
 
-- (void)spoofConnections {
-}
+- (void)spoofConnections {}
 
 - (void)cleanTraces {
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXExecutionHistory"];
 }
 
-- (void)bypassAdonis {
-}
+- (void)bypassAdonis {}
 
-- (void)bypassKRX {
-}
+- (void)bypassKRX {}
 
-- (void)bypassSentinelAC {
-}
+- (void)bypassSentinelAC {}
 
-- (void)bypassPhysicsChecks {
-}
+- (void)bypassPhysicsChecks {}
 
 - (void)updateBanProbability {
+    _banProbability = (double)_currentStrikes / _maxStrikes;
 }
 
 - (BOOL)shouldSelfDestruct {
-    return NO;
-}
-
-- (void)updateOffsetsForVersion:(NSString *)version {
-}
-
-- (void)rotateDetectionPatterns {
-}
-
-- (void)spoofHardwareID {
-}
-
-- (void)hideFromMemoryScanners {
-}
-
-- (void)simulateNormalBehavior {
+    return _banProbability > 0.95;
 }
 
 @end

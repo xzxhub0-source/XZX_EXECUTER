@@ -1,9 +1,9 @@
 import UIKit
 
-public class SidebarView: UIView {
+class SidebarView: UIView {
     
-    public var buttons: [UIButton] = []
-    public var onTabSelected: ((Int) -> Void)?
+    var buttons: [UIButton] = []
+    var onTabSelected: ((Int) -> Void)?
     
     private let items = [
         ("📝", "Editor"),
@@ -13,7 +13,7 @@ public class SidebarView: UIView {
         ("⚙️", "Settings")
     ]
     
-    public override init(frame: CGRect) {
+    override init(frame: CGRect) {
         super.init(frame: frame)
         build()
     }
@@ -29,7 +29,7 @@ public class SidebarView: UIView {
         
         for i in 0..<items.count {
             let btn = createButton(title: "\(items[i].0) \(items[i].1)", tag: i)
-            btn.frame = CGRect(x: 10, y: 20 + (i * 55), width: 160, height: 45)
+            btn.frame = CGRect(x: 12, y: 20 + (i * 55), width: 160, height: 45)
             addSubview(btn)
             buttons.append(btn)
         }
@@ -46,12 +46,6 @@ public class SidebarView: UIView {
         btn.layer.cornerRadius = 10
         btn.tag = tag
         btn.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        
-        btn.layer.shadowColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.5).cgColor
-        btn.layer.shadowOffset = .zero
-        btn.layer.shadowRadius = 5
-        btn.layer.shadowOpacity = 0
-        
         return btn
     }
     

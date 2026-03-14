@@ -1,27 +1,21 @@
 import Foundation
+import Combine
 
-public struct ScriptTab: Codable {
-    public var id = UUID()
-    public var name: String
-    public var content: String
-    public var isSaved: Bool = false
-    
-    public init(name: String, content: String) {
-        self.name = name
-        self.content = content
-    }
+struct ScriptTab: Codable, Identifiable {
+    var id = UUID()
+    var name: String
+    var content: String
+    var isSaved: Bool = false
 }
 
-public class TabManager: ObservableObject {
-    public static let shared = TabManager()
+class TabManager: ObservableObject {
+    static let shared = TabManager()
     
-    @Published public var tabs: [ScriptTab] = []
-    @Published public var selectedTabIndex: Int = 0
-    @Published public var savedScripts: [ScriptTab] = []
+    @Published var tabs: [ScriptTab] = []
+    @Published var selectedTabIndex: Int = 0
+    @Published var savedScripts: [ScriptTab] = []
     
     private let userDefaults = UserDefaults.standard
-    private let tabsKey = "xzx_tabs"
-    private let savedKey = "xzx_saved"
     
     private init() {
         loadTabs()
@@ -32,14 +26,23 @@ public class TabManager: ObservableObject {
         }
     }
     
-    public func addTab() {
+    var currentScript: String {
+        get { selectedTabIndex < tabs.count ? tabs[selectedTabIndex].content : "" }
+        set {
+            guard selectedTabIndex < tabs.count else { return }
+            tabs[selectedTabIndex].content = newValue
+            saveTabs()
+        }
+    }
+    
+    func addTab() {
         let newTab = ScriptTab(name: "Untitled \(tabs.count + 1)", content: "")
         tabs.append(newTab)
         selectedTabIndex = tabs.count - 1
         saveTabs()
     }
     
-    public func removeTab(at index: Int) {
+    func removeTab(at index: Int) {
         guard tabs.count > 1 else { return }
         tabs.remove(at: index)
         if selectedTabIndex >= tabs.count {
@@ -48,21 +51,15 @@ public class TabManager: ObservableObject {
         saveTabs()
     }
     
-    public func updateCurrentContent(_ content: String) {
+    func saveCurrentScript() {
         guard selectedTabIndex < tabs.count else { return }
-        tabs[selectedTabIndex].content = content
-        saveTabs()
-    }
-    
-    public func saveScript(at index: Int) {
-        guard index < tabs.count else { return }
-        var script = tabs[index]
+        var script = tabs[selectedTabIndex]
         script.isSaved = true
         savedScripts.append(script)
         saveSaved()
     }
     
-    public func loadScript(_ script: ScriptTab) {
+    func loadScript(_ script: ScriptTab) {
         tabs.append(script)
         selectedTabIndex = tabs.count - 1
         saveTabs()
@@ -70,12 +67,12 @@ public class TabManager: ObservableObject {
     
     private func saveTabs() {
         if let encoded = try? JSONEncoder().encode(tabs) {
-            userDefaults.set(encoded, forKey: tabsKey)
+            userDefaults.set(encoded, forKey: "xzx_tabs")
         }
     }
     
     private func loadTabs() {
-        if let data = userDefaults.data(forKey: tabsKey),
+        if let data = userDefaults.data(forKey: "xzx_tabs"),
            let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) {
             tabs = decoded
         }
@@ -83,12 +80,12 @@ public class TabManager: ObservableObject {
     
     private func saveSaved() {
         if let encoded = try? JSONEncoder().encode(savedScripts) {
-            userDefaults.set(encoded, forKey: savedKey)
+            userDefaults.set(encoded, forKey: "xzx_saved")
         }
     }
     
     private func loadSaved() {
-        if let data = userDefaults.data(forKey: savedKey),
+        if let data = userDefaults.data(forKey: "xzx_saved"),
            let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) {
             savedScripts = decoded
         }

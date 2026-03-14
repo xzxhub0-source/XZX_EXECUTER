@@ -18,39 +18,59 @@ static XZXAntiDetection *sharedAntiDetectionInstance = nil;
         _currentStrikes = 0;
         _maxStrikes = 10;
         _banProbability = 0.0;
+        _strikeReasons = [NSMutableDictionary dictionary];
     }
     return self;
 }
 
 - (void)initializeProtection {
-    // DO NOT attempt to modify memory or unlink from dyld
-    // iOS 26 will kill the app immediately
+    return;
 }
 
-- (void)runIntegrityChecks {}
+- (void)runIntegrityChecks {
+    return;
+}
 
 - (BOOL)isUnderInvestigation {
     return NO;
 }
 
-- (void)emergencyShutdown {}
-
-- (void)obfuscateMemory {
-    // NO-OP - cannot modify memory pages
+- (void)emergencyShutdown {
+    return;
 }
 
-- (void)randomizeInjectionPattern {}
+- (void)obfuscateMemory {
+    return;
+}
 
-- (void)spoofConnections {}
+- (void)randomizeInjectionPattern {
+    return;
+}
+
+- (void)spoofConnections {
+    return;
+}
 
 - (void)cleanTraces {
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXExecutionHistory"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
-- (void)bypassAdonis {}
-- (void)bypassKRX {}
-- (void)bypassSentinelAC {}
-- (void)bypassPhysicsChecks {}
+- (void)bypassAdonis {
+    return;
+}
+
+- (void)bypassKRX {
+    return;
+}
+
+- (void)bypassSentinelAC {
+    return;
+}
+
+- (void)bypassPhysicsChecks {
+    return;
+}
 
 - (void)updateBanProbability {
     _banProbability = (double)_currentStrikes / _maxStrikes;

@@ -16,23 +16,38 @@ static XZXInjectionRandomizer *sharedInjectionRandomizerInstance = nil;
     self = [super init];
     if (self) {
         _injectionHistory = [NSMutableArray array];
+        _lastInjectionMethod = 0;
     }
     return self;
 }
 
-- (void)randomizeNextInjection {}
+- (void)randomizeNextInjection {
+    return;
+}
 
-- (void)randomizeInjectionTiming {}
+- (void)randomizeInjectionTiming {
+    return;
+}
 
-- (void)randomizeMemoryAllocation {}
+- (void)randomizeMemoryAllocation {
+    return;
+}
 
-- (void)randomizeThreadCreation {}
+- (void)randomizeThreadCreation {
+    return;
+}
 
-- (void)avoidSignaturePatterns {}
+- (void)avoidSignaturePatterns {
+    return;
+}
 
-- (void)useAsynchronousInjection {}
+- (void)useAsynchronousInjection {
+    return;
+}
 
-- (void)useMemoryMappedInjection {}
+- (void)useMemoryMappedInjection {
+    return;
+}
 
 - (double)randomnessScore {
     return 1.0;

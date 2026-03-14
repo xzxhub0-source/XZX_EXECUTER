@@ -2,7 +2,6 @@
 #define XZX_EDITOR_H
 
 #import <UIKit/UIKit.h>
-#import <WebKit/WebKit.h>
 
 #define NEON_PURPLE [UIColor colorWithRed:0.8 green:0.2 blue:1.0 alpha:1.0]
 
@@ -15,8 +14,6 @@
 - (void)clearScript;
 - (void)saveScript;
 - (void)loadScript;
-- (void)loadScriptFromURL:(NSString *)url;
-- (void)searchScriptBlox:(NSString *)query;
 
 @property (nonatomic, strong) UIWindow *window;
 @property (nonatomic, strong) UITextView *scriptView;

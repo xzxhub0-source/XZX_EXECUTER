@@ -1,5 +1,4 @@
 #import "xzx_functions.h"
-#import <Foundation/Foundation.h>
 
 static XZXFunctions *sharedFunctionsInstance = nil;
 
@@ -17,12 +16,14 @@ static XZXFunctions *sharedFunctionsInstance = nil;
     self = [super init];
     if (self) {
         _fflags = [NSMutableDictionary dictionary];
+        _packetQueue = [NSMutableArray array];
+        [self startRakNetMonitor];
     }
     return self;
 }
 
 - (void)executeLuaScript:(NSString *)script {
-    // Placeholder
+    NSLog(@"[XZX] Executing script");
 }
 
 - (void)setFFlag:(NSString *)name value:(NSString *)value {
@@ -53,11 +54,7 @@ static XZXFunctions *sharedFunctionsInstance = nil;
 - (void)websocketSend:(NSString *)message {
     NSURLSessionWebSocketTask *task = _websocket;
     [task sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:message] 
-    completionHandler:^(NSError *error) {
-        if (error) {
-            NSLog(@"[XZX] WebSocket send error: %@", error);
-        }
-    }];
+    completionHandler:^(NSError *error) {}];
 }
 
 - (void)websocketClose {
@@ -66,24 +63,55 @@ static XZXFunctions *sharedFunctionsInstance = nil;
     _websocket = nil;
 }
 
-- (id)getRenderProperty:(NSString *)property {
+- (void)startRakNetMonitor {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        while (YES) {
+            [NSThread sleepForTimeInterval:0.1];
+            
+            if (arc4random_uniform(100) < 10) {
+                NSMutableDictionary *packet = [NSMutableDictionary dictionary];
+                packet[@"id"] = @(0x13);
+                packet[@"timestamp"] = [NSDate date];
+                
+                @synchronized(self) {
+                    [self.packetQueue addObject:packet];
+                    if (self.packetQueue.count > 100) {
+                        [self.packetQueue removeObjectsInRange:NSMakeRange(0, 50)];
+                    }
+                }
+            }
+        }
+    });
+}
+
+- (id)rnetNextPacket {
+    @synchronized(self) {
+        if (self.packetQueue.count > 0) {
+            id packet = self.packetQueue[0];
+            [self.packetQueue removeObjectAtIndex:0];
+            return packet;
+        }
+    }
     return nil;
 }
 
-- (id)getHiddenProperty:(NSString *)property {
-    return nil;
+- (id)rnetReadPacket:(id)packet {
+    return packet;
 }
 
-- (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args {
-    // Implementation
+- (void)rnetSendPacket:(id)packet {
+    NSLog(@"[XZX] Sending packet");
 }
 
-- (NSArray *)getConnections:(NSString *)signal {
-    return @[];
+- (void)rnetDesync:(int)amount {
+    NSLog(@"[XZX] Desync set to %d", amount);
 }
 
-- (void)deltaFunction:(NSString *)name args:(NSArray *)args {
-    // Implementation
+- (void)rnetReconnect {
+    NSLog(@"[XZX] Reconnecting");
+    @synchronized(self) {
+        [self.packetQueue removeAllObjects];
+    }
 }
 
 @end

@@ -1,10 +1,11 @@
 import UIKit
+import Combine
 
-public class EditorView: UIView {
+class EditorView: UIView {
     
-    public let textView = UITextView()
+    let textView = UITextView()
     
-    public override init(frame: CGRect) {
+    override init(frame: CGRect) {
         super.init(frame: frame)
         build()
     }
@@ -23,7 +24,15 @@ public class EditorView: UIView {
         textView.font = UIFont(name: "Menlo", size: 14)
         textView.textColor = .white
         textView.backgroundColor = .clear
+        textView.delegate = self
         textView.text = "-- XZX Executor\nprint('Hello World!')"
         addSubview(textView)
+    }
+}
+
+extension EditorView: UITextViewDelegate {
+    func textViewDidChange(_ textView: UITextView) {
+        NotificationCenter.default.post(name: NSNotification.Name("EditorContentChanged"), 
+                                        object: textView.text)
     }
 }

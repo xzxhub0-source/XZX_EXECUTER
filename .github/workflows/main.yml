@@ -51,15 +51,37 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
       
-      - name: Create minimal LuaExecutor.mm (NO RUNTIME HOOKS)
+      - name: Create LuaExecutor.h
+        run: |
+          cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
+          #ifndef LuaExecutor_h
+          #define LuaExecutor_h
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          void InitLua(void);
+          void ExecuteScript(const char *script);
+          #ifdef __cplusplus
+          }
+          #endif
+          #endif
+          EOF
+      
+      - name: Create LuaExecutor.mm
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
           #include <lua.h>
           #include <lauxlib.h>
+          #include <vector>
+          #include <string>
+          #include <map>
+          #include <mutex>
+          #include <thread>
 
           static lua_State *L = nil;
+          static std::mutex lua_mutex;
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
@@ -67,7 +89,11 @@ jobs:
               for (int i = 1; i <= n; i++) {
                   if (i > 1) [output appendString:@" "];
                   if (lua_isstring(L, i)) [output appendFormat:@"%s", lua_tostring(L, i)];
-                  else [output appendString:lua_typename(L, lua_type(L, i))];
+                  else if (lua_isnumber(L, i)) [output appendFormat:@"%g", lua_tonumber(L, i)];
+                  else if (lua_isboolean(L, i)) [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
+                  else if (lua_istable(L, i)) [output appendString:@"table"];
+                  else if (lua_isfunction(L, i)) [output appendString:@"function"];
+                  else [output appendString:@"nil"];
               }
               NSLog(@"[XZX] %@", output);
               return 0;
@@ -75,10 +101,12 @@ jobs:
 
           static int xzx_loadstring(lua_State *L) {
               const char *code = luaL_checkstring(L, 1);
-              int status = luaL_loadstring(L, code);
+              const char *chunkname = luaL_optstring(L, 2, "=xzx");
+              int status = luaL_loadbuffer(L, code, strlen(code), chunkname);
               if (status != 0) {
                   lua_pushnil(L);
                   lua_pushstring(L, lua_tostring(L, -1));
+                  lua_remove(L, -2);
                   return 2;
               }
               return 1;
@@ -88,7 +116,8 @@ jobs:
               const char *url = luaL_checkstring(L, 1);
               dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
               __block NSString *result = nil;
-              NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
+              NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
+              [request setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
               NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
                   if (data) result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
                   dispatch_semaphore_signal(semaphore);
@@ -119,15 +148,45 @@ jobs:
               return 1;
           }
 
+          static int xzx_base64codes(lua_State *L) {
+              if (lua_gettop(L) < 1) { lua_pushnil(L); return 1; }
+              const char *input = luaL_checkstring(L, 1);
+              NSData *data = [NSData dataWithBytes:input length:strlen(input)];
+              NSString *encoded = [data base64EncodedStringWithOptions:0];
+              NSData *decoded = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
+              NSString *result = [[NSString alloc] initWithData:decoded encoding:NSUTF8StringEncoding];
+              lua_pushstring(L, [result UTF8String]);
+              return 1;
+          }
+
+          static int xzx_messagebox(lua_State *L) {
+              const char *text = luaL_checkstring(L, 1);
+              const char *caption = luaL_optstring(L, 2, "XZX");
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
+                                                                                 message:[NSString stringWithUTF8String:text]
+                                                                          preferredStyle:UIAlertControllerStyleAlert];
+                  [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                  UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+                  UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
+                  [rootVC presentViewController:alert animated:YES completion:nil];
+              });
+              return 0;
+          }
+
           void InitLua(void) {
+              std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) {
                   L = luaL_newstate();
                   if (L) {
                       lua_register(L, "print", xzx_print);
                       lua_register(L, "loadstring", xzx_loadstring);
                       lua_register(L, "HttpGet", xzx_httpget);
+                      lua_register(L, "game_HttpGet", xzx_httpget);
                       lua_register(L, "base64encode", xzx_base64_encode);
                       lua_register(L, "base64decode", xzx_base64_decode);
+                      lua_register(L, "base64codes", xzx_base64codes);
+                      lua_register(L, "messagebox", xzx_messagebox);
                       
                       lua_newtable(L);
                       lua_pushstring(L, "XZX");
@@ -135,15 +194,22 @@ jobs:
                       lua_pushstring(L, "3.0.0");
                       lua_setfield(L, -2, "version");
                       lua_setglobal(L, "xzx");
+                      
+                      NSLog(@"[XZX] Lua initialized");
                   }
               }
           }
 
           void ExecuteScript(const char *script) {
+              std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) InitLua();
               if (L && script && strlen(script) > 0) {
-                  luaL_loadstring(L, script);
-                  lua_pcall(L, 0, 0, 0);
+                  @try {
+                      int status = luaL_loadstring(L, script);
+                      if (status == 0) {
+                          lua_pcall(L, 0, 0, 0);
+                      }
+                  } @catch (NSException *exception) {}
               }
           }
           EOF
@@ -159,25 +225,36 @@ jobs:
           #endif
           EOF
       
-      - name: Create minimal UI (NO ROBLOX INTERACTION)
+      - name: Create MainViewController.swift
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
+
           public class MainViewController: UIViewController {
               private let textView = UITextView()
               private let executeButton = UIButton()
               private let clearButton = UIButton()
+              private let closeButton = UIButton()
               
               public override func viewDidLoad() {
                   super.viewDidLoad()
                   view.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
                   view.layer.cornerRadius = 18
+                  view.layer.masksToBounds = true
+                  
+                  let titleLabel = UILabel()
+                  titleLabel.frame = CGRect(x: 20, y: 20, width: 200, height: 30)
+                  titleLabel.text = "XZX Executor"
+                  titleLabel.textColor = .white
+                  titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
+                  view.addSubview(titleLabel)
                   
                   textView.frame = CGRect(x: 20, y: 60, width: view.bounds.width - 40, height: 300)
                   textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
                   textView.textColor = .white
                   textView.font = UIFont(name: "Menlo", size: 14)
-                  textView.text = "-- Enter your script here"
+                  textView.layer.cornerRadius = 8
+                  textView.text = "-- XZX Executor\nprint('Hello World!')"
                   view.addSubview(textView)
                   
                   executeButton.frame = CGRect(x: 20, y: 380, width: 120, height: 50)
@@ -194,17 +271,17 @@ jobs:
                   clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
                   view.addSubview(clearButton)
                   
-                  let closeBtn = UIButton(type: .system)
-                  closeBtn.frame = CGRect(x: view.bounds.width - 60, y: 10, width: 50, height: 50)
-                  closeBtn.setTitle("✕", for: .normal)
-                  closeBtn.setTitleColor(.white, for: .normal)
-                  closeBtn.titleLabel?.font = .systemFont(ofSize: 24)
-                  closeBtn.addTarget(self, action: #selector(close), for: .touchUpInside)
-                  view.addSubview(closeBtn)
+                  closeButton.frame = CGRect(x: view.bounds.width - 60, y: 20, width: 40, height: 40)
+                  closeButton.setTitle("✕", for: .normal)
+                  closeButton.setTitleColor(.white, for: .normal)
+                  closeButton.titleLabel?.font = .systemFont(ofSize: 24)
+                  closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
+                  view.addSubview(closeButton)
               }
               
               @objc func executeScript() {
-                  ExecuteScript(textView.text ?? "")
+                  let script = textView.text ?? ""
+                  ExecuteScript(script)
               }
               
               @objc func clearScript() {
@@ -217,17 +294,23 @@ jobs:
           }
           EOF
       
-      - name: Create main entry point
+      - name: Create entry.m
         run: |
           cat > injector/dylib/entry.m << 'EOF'
           #import <UIKit/UIKit.h>
+          #import <objc/runtime.h>
           #import "Core/LuaExecutor.h"
 
           __attribute__((constructor))
           static void initializer() {
               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 
                              dispatch_get_main_queue(), ^{
-                  UIViewController *vc = [[NSClassFromString(@"MainViewController") alloc] init];
+                  UIViewController *vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+                  if (!vc) {
+                      vc = [[NSClassFromString(@"MainViewController") alloc] init];
+                  }
+                  if (!vc) return;
+                  
                   UIWindow *window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
                   window.windowLevel = UIWindowLevelAlert + 1;
                   window.rootViewController = vc;
@@ -235,7 +318,6 @@ jobs:
                   window.hidden = NO;
                   [window makeKeyAndVisible];
                   
-                  // Store window globally to prevent deallocation
                   objc_setAssociatedObject([UIApplication sharedApplication], 
                                            @"XZXWindow", 
                                            window, 
@@ -249,23 +331,63 @@ jobs:
       - name: Compile dylib
         run: |
           mkdir -p build
-          xcrun -sdk iphoneos clang -c -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} -o build/entry.o injector/dylib/entry.m -target arm64-apple-ios15.0
-          xcrun -sdk iphoneos clang++ -c -std=c++11 -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} -o build/LuaExecutor.o injector/dylib/Core/LuaExecutor.mm -target arm64-apple-ios15.0
-          xcrun -sdk iphoneos swiftc -c -module-name XZX -import-objc-header XZX/XZX-Bridging-Header.h -target arm64-apple-ios15.0 -o build/MainViewController.o XZX/MainViewController.swift
-          xcrun -sdk iphoneos clang++ -shared -framework UIKit -framework Foundation -o build/executor.dylib build/*.o -lstdc++ -target arm64-apple-ios15.0
+          
+          # Compile entry.m
+          xcrun -sdk iphoneos clang -c \
+            -I./injector/dylib \
+            -I./injector/dylib/Core \
+            -I${{ env.LUA_INCLUDE_DIR }} \
+            -o build/entry.o \
+            injector/dylib/entry.m \
+            -target arm64-apple-ios15.0
+          
+          # Compile LuaExecutor.mm
+          xcrun -sdk iphoneos clang++ -c \
+            -std=c++11 \
+            -I./injector/dylib \
+            -I./injector/dylib/Core \
+            -I${{ env.LUA_INCLUDE_DIR }} \
+            -o build/LuaExecutor.o \
+            injector/dylib/Core/LuaExecutor.mm \
+            -target arm64-apple-ios15.0
+          
+          # Compile Swift file
+          xcrun -sdk iphoneos swiftc -c \
+            -module-name XZX \
+            -import-objc-header XZX/XZX-Bridging-Header.h \
+            -I . \
+            -I ./injector/dylib \
+            -I ./injector/dylib/Core \
+            -I ${{ env.LUA_INCLUDE_DIR }} \
+            -target arm64-apple-ios15.0 \
+            -o build/MainViewController.o \
+            XZX/MainViewController.swift
+          
+          # Link all object files
+          xcrun -sdk iphoneos clang++ -shared \
+            -framework UIKit \
+            -framework Foundation \
+            -o build/executor.dylib \
+            build/*.o \
+            -lstdc++ \
+            -target arm64-apple-ios15.0
       
       - name: Extract and modify IPA
         run: |
           unzip -q Roblox.ipa -d extracted/
+          
+          # Create Frameworks directory and copy dylib
           mkdir -p extracted/Payload/Roblox.app/Frameworks
           cp build/executor.dylib extracted/Payload/Roblox.app/Frameworks/
+          
+          # Set correct install name
+          install_name_tool -id @rpath/executor.dylib extracted/Payload/Roblox.app/Frameworks/executor.dylib
+          
+          # Remove existing signatures
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
           
-          # Use install_name_tool to set correct library path
-          install_name_tool -id @rpath/executor.dylib extracted/Payload/Roblox.app/Frameworks/executor.dylib
-          
-          # Inject dylib reference into main binary (pre-load at launch, NOT runtime)
+          # Inject dylib reference
           ./tools/insert_dylib @rpath/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
             extracted/Payload/Roblox.app/Roblox_patched \
@@ -278,9 +400,14 @@ jobs:
           plutil -convert xml1 "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName XZX" "$INFO_PLIST" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string XZX" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
           
-          cd extracted; zip -qr ../XZX.ipa Payload/; cd ..
+          # Repackage
+          cd extracted
+          zip -qr ../XZX.ipa Payload/
+          cd ..
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4

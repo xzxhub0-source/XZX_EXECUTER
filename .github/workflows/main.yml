@@ -63,10 +63,9 @@ jobs:
           # Apply the patch
           patch -p0 < src/loslib.c.patch || true
           
-          # Compile Lua for iOS as C (not C++)
+          # Compile Lua for iOS as C
           for file in src/*.c; do
             filename=$(basename "$file" .c)
-            # Skip lua.c (interpreter) and luac.c (compiler)
             if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
               echo "Compiling $filename.c..."
               xcrun -sdk iphoneos clang -c -O2 \
@@ -294,6 +293,7 @@ jobs:
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
+          import Foundation
 
           @objc public class MainViewController: UIViewController {
               private let textView = UITextView()
@@ -320,6 +320,8 @@ jobs:
                   textView.font = UIFont(name: "Menlo", size: 14)
                   textView.layer.cornerRadius = 8
                   textView.text = "-- XZX Executor\nprint('Hello World!')"
+                  textView.autocorrectionType = .no
+                  textView.autocapitalizationType = .none
                   view.addSubview(textView)
                   
                   executeButton.frame = CGRect(x: 20, y: view.bounds.height - 80, width: 120, height: 50)
@@ -365,13 +367,6 @@ jobs:
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
           #import "Core/LuaExecutor.h"
-
-          @interface UIApplication (XZXWindow)
-          @end
-
-          @implementation UIApplication (XZXWindow)
-          static void *XZXWindowKey = &XZXWindowKey;
-          @end
 
           __attribute__((constructor))
           static void initializer() {
@@ -434,30 +429,34 @@ jobs:
             injector/dylib/Core/LuaExecutor.mm \
             -target arm64-apple-ios15.0
           
-          # Compile Swift file with proper module
-          xcrun -sdk iphoneos swiftc -c \
+          # Compile Swift file into a static archive first
+          xcrun -sdk iphoneos swiftc \
+            -emit-library -static \
             -module-name XZX \
             -import-objc-header XZX/XZX-Bridging-Header.h \
+            -L${{ env.LUA_LIB_DIR }} \
             -I . \
             -I ./injector/dylib \
             -I ./injector/dylib/Core \
             -I ${{ env.LUA_INCLUDE_DIR }} \
             -target arm64-apple-ios15.0 \
-            -o build/MainViewController.o \
+            -o build/libXZXSwift.a \
             XZX/MainViewController.swift
           
-          # Link all object files with Lua library
+          # Link all object files
           xcrun -sdk iphoneos clang++ -shared \
             -framework UIKit \
             -framework Foundation \
             -L${{ env.LUA_LIB_DIR }} \
             -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
+            -Wl,-force_load,build/libXZXSwift.a \
             -o build/executor.dylib \
             build/entry.o \
             build/LuaExecutor.o \
-            build/MainViewController.o \
             -lstdc++ \
-            -target arm64-apple-ios15.0
+            -target arm64-apple-ios15.0 \
+            -Xlinker -rpath -Xlinker /usr/lib/swift \
+            -Xlinker -rpath -Xlinker @executable_path/Frameworks
           
           echo "✅ Dylib compiled successfully"
           file build/executor.dylib

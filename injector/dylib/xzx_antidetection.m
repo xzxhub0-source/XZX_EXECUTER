@@ -1,18 +1,21 @@
 #import "xzx_antidetection.h"
 
+static XZXAntiDetection *sharedAntiDetectionInstance = nil;
+
 @implementation XZXAntiDetection
 
 + (instancetype)shared {
-    static XZXAntiDetection *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        instance = [[XZXAntiDetection alloc] init];
+        sharedAntiDetectionInstance = [[XZXAntiDetection alloc] init];
     });
-    return instance;
+    return sharedAntiDetectionInstance;
 }
 
-- (void)initializeProtection {}
-- (void)runIntegrityChecks {}
+- (void)initializeProtection {
+    // DO NOTHING - any attempt to hide/modify memory causes crash
+}
+
 - (BOOL)isUnderInvestigation { return NO; }
 - (void)emergencyShutdown {}
 - (void)obfuscateMemory {}
@@ -23,7 +26,6 @@
 - (void)bypassKRX {}
 - (void)bypassSentinelAC {}
 - (void)bypassPhysicsChecks {}
-- (void)updateBanProbability {}
 - (BOOL)shouldSelfDestruct { return NO; }
 
 @end

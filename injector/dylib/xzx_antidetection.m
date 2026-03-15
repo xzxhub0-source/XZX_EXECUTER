@@ -90,17 +90,16 @@ static XZXAntiDetection *sharedAntiDetectionInstance = nil;
 }
 
 - (BOOL)isUnderInvestigation {
-    int mib[4];
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC;
-    mib[2] = KERN_PROC_PID;
-    mib[3] = getpid();
+    int name[4];
+    name[0] = CTL_KERN;
+    name[1] = KERN_PROC;
+    name[2] = KERN_PROC_PID;
+    name[3] = getpid();
     
     struct kinfo_proc info;
-    size_t size = sizeof(info);
-    info.kp_proc.p_flag = 0;
+    size_t info_size = sizeof(info);
     
-    if (sysctl(mib, 4, &info, &size, NULL, 0) == 0) {
+    if (sysctl(name, 4, &info, &info_size, NULL, 0) == 0) {
         if ((info.kp_proc.p_flag & P_TRACED) != 0) {
             _currentStrikes += 5;
             return YES;

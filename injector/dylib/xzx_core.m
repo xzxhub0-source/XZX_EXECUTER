@@ -1,7 +1,7 @@
+// xzx_core.m - FINAL SAFE VERSION
 #import "xzx_core.h"
 #import "XZX-Swift.h"
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
 
 static XZXCore *sharedCoreInstance = nil;
 
@@ -15,44 +15,26 @@ static XZXCore *sharedCoreInstance = nil;
     return sharedCoreInstance;
 }
 
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _isInGame = NO;
-    }
-    return self;
-}
+// NO +load method. It's too early and can be detected.
 
-+ (void)load {
-    // CRITICAL: DO NOTHING in load - this executes too early
-}
-
-- (void)initialize {
-    // Wait for app to fully launch
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), 
-                   dispatch_get_main_queue(), ^{
-        [self showUI];
+- (void)showUI {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!self.editorWindow) {
+            MainViewController *vc = [[MainViewController alloc] init];
+            self.editorWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+            self.editorWindow.windowLevel = UIWindowLevelAlert + 1;
+            self.editorWindow.rootViewController = vc;
+            self.editorWindow.backgroundColor = [UIColor clearColor];
+        }
+        self.editorWindow.hidden = NO;
     });
 }
 
-- (void)showUI {
-    if (!self.editorWindow) {
-        MainViewController *vc = [[MainViewController alloc] init];
-        self.editorWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        self.editorWindow.windowLevel = UIWindowLevelAlert + 1;
-        self.editorWindow.rootViewController = vc;
-        self.editorWindow.backgroundColor = [UIColor clearColor];
-    }
-    self.editorWindow.hidden = NO;
-    [self.editorWindow makeKeyAndVisible];
+// This method is called by your Swift UI when the user taps "Execute"
+- (void)executeScript:(NSString *)script {
+    // Call your Lua engine here (from LuaExecutor.mm)
+    // This runs in your own Lua state, not Roblox's.
+    ExecuteScript(script);
 }
-
-- (void)hideUI {
-    self.editorWindow.hidden = YES;
-}
-
-// NO GAME STATE MONITORING - it always triggers codesigning
-// NO HOOKS - they always trigger codesigning
-// NO NSClassFromString with unknown classes - triggers detection
 
 @end

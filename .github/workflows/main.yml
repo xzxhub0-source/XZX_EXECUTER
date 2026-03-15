@@ -19,68 +19,31 @@ jobs:
           pipx ensurepath
           pipx install gdown
       
-      - name: Download and install Lua headers from official source
+      - name: Download and install Lua headers
         run: |
           mkdir -p $HOME/lua-ios/include
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
-          if [ ! -f lua-5.4.6.tar.gz ]; then
-            echo "❌ Failed to download Lua source"
-            exit 1
-          fi
           tar -xzf lua-5.4.6.tar.gz
           cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
           cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lua.hpp $HOME/lua-ios/include/
-          if [ ! -f $HOME/lua-ios/include/lua.h ]; then
-            echo "❌ Lua headers not copied correctly"
-            exit 1
-          fi
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          echo "✅ Lua headers installed successfully"
-      
-      - name: Compile minimal Lua core (NO libraries)
-        run: |
-          mkdir -p build
-          cd lua-5.4.6/src
-          # Compile ONLY the absolute core Lua files (no libraries at all)
-          for file in lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c; do
-            if [ -f "$file" ]; then
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang -c -I. -o "../../build/lua_${file%.c}.o" "$file" -target arm64-apple-ios15.0
-            fi
-          done
-          # Also compile lauxlib.c which is needed for luaL_* functions
-          xcrun -sdk iphoneos clang -c -I. -o "../../build/lua_lauxlib.o" lauxlib.c -target arm64-apple-ios15.0
-          cd ../..
-          echo "✅ Minimal Lua core compiled"
       
       - name: Download Roblox IPA
         run: |
           FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
-          if [ ! -f "Roblox.ipa" ]; then
-            echo "❌ Download failed"
-            exit 1
-          fi
-          echo "✅ Download successful! Size: $(ls -la Roblox.ipa | awk '{print $5}') bytes"
       
       - name: Download and compile insert_dylib
         run: |
           git clone https://github.com/tyilo/insert_dylib.git
           cd insert_dylib
           xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib -configuration Release
-          BINARY_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "insert_dylib" -type f | head -1)
-          if [ -z "$BINARY_PATH" ]; then
-            echo "❌ insert_dylib binary not found"
-            exit 1
-          fi
           mkdir -p ../tools
-          cp "$BINARY_PATH" ../tools/insert_dylib
+          cp /Users/runner/Library/Developer/Xcode/DerivedData/insert_dylib-*/Build/Products/Release/insert_dylib ../tools/
           chmod +x ../tools/insert_dylib
           cd ..
-          echo "✅ insert_dylib compiled and installed"
       
       - name: Create directory structure
         run: |
@@ -104,7 +67,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create LuaExecutor.mm (MINIMAL VERSION)
+      - name: Create LuaExecutor.mm
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>
@@ -130,19 +93,12 @@ jobs:
               NSMutableString *output = [NSMutableString string];
               for (int i = 1; i <= n; i++) {
                   if (i > 1) [output appendString:@" "];
-                  if (lua_isstring(L, i)) {
-                      [output appendFormat:@"%s", lua_tostring(L, i)];
-                  } else if (lua_isnumber(L, i)) {
-                      [output appendFormat:@"%g", lua_tonumber(L, i)];
-                  } else if (lua_isboolean(L, i)) {
-                      [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
-                  } else if (lua_istable(L, i)) {
-                      [output appendString:@"table"];
-                  } else if (lua_isfunction(L, i)) {
-                      [output appendString:@"function"];
-                  } else {
-                      [output appendString:@"nil"];
-                  }
+                  if (lua_isstring(L, i)) [output appendFormat:@"%s", lua_tostring(L, i)];
+                  else if (lua_isnumber(L, i)) [output appendFormat:@"%g", lua_tonumber(L, i)];
+                  else if (lua_isboolean(L, i)) [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
+                  else if (lua_istable(L, i)) [output appendString:@"table"];
+                  else if (lua_isfunction(L, i)) [output appendString:@"function"];
+                  else [output appendString:@"nil"];
               }
               NSLog(@"[XZX] %@", output);
               return 0;
@@ -150,7 +106,7 @@ jobs:
 
           static int xzx_warn(lua_State *L) {
               int n = lua_gettop(L);
-              NSMutableString *output = [NSMutableString stringWithString:@"⚠️ "];
+              NSMutableString *output = [NSMutableString string];
               for (int i = 1; i <= n; i++) {
                   if (i > 1) [output appendString:@" "];
                   [output appendFormat:@"%s", lua_tostring(L, i)];
@@ -167,25 +123,7 @@ jobs:
               return lua_error(L);
           }
 
-          static int xzx_type(lua_State *L) {
-              if (lua_gettop(L) < 1) {
-                  lua_pushstring(L, "nil");
-                  return 1;
-              }
-              lua_pushstring(L, lua_typename(L, lua_type(L, 1)));
-              return 1;
-          }
-
-          static int xzx_typeof(lua_State *L) {
-              return xzx_type(L);
-          }
-
           static int xzx_getgenv(lua_State *L) {
-              lua_pushglobaltable(L);
-              return 1;
-          }
-
-          static int xzx_getrenv(lua_State *L) {
               lua_pushglobaltable(L);
               return 1;
           }
@@ -215,9 +153,7 @@ jobs:
           }
 
           static int xzx_newcclosure(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  luaL_error(L, "expected function");
-              }
+              if (!lua_isfunction(L, 1)) luaL_error(L, "expected function");
               lua_pushvalue(L, 1);
               lua_pushcclosure(L, [](lua_State *L) -> int {
                   lua_pushvalue(L, lua_upvalueindex(1));
@@ -230,28 +166,19 @@ jobs:
           }
 
           static int xzx_iscclosure(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  lua_pushboolean(L, 0);
-                  return 1;
-              }
+              if (!lua_isfunction(L, 1)) { lua_pushboolean(L, 0); return 1; }
               lua_pushboolean(L, lua_iscfunction(L, 1));
               return 1;
           }
 
           static int xzx_islclosure(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  lua_pushboolean(L, 0);
-                  return 1;
-              }
+              if (!lua_isfunction(L, 1)) { lua_pushboolean(L, 0); return 1; }
               lua_pushboolean(L, !lua_iscfunction(L, 1));
               return 1;
           }
 
           static int xzx_isexecutorclosure(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  lua_pushboolean(L, 0);
-                  return 1;
-              }
+              if (!lua_isfunction(L, 1)) { lua_pushboolean(L, 0); return 1; }
               lua_Debug ar;
               lua_getinfo(L, ">S", &ar);
               if (ar.source && strstr(ar.source, "=xzx")) {
@@ -263,25 +190,19 @@ jobs:
           }
 
           static int xzx_hookfunction(lua_State *L) {
-              if (!lua_isfunction(L, 1) || !lua_isfunction(L, 2)) {
-                  luaL_error(L, "expected two functions");
-              }
+              if (!lua_isfunction(L, 1) || !lua_isfunction(L, 2)) luaL_error(L, "expected two functions");
               lua_pushvalue(L, 2);
               return 1;
           }
 
           static int xzx_clonefunction(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  luaL_error(L, "expected function");
-              }
+              if (!lua_isfunction(L, 1)) luaL_error(L, "expected function");
               lua_pushvalue(L, 1);
               return 1;
           }
 
           static int xzx_getrawmetatable(lua_State *L) {
-              if (!lua_getmetatable(L, 1)) {
-                  lua_pushnil(L);
-              }
+              if (!lua_getmetatable(L, 1)) lua_pushnil(L);
               return 1;
           }
 
@@ -340,29 +261,20 @@ jobs:
               const char *url = luaL_checkstring(L, 1);
               dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
               __block NSString *result = nil;
-              __block int status_code = 0;
               NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
-              [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
-              [request setTimeoutInterval:30];
+              [request setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
               NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-                  if (data) {
-                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-                      if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-                          status_code = (int)((NSHTTPURLResponse *)response).statusCode;
-                      }
-                  }
+                  if (data) result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
                   dispatch_semaphore_signal(semaphore);
               }];
               [task resume];
-              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
               if (result) {
                   lua_pushstring(L, [result UTF8String]);
-                  lua_pushinteger(L, status_code);
-                  return 2;
+                  return 1;
               }
               lua_pushnil(L);
-              lua_pushstring(L, "Request failed");
-              return 2;
+              return 1;
           }
 
           static int xzx_base64_encode(lua_State *L) {
@@ -382,10 +294,7 @@ jobs:
           }
 
           static int xzx_base64codes(lua_State *L) {
-              if (lua_gettop(L) < 1) {
-                  lua_pushnil(L);
-                  return 1;
-              }
+              if (lua_gettop(L) < 1) { lua_pushnil(L); return 1; }
               const char *input = luaL_checkstring(L, 1);
               NSData *data = [NSData dataWithBytes:input length:strlen(input)];
               NSString *encoded = [data base64EncodedStringWithOptions:0];
@@ -412,9 +321,7 @@ jobs:
 
           static int xzx_delay(lua_State *L) {
               double seconds = luaL_checknumber(L, 1);
-              if (!lua_isfunction(L, 2)) {
-                  luaL_error(L, "expected function");
-              }
+              if (!lua_isfunction(L, 2)) luaL_error(L, "expected function");
               lua_pushvalue(L, 2);
               int ref = luaL_ref(L, LUA_REGISTRYINDEX);
               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -426,9 +333,7 @@ jobs:
           }
 
           static int xzx_spawn(lua_State *L) {
-              if (!lua_isfunction(L, 1)) {
-                  luaL_error(L, "expected function");
-              }
+              if (!lua_isfunction(L, 1)) luaL_error(L, "expected function");
               lua_pushvalue(L, 1);
               int ref = luaL_ref(L, LUA_REGISTRYINDEX);
               dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -444,14 +349,10 @@ jobs:
               if (!L) {
                   L = luaL_newstate();
                   if (L) {
-                      // Register our functions directly - no standard libraries loaded at all
                       lua_register(L, "print", xzx_print);
                       lua_register(L, "warn", xzx_warn);
                       lua_register(L, "error", xzx_error);
-                      lua_register(L, "type", xzx_type);
-                      lua_register(L, "typeof", xzx_typeof);
                       lua_register(L, "getgenv", xzx_getgenv);
-                      lua_register(L, "getrenv", xzx_getrenv);
                       lua_register(L, "getreg", xzx_getreg);
                       lua_register(L, "getgc", xzx_getgc);
                       lua_register(L, "newcclosure", xzx_newcclosure);
@@ -484,29 +385,20 @@ jobs:
                       lua_setfield(L, -2, "version");
                       lua_setglobal(L, "xzx");
                       
-                      NSLog(@"[XZX] Minimal Lua initialized successfully");
-                  } else {
-                      NSLog(@"[XZX] Failed to create Lua state");
+                      NSLog(@"[XZX] Lua initialized");
                   }
               }
           }
 
           void ExecuteScript(const char *script) {
               std::lock_guard<std::mutex> lock(lua_mutex);
-              if (!L) {
-                  InitLua();
-              }
+              if (!L) InitLua();
               if (L && script && strlen(script) > 0) {
                   @try {
-                      [[XZXAntiDetection shared] randomizeInjectionPattern];
-                      [[XZXBanProtection shared] simulateHumanBehavior];
-                      
                       lua_State *thread = lua_newthread(L);
                       int threadRef = luaL_ref(L, LUA_REGISTRYINDEX);
                       int status = luaL_loadstring(thread, script);
                       if (status != 0) {
-                          const char *error = lua_tostring(thread, -1);
-                          NSLog(@"[XZX] Error: %s", error);
                           luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
                           return;
                       }
@@ -514,17 +406,11 @@ jobs:
                           lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
                           lua_State *exec_thread = lua_tothread(L, -1);
                           if (exec_thread) {
-                              int result = lua_pcall(exec_thread, 0, 0, 0);
-                              if (result != 0) {
-                                  const char *error = lua_tostring(exec_thread, -1);
-                                  NSLog(@"[XZX] Execution error: %s", error);
-                              }
+                              lua_pcall(exec_thread, 0, 0, 0);
                           }
                           luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
                       });
-                  } @catch (NSException *exception) {
-                      NSLog(@"[XZX] ExecuteScript exception: %@", exception);
-                  }
+                  } @catch (NSException *exception) {}
               }
           }
           EOF
@@ -566,17 +452,11 @@ jobs:
           #import "xzx_core.h"
           #import "xzx_antidetection.h"
           #import "xzx_ban_protection.h"
-          #import "xzx_injection_randomizer.h"
-          #import "xzx_hook_manager.h"
           #import "Core/LuaExecutor.h"
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
-          #import <mach/mach.h>
-          #import <mach-o/dyld.h>
 
           static XZXCore *sharedCoreInstance = nil;
-          static uintptr_t roblox_base = 0;
-          static BOOL is_initialized = NO;
 
           @implementation XZXCore
 
@@ -598,147 +478,39 @@ jobs:
           }
 
           + (void)load {
-              NSLog(@"[XZX] Library loaded - delaying initialization");
               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), 
                              dispatch_get_main_queue(), ^{
-                  @try {
-                      NSLog(@"[XZX] Starting initialization...");
-                      [[XZXCore shared] initialize];
-                  } @catch (NSException *exception) {
-                      NSLog(@"[XZX] INITIALIZATION CRASH: %@", exception);
-                      NSLog(@"[XZX] Reason: %@", exception.reason);
-                      NSLog(@"[XZX] Stack: %@", exception.callStackSymbols);
-                  }
+                  [[XZXCore shared] initialize];
               });
           }
 
           - (void)initialize {
-              NSLog(@"[XZX] initialize started");
-              
               @try {
-                  NSLog(@"[XZX] Testing Objective-C runtime...");
-                  if (![NSObject class]) {
-                      NSLog(@"[XZX] CRITICAL: Objective-C runtime not available");
-                      return;
-                  }
-                  
-                  NSLog(@"[XZX] Initializing AntiDetection...");
-                  id antiDetection = [XZXAntiDetection shared];
-                  if (antiDetection) {
-                      [antiDetection initializeProtection];
-                      NSLog(@"[XZX] AntiDetection OK");
-                  } else {
-                      NSLog(@"[XZX] WARNING: AntiDetection returned nil");
-                  }
-                  
-                  NSLog(@"[XZX] Initializing BanProtection...");
-                  id banProtection = [XZXBanProtection shared];
-                  if (banProtection) {
-                      [banProtection protectAccount];
-                      NSLog(@"[XZX] BanProtection OK");
-                  } else {
-                      NSLog(@"[XZX] WARNING: BanProtection returned nil");
-                  }
-                  
-                  NSLog(@"[XZX] Initializing InjectionRandomizer...");
-                  id injectionRandomizer = [XZXInjectionRandomizer shared];
-                  if (injectionRandomizer) {
-                      [injectionRandomizer randomizeNextInjection];
-                      NSLog(@"[XZX] InjectionRandomizer OK");
-                  } else {
-                      NSLog(@"[XZX] WARNING: InjectionRandomizer returned nil");
-                  }
-                  
-                  NSLog(@"[XZX] Initializing HookManager...");
-                  id hookManager = [XZXHookManager shared];
-                  if (hookManager) {
-                      [hookManager initializeHookSystem];
-                      NSLog(@"[XZX] HookManager OK");
-                  } else {
-                      NSLog(@"[XZX] WARNING: HookManager returned nil");
-                  }
-                  
-                  NSLog(@"[XZX] Scanning Roblox memory...");
-                  [self scanRobloxMemory];
-                  NSLog(@"[XZX] Memory scan complete");
-                  
-                  NSLog(@"[XZX] Starting game state monitoring...");
-                  [self startGameStateMonitoring];
-                  NSLog(@"[XZX] Monitoring started");
-                  
-                  NSLog(@"[XZX] Initializing Lua...");
+                  [[XZXAntiDetection shared] initializeProtection];
+                  [[XZXBanProtection shared] protectAccount];
                   InitLua();
-                  NSLog(@"[XZX] Lua initialized successfully");
-                  
-                  NSLog(@"[XZX] All systems initialized successfully");
-                  
-              } @catch (NSException *exception) {
-                  NSLog(@"[XZX] CRASH DURING INITIALIZATION: %@", exception);
-                  NSLog(@"[XZX] Exception name: %@", exception.name);
-                  NSLog(@"[XZX] Exception reason: %@", exception.reason);
-                  NSLog(@"[XZX] Call stack: %@", exception.callStackSymbols);
-              } @finally {
-                  NSLog(@"[XZX] Initialize completed");
-              }
-          }
-
-          - (void)scanRobloxMemory {
-              @try {
-                  uint32_t count = _dyld_image_count();
-                  NSLog(@"[XZX] Found %u loaded images", count);
-                  
-                  for (uint32_t i = 0; i < count; i++) {
-                      const char *name = _dyld_get_image_name(i);
-                      if (name) {
-                          if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
-                              roblox_base = (uintptr_t)_dyld_get_image_header(i);
-                              NSLog(@"[XZX] Found Roblox at base: 0x%lx", (unsigned long)roblox_base);
-                              break;
-                          }
-                      }
-                  }
-                  
-                  if (roblox_base == 0) {
-                      NSLog(@"[XZX] WARNING: Could not find Roblox binary");
-                  }
-              } @catch (NSException *exception) {
-                  NSLog(@"[XZX] Memory scan error: %@", exception);
-              }
+                  [self startGameStateMonitoring];
+              } @catch (NSException *exception) {}
           }
 
           - (void)startGameStateMonitoring {
               dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
                   @autoreleasepool {
                       BOOL lastInGame = NO;
-                      int checkCount = 0;
-                      
                       while (YES) {
                           @try {
-                              checkCount++;
                               BOOL currentlyInGame = [self checkIfInGame];
-                              
                               if (currentlyInGame && !lastInGame) {
-                                  NSLog(@"[XZX] Game joined detected");
                                   dispatch_async(dispatch_get_main_queue(), ^{
                                       [self onGameJoined];
                                   });
                               } else if (!currentlyInGame && lastInGame) {
-                                  NSLog(@"[XZX] Game left detected");
                                   dispatch_async(dispatch_get_main_queue(), ^{
                                       [self onGameLeft];
                                   });
                               }
-                              
                               lastInGame = currentlyInGame;
-                              
-                              if (checkCount % 60 == 0) {
-                                  NSLog(@"[XZX] Monitor running, inGame: %d", currentlyInGame);
-                              }
-                              
-                          } @catch (NSException *exception) {
-                              NSLog(@"[XZX] Monitor thread error: %@", exception);
-                          }
-                          
+                          } @catch (NSException *exception) {}
                           [NSThread sleepForTimeInterval:1.0];
                       }
                   }
@@ -746,44 +518,34 @@ jobs:
           }
 
           - (BOOL)checkIfInGame {
-              return YES;
+              @try {
+                  Class cls = NSClassFromString(@"RobloxDataModel");
+                  if (cls) {
+                      SEL sel = NSSelectorFromString(@"sharedDataModel");
+                      if ([cls respondsToSelector:sel]) {
+                          id dm = ((id(*)(id, SEL))objc_msgSend)(cls, sel);
+                          if (dm) {
+                              SEL placeSel = NSSelectorFromString(@"placeId");
+                              if ([dm respondsToSelector:placeSel]) {
+                                  id pid = ((id(*)(id, SEL))objc_msgSend)(dm, placeSel);
+                                  return pid != nil;
+                              }
+                          }
+                      }
+                  }
+              } @catch (NSException *exception) {}
+              return NO;
           }
 
           - (void)onGameJoined {
-              if (self.isInGame) {
-                  NSLog(@"[XZX] Already in game, ignoring duplicate join");
-                  return;
-              }
-              
-              @try {
-                  self.isInGame = YES;
-                  NSLog(@"[XZX] Game joined event fired");
-                  
-                  [[XZXAntiDetection shared] randomizeInjectionPattern];
-                  [[XZXBanProtection shared] simulateHumanBehavior];
-                  
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      [[NSNotificationCenter defaultCenter] postNotificationName:@"GameJoined" object:nil];
-                  });
-              } @catch (NSException *exception) {
-                  NSLog(@"[XZX] onGameJoined error: %@", exception);
-              }
+              if (self.isInGame) return;
+              self.isInGame = YES;
+              [[XZXAntiDetection shared] randomizeInjectionPattern];
+              [[XZXBanProtection shared] simulateHumanBehavior];
           }
 
           - (void)onGameLeft {
-              @try {
-                  self.isInGame = NO;
-                  NSLog(@"[XZX] Game left event fired");
-                  
-                  [[XZXAntiDetection shared] cleanTraces];
-                  [[XZXBanProtection shared] removeTraces];
-                  
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      [[NSNotificationCenter defaultCenter] postNotificationName:@"GameLeft" object:nil];
-                  });
-              } @catch (NSException *exception) {
-                  NSLog(@"[XZX] onGameLeft error: %@", exception);
-              }
+              self.isInGame = NO;
           }
 
           void notify_game_joined(void) {
@@ -797,66 +559,6 @@ jobs:
           @end
           EOF
       
-      - name: Create xzx_hooks.h
-        run: |
-          cat > injector/dylib/xzx_hooks.h << 'EOF'
-          #ifndef XZX_HOOKS_H
-          #define XZX_HOOKS_H
-          #include <stdio.h>
-          #include <stdint.h>
-          #include <stdbool.h>
-          void hook_roblox_functions(void);
-          void unhook_roblox_functions(void);
-          bool isPlayerInGame(void);
-          #endif
-          EOF
-      
-      - name: Create xzx_hooks.m
-        run: |
-          cat > injector/dylib/xzx_hooks.m << 'EOF'
-          #import "xzx_hooks.h"
-          #import "xzx_core.h"
-          #import "xzx_hook_manager.h"
-          #import <mach/mach.h>
-          #import <mach-o/dyld.h>
-
-          static void *original_functions[256];
-          static int hook_count = 0;
-
-          void install_hook(void *target, void *replacement) {
-              if (!target || !replacement) return;
-              original_functions[hook_count++] = target;
-              vm_address_t address = (vm_address_t)target;
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
-                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-              uint32_t branch_instruction = 0x14000000 | 
-                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
-              memcpy(target, &branch_instruction, 4);
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
-                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_EXECUTE);
-          }
-
-          void hook_roblox_functions(void) {
-              uint32_t count = _dyld_image_count();
-              uintptr_t roblox_base = 0;
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
-                      roblox_base = (uintptr_t)_dyld_get_image_header(i);
-                      break;
-                  }
-              }
-          }
-
-          void unhook_roblox_functions(void) {
-              hook_count = 0;
-          }
-
-          bool isPlayerInGame(void) {
-              return YES;
-          }
-          EOF
-      
       - name: Create xzx_antidetection.h
         run: |
           cat > injector/dylib/xzx_antidetection.h << 'EOF'
@@ -866,30 +568,12 @@ jobs:
           @interface XZXAntiDetection : NSObject
           + (instancetype)shared;
           - (void)initializeProtection;
-          - (void)runIntegrityChecks;
+          - (void)randomizeInjectionPattern;
+          - (void)cleanTraces;
           - (BOOL)isUnderInvestigation;
           - (void)emergencyShutdown;
-          - (void)obfuscateMemory;
-          - (void)randomizeInjectionPattern;
-          - (void)spoofConnections;
-          - (void)cleanTraces;
-          - (void)bypassAdonis;
-          - (void)bypassKRX;
-          - (void)bypassSentinelAC;
-          - (void)bypassPhysicsChecks;
-          - (void)updateBanProbability;
-          - (BOOL)shouldSelfDestruct;
-          - (void)updateOffsetsForVersion:(NSString *)version;
-          - (void)rotateDetectionPatterns;
-          - (void)spoofHardwareID;
-          - (void)hideFromMemoryScanners;
-          - (void)simulateNormalBehavior;
           @property (nonatomic, assign) NSInteger currentStrikes;
-          @property (nonatomic, assign) NSInteger maxStrikes;
-          @property (nonatomic, strong) NSMutableDictionary *strikeReasons;
           @property (nonatomic, assign) double banProbability;
-          @property (nonatomic, strong) NSString *currentRobloxVersion;
-          @property (nonatomic, strong) NSDictionary *versionOffsets;
           @end
           #endif
           EOF
@@ -898,16 +582,10 @@ jobs:
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
-          #import "xzx_memory_obfuscator.h"
-          #import "xzx_injection_randomizer.h"
-          #import "xzx_physics_bypass.h"
-          #import "xzx_hook_manager.h"
           #import <mach/mach.h>
           #import <mach-o/dyld.h>
           #import <dlfcn.h>
           #import <sys/sysctl.h>
-          #import <UIKit/UIKit.h>
-          #import <CommonCrypto/CommonDigest.h>
 
           static XZXAntiDetection *sharedAntiDetectionInstance = nil;
 
@@ -925,215 +603,91 @@ jobs:
               self = [super init];
               if (self) {
                   _currentStrikes = 0;
-                  _maxStrikes = 15;
-                  _strikeReasons = [NSMutableDictionary dictionary];
                   _banProbability = 0.0;
-                  _currentRobloxVersion = [self getRobloxVersion];
               }
               return self;
           }
 
-          - (NSString *)getRobloxVersion {
-              NSString *appVersion = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-              if (!appVersion) {
-                  appVersion = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
-              }
-              return appVersion ?: @"2.711.871";
-          }
-
           - (void)initializeProtection {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                  [self obfuscateMemory];
-                  [self hideFromMemoryScanners];
-                  [self spoofHardwareID];
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      [self runIntegrityChecks];
-                      [self rotateDetectionPatterns];
-                  });
-              });
+              [self hideFromDyld];
+              [self setupAntiDebug];
           }
 
-          - (void)runIntegrityChecks {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  while (YES) {
-                      if ([self isUnderInvestigation]) {
-                          dispatch_async(dispatch_get_main_queue(), ^{
-                              [self emergencyShutdown];
-                          });
-                          break;
-                      }
-                      [self updateBanProbability];
-                      if ([self shouldSelfDestruct]) {
-                          dispatch_async(dispatch_get_main_queue(), ^{
-                              [self emergencyShutdown];
-                              exit(0);
-                          });
-                          break;
-                      }
-                      [NSThread sleepForTimeInterval:5.0];
-                  }
-              });
-          }
-
-          - (BOOL)isUnderInvestigation {
+          - (void)hideFromDyld {
               uint32_t count = _dyld_image_count();
               for (uint32_t i = 0; i < count; i++) {
                   const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "FLEX") || strstr(name, "Cycript") || strstr(name, "SSLKill")) {
-                      _currentStrikes += 3;
-                      return YES;
+                  if (strstr(name, "executor.dylib")) {
+                      uintptr_t header = (uintptr_t)_dyld_get_image_header(i);
+                      size_t size = 0;
+                      const uint8_t *cmd = (const uint8_t *)header + sizeof(struct mach_header_64);
+                      for (int j = 0; j < ((struct mach_header_64 *)header)->ncmds; j++) {
+                          struct load_command *lc = (struct load_command *)cmd;
+                          if (lc->cmd == LC_SEGMENT_64) {
+                              struct segment_command_64 *seg = (struct segment_command_64 *)cmd;
+                              if (strcmp(seg->segname, "__TEXT") == 0) size = seg->vmsize;
+                          }
+                          cmd += lc->cmdsize;
+                      }
+                      if (size > 0) {
+                          vm_address_t addr = header;
+                          vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), size + PAGE_SIZE, 0,
+                                     VM_PROT_READ | VM_PROT_WRITE);
+                          memset((void *)header, 0, 0x100);
+                          vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), size + PAGE_SIZE, 0,
+                                     VM_PROT_READ | VM_PROT_EXECUTE);
+                      }
+                      break;
                   }
               }
-              
-              NSArray *suspiciousProcesses = @[@"debugserver", @"gdb", @"lldb"];
-              for (NSString *proc in suspiciousProcesses) {
-                  FILE *pipe = popen([[NSString stringWithFormat:@"ps -A | grep %@", proc] UTF8String], "r");
-                  if (pipe) {
-                      char buffer[128];
-                      if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-                          pclose(pipe);
-                          _currentStrikes += 2;
-                          return YES;
-                      }
-                      pclose(pipe);
+          }
+
+          - (void)setupAntiDebug {
+              void *handle = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_NOW);
+              if (handle) {
+                  void *ptrace = dlsym(handle, "ptrace");
+                  if (ptrace) {
+                      vm_address_t addr = (vm_address_t)ptrace;
+                      vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
+                                 VM_PROT_READ | VM_PROT_WRITE);
+                      uint32_t ret = 0x00000020;
+                      memcpy(ptrace, &ret, 4);
+                      vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
+                                 VM_PROT_READ | VM_PROT_EXECUTE);
+                  }
+                  dlclose(handle);
+              }
+          }
+
+          - (void)randomizeInjectionPattern {
+              usleep((arc4random_uniform(500) + 100) * 1000);
+          }
+
+          - (void)cleanTraces {
+              [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXExecutionHistory"];
+              [[NSUserDefaults standardUserDefaults] synchronize];
+          }
+
+          - (BOOL)isUnderInvestigation {
+              int mib[4];
+              struct kinfo_proc info;
+              size_t size = sizeof(info);
+              mib[0] = CTL_KERN;
+              mib[1] = KERN_PROC;
+              mib[2] = KERN_PID;
+              mib[3] = getpid();
+              if (sysctl(mib, 4, &info, &size, NULL, 0) == 0) {
+                  if ((info.kp_proc.p_flag & P_TRACED) != 0) {
+                      _currentStrikes += 5;
+                      return YES;
                   }
               }
               return NO;
           }
 
           - (void)emergencyShutdown {
-              [[XZXHookManager shared] restoreAllFunctions];
               [self cleanTraces];
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                  UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
-                  
-                  UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XZX Security"
-                                                                                 message:@"Security breach detected. Cleaning traces..."
-                                                                          preferredStyle:UIAlertControllerStyleAlert];
-                  [rootVC presentViewController:alert animated:YES completion:^{
-                      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                          [alert dismissViewControllerAnimated:YES completion:nil];
-                      });
-                  }];
-              });
-          }
-
-          - (void)obfuscateMemory {
-              uint32_t count = _dyld_image_count();
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "executor.dylib")) {
-                      const struct mach_header *header = _dyld_get_image_header(i);
-                      intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-                      break;
-                  }
-              }
-          }
-
-          - (void)randomizeInjectionPattern {
-              [[XZXInjectionRandomizer shared] randomizeNextInjection];
-              [[XZXInjectionRandomizer shared] randomizeInjectionTiming];
-          }
-
-          - (void)spoofConnections {
-              NSArray *connections = @[
-                  @"https://www.roblox.com",
-                  @"https://api.roblox.com",
-                  @"https://thumbnails.roblox.com"
-              ];
-              for (NSString *url in connections) {
-                  NSURL *spoofUrl = [NSURL URLWithString:url];
-                  NSURLRequest *request = [NSURLRequest requestWithURL:spoofUrl];
-                  NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-                  }];
-                  [task resume];
-              }
-          }
-
-          - (void)cleanTraces {
-              [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXExecutionHistory"];
-              [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"XZXSavedScripts"];
-              [[NSUserDefaults standardUserDefaults] synchronize];
-              
-              NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
-              NSString *cachePath = [paths firstObject];
-              NSFileManager *fm = [NSFileManager defaultManager];
-              NSArray *cacheFiles = [fm contentsOfDirectoryAtPath:cachePath error:nil];
-              
-              for (NSString *file in cacheFiles) {
-                  if ([file hasPrefix:@"xzx_"] || [file containsString:@"executor"]) {
-                      [fm removeItemAtPath:[cachePath stringByAppendingPathComponent:file] error:nil];
-                  }
-              }
-          }
-
-          - (void)bypassAdonis {
-              [[XZXHookManager shared] hideFromAdonis];
-          }
-
-          - (void)bypassKRX {
-              [[XZXHookManager shared] randomizeHookOrder];
-          }
-
-          - (void)bypassSentinelAC {
-              [self simulateNormalBehavior];
-          }
-
-          - (void)bypassPhysicsChecks {
-              [[XZXPhysicsBypass shared] setTeleportGrace:3.0];
-          }
-
-          - (void)updateBanProbability {
-              _banProbability = (double)_currentStrikes / _maxStrikes;
-              if (_banProbability > 0.7) {
-                  [self rotateDetectionPatterns];
-                  [self cleanTraces];
-              }
-          }
-
-          - (BOOL)shouldSelfDestruct {
-              return _banProbability > 0.95 || _currentStrikes >= _maxStrikes;
-          }
-
-          - (void)updateOffsetsForVersion:(NSString *)version {
-          }
-
-          - (void)rotateDetectionPatterns {
-              static int patternCounter = 0;
-              patternCounter++;
-              switch (patternCounter % 3) {
-                  case 0:
-                      [self spoofHardwareID];
-                      break;
-                  case 1:
-                      [self hideFromMemoryScanners];
-                      break;
-                  case 2:
-                      [self simulateNormalBehavior];
-                      break;
-              }
-          }
-
-          - (void)spoofHardwareID {
-              NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-              NSString *spoofedID = [NSString stringWithFormat:@"%08X-%04X-%04X-%04X-%08X%04X",
-                                     arc4random(), arc4random() & 0xFFFF,
-                                     arc4random() & 0xFFFF, arc4random() & 0xFFFF,
-                                     arc4random(), arc4random() & 0xFFFF];
-              [defaults setObject:spoofedID forKey:@"XZXSpoofedID"];
-              [defaults synchronize];
-          }
-
-          - (void)hideFromMemoryScanners {
-          }
-
-          - (void)simulateNormalBehavior {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  for (int i = 0; i < 10; i++) {
-                      [NSThread sleepForTimeInterval:0.1 + (arc4random_uniform(100) / 100.0)];
-                  }
-              });
+              exit(0);
           }
 
           @end
@@ -1149,24 +703,14 @@ jobs:
           + (instancetype)shared;
           - (void)protectAccount;
           - (void)spoofHardwareID;
-          - (void)useAlternateAccount;
-          - (void)rotateAccounts;
           - (BOOL)checkBanStatus;
-          - (void)detectBanWave;
           - (void)emergencyLogout;
           - (void)clearRobloxCache;
           - (void)deleteLogs;
           - (void)removeTraces;
-          - (void)updateBanPatterns;
           - (void)simulateHumanBehavior;
-          - (void)randomizeActionTiming;
-          - (void)avoidPatternRecognition;
           @property (nonatomic, assign) BOOL isBanned;
           @property (nonatomic, strong) NSString *currentHWID;
-          @property (nonatomic, strong) NSMutableArray *accountPool;
-          @property (nonatomic, strong) NSMutableArray *actionHistory;
-          @property (nonatomic, assign) NSInteger actionCount;
-          @property (nonatomic, assign) NSTimeInterval lastActionTime;
           @end
           #endif
           EOF
@@ -1175,9 +719,7 @@ jobs:
         run: |
           cat > injector/dylib/xzx_ban_protection.m << 'EOF'
           #import "xzx_ban_protection.h"
-          #import "xzx_antidetection.h"
           #import <UIKit/UIKit.h>
-          #import <AdSupport/AdSupport.h>
           #import <CommonCrypto/CommonDigest.h>
 
           static XZXBanProtection *sharedBanProtectionInstance = nil;
@@ -1196,52 +738,26 @@ jobs:
               self = [super init];
               if (self) {
                   _isBanned = NO;
-                  _accountPool = [NSMutableArray array];
-                  _actionHistory = [NSMutableArray array];
-                  _actionCount = 0;
-                  _lastActionTime = 0;
-                  [self getCurrentHWID];
-                  [self startBanMonitoring];
+                  [self generateHWID];
               }
               return self;
           }
 
-          - (void)getCurrentHWID {
-              @try {
-                  NSString *idfv = [UIDevice currentDevice].identifierForVendor.UUIDString;
-                  NSString *idfa = [[[ASIdentifierManager sharedManager] advertisingIdentifier] UUIDString];
-                  NSString *hwid = [NSString stringWithFormat:@"%@%@", idfv ?: @"", idfa ?: @""];
-                  const char *str = [hwid UTF8String];
-                  unsigned char result[CC_SHA256_DIGEST_LENGTH];
-                  CC_SHA256(str, (CC_LONG)strlen(str), result);
-                  NSMutableString *ret = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
-                  for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-                      [ret appendFormat:@"%02x", result[i]];
-                  }
-                  _currentHWID = ret;
-              } @catch (NSException *exception) {
-                  NSMutableString *hwid = [NSMutableString string];
-                  for (int i = 0; i < 32; i++) {
-                      [hwid appendFormat:@"%02x", arc4random_uniform(256)];
-                  }
-                  _currentHWID = hwid;
+          - (void)generateHWID {
+              NSString *idfv = [UIDevice currentDevice].identifierForVendor.UUIDString;
+              if (!idfv) idfv = @"";
+              const char *str = [idfv UTF8String];
+              unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+              CC_SHA256(str, (CC_LONG)strlen(str), hash);
+              NSMutableString *result = [NSMutableString string];
+              for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+                  [result appendFormat:@"%02x", hash[i]];
               }
-          }
-
-          - (void)startBanMonitoring {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  while (YES) {
-                      [self detectBanWave];
-                      [self checkBanStatus];
-                      [NSThread sleepForTimeInterval:30.0];
-                  }
-              });
+              _currentHWID = result;
           }
 
           - (void)protectAccount {
               [self spoofHardwareID];
-              [self randomizeActionTiming];
-              [self simulateHumanBehavior];
           }
 
           - (void)spoofHardwareID {
@@ -1249,17 +765,15 @@ jobs:
               for (int i = 0; i < 32; i++) {
                   [newHWID appendFormat:@"%02x", arc4random_uniform(256)];
               }
-              NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-              [defaults setObject:newHWID forKey:@"XZXSpoofedHWID"];
-              [defaults synchronize];
-              _currentHWID = newHWID;
+              [[NSUserDefaults standardUserDefaults] setObject:newHWID forKey:@"XZXSpoofedHWID"];
+              [[NSUserDefaults standardUserDefaults] synchronize];
           }
 
           - (BOOL)checkBanStatus {
-              NSURL *url = [NSURL URLWithString:@"https://www.roblox.com/Thumbs/avatar.ashx?x=100&y=100"];
-              NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringCacheData timeoutInterval:5.0];
               dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
               __block BOOL banned = NO;
+              NSURL *url = [NSURL URLWithString:@"https://www.roblox.com"];
+              NSURLRequest *request = [NSURLRequest requestWithURL:url];
               NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
                   NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
                   if (httpResponse.statusCode == 403 || httpResponse.statusCode == 429) {
@@ -1268,47 +782,15 @@ jobs:
                   dispatch_semaphore_signal(semaphore);
               }];
               [task resume];
-              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC));
+              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
               _isBanned = banned;
               return banned;
-          }
-
-          - (void)detectBanWave {
-              static int checkCount = 0;
-              checkCount++;
-              if (checkCount % 10 == 0) {
-                  BOOL isBanned = [self checkBanStatus];
-                  if (isBanned) {
-                      [self emergencyLogout];
-                  }
-              }
-              NSArray *banIndicators = @[
-                  @"You were banned",
-                  @"Account has been disabled",
-                  @"termination",
-                  @"suspended"
-              ];
-              for (NSString *indicator in banIndicators) {
-                  if ([[NSUserDefaults standardUserDefaults] objectForKey:indicator]) {
-                      _isBanned = YES;
-                      [self emergencyLogout];
-                      break;
-                  }
-              }
           }
 
           - (void)emergencyLogout {
               _isBanned = YES;
               [self clearRobloxCache];
               [self deleteLogs];
-              [self removeTraces];
-              [[XZXAntiDetection shared] emergencyShutdown];
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  NSURL *url = [NSURL URLWithString:@"https://www.roblox.com"];
-                  if ([[UIApplication sharedApplication] canOpenURL:url]) {
-                      [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
-                  }
-              });
           }
 
           - (void)clearRobloxCache {
@@ -1318,8 +800,7 @@ jobs:
                   if (!libraryPath) return;
                   NSArray *cachePaths = @[
                       [libraryPath stringByAppendingPathComponent:@"Caches/com.roblox.Roblox"],
-                      [libraryPath stringByAppendingPathComponent:@"Preferences/com.roblox.Roblox.plist"],
-                      [libraryPath stringByAppendingPathComponent:@"Application Support/com.roblox.Roblox"]
+                      [libraryPath stringByAppendingPathComponent:@"Preferences/com.roblox.Roblox.plist"]
                   ];
                   NSFileManager *fm = [NSFileManager defaultManager];
                   for (NSString *path in cachePaths) {
@@ -1327,8 +808,7 @@ jobs:
                           [fm removeItemAtPath:path error:nil];
                       }
                   }
-              } @catch (NSException *exception) {
-              }
+              } @catch (NSException *exception) {}
           }
 
           - (void)deleteLogs {
@@ -1340,88 +820,16 @@ jobs:
                   if ([[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
                       [[NSFileManager defaultManager] removeItemAtPath:logPath error:nil];
                   }
-                  NSString *tmpPath = NSTemporaryDirectory();
-                  NSArray *tmpFiles = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:tmpPath error:nil];
-                  for (NSString *file in tmpFiles) {
-                      if ([file hasPrefix:@"xzx_"] || [file containsString:@"executor"]) {
-                          [[NSFileManager defaultManager] removeItemAtPath:[tmpPath stringByAppendingPathComponent:file] error:nil];
-                      }
-                  }
-              } @catch (NSException *exception) {
-              }
+              } @catch (NSException *exception) {}
           }
 
           - (void)removeTraces {
               [self clearRobloxCache];
               [self deleteLogs];
-              [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:[[NSBundle mainBundle] bundleIdentifier]];
-              [[NSUserDefaults standardUserDefaults] synchronize];
-          }
-
-          - (void)useAlternateAccount {
-              if (_accountPool.count > 0) {
-                  NSString *altAccount = _accountPool[arc4random_uniform((uint32_t)_accountPool.count)];
-                  [[NSUserDefaults standardUserDefaults] setObject:altAccount forKey:@"XZXAltAccount"];
-                  [[NSUserDefaults standardUserDefaults] synchronize];
-              }
-          }
-
-          - (void)rotateAccounts {
-              if (_accountPool.count > 1) {
-                  NSMutableArray *rotated = [NSMutableArray array];
-                  NSUInteger start = arc4random_uniform((uint32_t)_accountPool.count);
-                  for (NSUInteger i = 0; i < _accountPool.count; i++) {
-                      [rotated addObject:_accountPool[(start + i) % _accountPool.count]];
-                  }
-                  _accountPool = rotated;
-              }
-          }
-
-          - (void)updateBanPatterns {
-              _actionCount = 0;
-              _lastActionTime = [NSDate timeIntervalSinceReferenceDate];
-              [_actionHistory removeAllObjects];
           }
 
           - (void)simulateHumanBehavior {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  int actions = arc4random_uniform(5) + 1;
-                  for (int i = 0; i < actions; i++) {
-                      [self randomizeActionTiming];
-                      NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-                      [_actionHistory addObject:@(now - _lastActionTime)];
-                      _lastActionTime = now;
-                      _actionCount++;
-                      if (_actionHistory.count > 20) {
-                          [_actionHistory removeObjectAtIndex:0];
-                      }
-                  }
-              });
-          }
-
-          - (void)randomizeActionTiming {
-              NSTimeInterval baseDelay = 0.5;
-              NSTimeInterval randomDelay = (arc4random_uniform(100) / 100.0) * 2.0;
-              if (_actionHistory.count > 0) {
-                  NSNumber *avg = [_actionHistory valueForKeyPath:@"@avg.self"];
-                  baseDelay = MAX(0.3, avg.doubleValue * 0.8);
-              }
-              usleep((baseDelay + randomDelay) * 1000000);
-          }
-
-          - (void)avoidPatternRecognition {
-              if (_actionHistory.count > 10) {
-                  double avg = [[_actionHistory valueForKeyPath:@"@avg.self"] doubleValue];
-                  double variance = 0;
-                  for (NSNumber *time in _actionHistory) {
-                      variance += pow(time.doubleValue - avg, 2);
-                  }
-                  variance /= _actionHistory.count;
-                  if (variance < 0.1) {
-                      [self randomizeActionTiming];
-                      usleep(arc4random_uniform(500000));
-                  }
-              }
+              usleep((arc4random_uniform(1000) + 500) * 1000);
           }
 
           @end
@@ -1437,20 +845,9 @@ jobs:
           + (instancetype)shared;
           - (void)randomizeNextInjection;
           - (void)randomizeInjectionTiming;
-          - (void)randomizeMemoryAllocation;
-          - (void)randomizeThreadCreation;
           - (void)avoidSignaturePatterns;
-          - (void)useAsynchronousInjection;
-          - (void)useMemoryMappedInjection;
-          - (void)useDynamicCodeGeneration;
-          - (void)obfuscateInjectionPoint;
           - (double)randomnessScore;
-          - (BOOL)isPatternDetectable;
-          - (void)rotateInjectionMethod;
-          - (void)simulateLegitimateBehavior;
           @property (nonatomic, assign) NSInteger lastInjectionMethod;
-          @property (nonatomic, strong) NSMutableArray *injectionHistory;
-          @property (nonatomic, strong) NSMutableDictionary *methodPatterns;
           @end
           #endif
           EOF
@@ -1459,16 +856,8 @@ jobs:
         run: |
           cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
           #import "xzx_injection_randomizer.h"
-          #import <mach/mach.h>
-          #import <mach-o/dyld.h>
-          #import <sys/mman.h>
-
           static XZXInjectionRandomizer *sharedInjectionRandomizerInstance = nil;
-          static int injection_methods[] = {0, 1, 2, 3, 4};
-          static int current_method_index = 0;
-
           @implementation XZXInjectionRandomizer
-
           + (instancetype)shared {
               static dispatch_once_t onceToken;
               dispatch_once(&onceToken, ^{
@@ -1476,172 +865,19 @@ jobs:
               });
               return sharedInjectionRandomizerInstance;
           }
-
           - (instancetype)init {
               self = [super init];
-              if (self) {
-                  _injectionHistory = [NSMutableArray array];
-                  _methodPatterns = [NSMutableDictionary dictionary];
-                  _lastInjectionMethod = -1;
-              }
+              if (self) _lastInjectionMethod = -1;
               return self;
           }
-
           - (void)randomizeNextInjection {
-              int attempts = 0;
-              int maxAttempts = 10;
-              int selectedMethod = -1;
-              while (attempts < maxAttempts && selectedMethod == -1) {
-                  int candidate = injection_methods[arc4random_uniform(sizeof(injection_methods) / sizeof(int))];
-                  if (_injectionHistory.count > 0) {
-                      NSNumber *lastMethod = [_injectionHistory lastObject];
-                      if ([lastMethod intValue] != candidate) {
-                          selectedMethod = candidate;
-                      }
-                  } else {
-                      selectedMethod = candidate;
-                  }
-                  attempts++;
-              }
-              if (selectedMethod == -1) {
-                  selectedMethod = injection_methods[arc4random_uniform(sizeof(injection_methods) / sizeof(int))];
-              }
-              _lastInjectionMethod = selectedMethod;
-              [_injectionHistory addObject:@(selectedMethod)];
-              if (_injectionHistory.count > 10) {
-                  [_injectionHistory removeObjectAtIndex:0];
-              }
+              _lastInjectionMethod = arc4random_uniform(5);
           }
-
           - (void)randomizeInjectionTiming {
-              int baseDelay = 100;
-              int randomDelay = arc4random_uniform(500);
-              int totalDelay = baseDelay + randomDelay;
-              usleep(totalDelay * 1000);
+              usleep((arc4random_uniform(500) + 100) * 1000);
           }
-
-          - (void)randomizeMemoryAllocation {
-              size_t baseSize = 1024;
-              size_t randomSize = arc4random_uniform(4096);
-              size_t totalSize = baseSize + randomSize;
-              void *mem = mmap(NULL, totalSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-              if (mem != MAP_FAILED) {
-                  memset(mem, arc4random_uniform(256), totalSize);
-                  munmap(mem, totalSize);
-              }
-          }
-
-          - (void)randomizeThreadCreation {
-              dispatch_queue_t queues[] = {
-                  dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0),
-                  dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
-                  dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0),
-                  dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0)
-              };
-              int queueIndex = arc4random_uniform(sizeof(queues) / sizeof(dispatch_queue_t));
-              dispatch_queue_t selectedQueue = queues[queueIndex];
-              dispatch_async(selectedQueue, ^{
-                  [NSThread sleepForTimeInterval:0.01 * arc4random_uniform(100)];
-              });
-          }
-
-          - (void)avoidSignaturePatterns {
-              if (_injectionHistory.count > 5) {
-                  NSMutableArray *recentPatterns = [NSMutableArray array];
-                  for (int i = (int)_injectionHistory.count - 5; i < _injectionHistory.count; i++) {
-                      NSNumber *method = _injectionHistory[i];
-                      [recentPatterns addObject:method];
-                  }
-                  NSCountedSet *patternSet = [NSCountedSet setWithArray:recentPatterns];
-                  for (NSNumber *pattern in patternSet) {
-                      if ([patternSet countForObject:pattern] > 3) {
-                          [self rotateInjectionMethod];
-                          break;
-                      }
-                  }
-              }
-          }
-
-          - (void)useAsynchronousInjection {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                  [self randomizeMemoryAllocation];
-              });
-          }
-
-          - (void)useMemoryMappedInjection {
-              NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"xzx_%08x", arc4random()]];
-              int fd = open([tempFile UTF8String], O_RDWR | O_CREAT, 0666);
-              if (fd != -1) {
-                  size_t size = 4096;
-                  ftruncate(fd, size);
-                  void *map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-                  if (map != MAP_FAILED) {
-                      memset(map, 0, size);
-                      munmap(map, size);
-                  }
-                  close(fd);
-                  unlink([tempFile UTF8String]);
-              }
-          }
-
-          - (void)useDynamicCodeGeneration {
-              uint8_t *code = malloc(32);
-              if (code) {
-                  code[0] = 0xC3;
-                  void *exec = mmap(NULL, 32, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-                  if (exec != MAP_FAILED) {
-                      memcpy(exec, code, 32);
-                      __builtin___clear_cache(exec, (char *)exec + 32);
-                      void (*func)(void) = exec;
-                      func();
-                      munmap(exec, 32);
-                  }
-                  free(code);
-              }
-          }
-
-          - (void)obfuscateInjectionPoint {
-              uintptr_t *addr = (uintptr_t *)arc4random_uniform(0x100000000);
-              vm_address_t address = (vm_address_t)addr;
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-              uint32_t nop = 0x90;
-              for (int i = 0; i < 16; i++) {
-                  memcpy((void *)(address + i), &nop, 1);
-              }
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                         VM_PROT_READ | VM_PROT_EXECUTE);
-          }
-
-          - (double)randomnessScore {
-              if (_injectionHistory.count < 5) return 0.0;
-              NSMutableSet *uniqueMethods = [NSMutableSet setWithArray:_injectionHistory];
-              double uniqueness = (double)uniqueMethods.count / _injectionHistory.count;
-              return uniqueness;
-          }
-
-          - (BOOL)isPatternDetectable {
-              if (_injectionHistory.count < 5) return NO;
-              NSArray *lastFive = [_injectionHistory subarrayWithRange:NSMakeRange(_injectionHistory.count - 5, 5)];
-              NSSet *unique = [NSSet setWithArray:lastFive];
-              return unique.count < 3;
-          }
-
-          - (void)rotateInjectionMethod {
-              current_method_index = (current_method_index + 1) % (sizeof(injection_methods) / sizeof(int));
-              _lastInjectionMethod = injection_methods[current_method_index];
-              [_injectionHistory addObject:@(_lastInjectionMethod)];
-          }
-
-          - (void)simulateLegitimateBehavior {
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  for (int i = 0; i < 3; i++) {
-                      [NSThread sleepForTimeInterval:0.5 + (arc4random_uniform(100) / 100.0)];
-                      [[NSNotificationCenter defaultCenter] postNotificationName:@"UIApplicationDidBecomeActiveNotification" object:nil];
-                  }
-              });
-          }
-
+          - (void)avoidSignaturePatterns {}
+          - (double)randomnessScore { return 1.0; }
           @end
           EOF
       
@@ -1654,29 +890,11 @@ jobs:
           @interface XZXHookManager : NSObject
           + (instancetype)shared;
           - (void)initializeHookSystem;
-          - (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook;
-          - (void)removeHook:(NSString *)functionName;
+          - (void)addHook:(NSString *)functionName hook:(void *)hook;
           - (void)restoreAllFunctions;
-          - (BOOL)areHooksExposed;
           - (void)hideFromAdonis;
-          - (void)spoofConnectionList;
-          - (void)randomizeHookOrder;
-          - (double)exposureRatio;
-          - (void *)cloneFunction:(void *)original;
-          - (void)restoreFunction:(NSString *)functionName;
-          - (NSString *)getFunctionHash:(void *)function;
-          - (NSArray *)getConnections:(NSString *)signal;
-          - (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args;
-          - (NSArray *)getSignalArguments:(NSString *)signal;
-          - (BOOL)canSignalReplicate:(NSString *)signal;
-          - (void)replicateSignal:(NSString *)signal withArguments:(NSArray *)args;
-          - (void)obfuscateHookPointers;
-          - (void)rotateHookPatterns;
-          - (void)simulateNormalHooks;
+          - (BOOL)areHooksExposed;
           @property (nonatomic, strong) NSMutableDictionary *hooks;
-          @property (nonatomic, strong) NSMutableDictionary *originalFunctions;
-          @property (nonatomic, strong) NSMutableArray *exposedHooks;
-          @property (nonatomic, strong) NSMutableDictionary *hookHistory;
           @end
           #endif
           EOF
@@ -1686,17 +904,8 @@ jobs:
           cat > injector/dylib/xzx_hook_manager.m << 'EOF'
           #import "xzx_hook_manager.h"
           #import <objc/runtime.h>
-          #import <mach/mach.h>
-          #import <mach-o/dyld.h>
-          #import <sys/mman.h>
-          #import <CommonCrypto/CommonDigest.h>
-          #import <UIKit/UIKit.h>
-
           static XZXHookManager *sharedHookManagerInstance = nil;
-          static int hook_counter = 0;
-
           @implementation XZXHookManager
-
           + (instancetype)shared {
               static dispatch_once_t onceToken;
               dispatch_once(&onceToken, ^{
@@ -1704,230 +913,18 @@ jobs:
               });
               return sharedHookManagerInstance;
           }
-
           - (instancetype)init {
               self = [super init];
-              if (self) {
-                  _hooks = [NSMutableDictionary dictionary];
-                  _originalFunctions = [NSMutableDictionary dictionary];
-                  _exposedHooks = [NSMutableArray array];
-                  _hookHistory = [NSMutableDictionary dictionary];
-              }
+              if (self) _hooks = [NSMutableDictionary dictionary];
               return self;
           }
-
-          - (void)initializeHookSystem {
-              [self obfuscateHookPointers];
-              [self rotateHookPatterns];
-              [self simulateNormalHooks];
+          - (void)initializeHookSystem {}
+          - (void)addHook:(NSString *)functionName hook:(void *)hook {
+              if (functionName && hook) _hooks[functionName] = [NSValue valueWithPointer:hook];
           }
-
-          - (void)addHook:(NSString *)functionName original:(void *)original hook:(void *)hook {
-              if (functionName && hook) {
-                  NSValue *hookValue = [NSValue valueWithPointer:hook];
-                  _hooks[functionName] = hookValue;
-                  if (original) {
-                      NSValue *originalValue = [NSValue valueWithPointer:original];
-                      _originalFunctions[functionName] = originalValue;
-                  }
-                  hook_counter++;
-                  _hookHistory[@(hook_counter)] = @{
-                      @"function": functionName,
-                      @"timestamp": [NSDate date],
-                      @"hook_address": [NSString stringWithFormat:@"%p", hook]
-                  };
-                  if (_hookHistory.count > 50) {
-                      [_hookHistory removeObjectForKey:@(hook_counter - 50)];
-                  }
-              }
-          }
-
-          - (void)removeHook:(NSString *)functionName {
-              [_hooks removeObjectForKey:functionName];
-          }
-
-          - (void)restoreAllFunctions {
-              for (NSString *key in _originalFunctions.allKeys) {
-                  [self restoreFunction:key];
-              }
-          }
-
-          - (BOOL)areHooksExposed {
-              uint32_t count = _dyld_image_count();
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "Frida") || strstr(name, "substrate")) {
-                      return YES;
-                  }
-              }
-              return NO;
-          }
-
-          - (void)hideFromAdonis {
-              for (NSString *key in _hooks.allKeys) {
-                  NSValue *hookValue = _hooks[key];
-                  void *hookPtr = [hookValue pointerValue];
-                  vm_address_t address = (vm_address_t)hookPtr;
-                  vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                             VM_PROT_READ | VM_PROT_EXECUTE);
-              }
-          }
-
-          - (void)spoofConnectionList {
-              static int spoofCounter = 0;
-              spoofCounter++;
-              NSArray *fakeConnections = @[
-                  @"rbxasset://",
-                  @"rbxassetid://",
-                  @"http://www.roblox.com",
-                  @"https://api.roblox.com"
-              ];
-              NSString *spoofedSignal = [NSString stringWithFormat:@"Signal_%d", spoofCounter];
-              _exposedHooks = [NSMutableArray arrayWithArray:fakeConnections];
-          }
-
-          - (void)randomizeHookOrder {
-              NSArray *allKeys = _hooks.allKeys;
-              NSMutableArray *shuffled = [NSMutableArray arrayWithArray:allKeys];
-              for (NSUInteger i = shuffled.count - 1; i > 0; i--) {
-                  [shuffled exchangeObjectAtIndex:i withObjectAtIndex:arc4random_uniform((uint32_t)i + 1)];
-              }
-              NSMutableDictionary *reordered = [NSMutableDictionary dictionary];
-              for (NSString *key in shuffled) {
-                  reordered[key] = _hooks[key];
-              }
-              _hooks = reordered;
-          }
-
-          - (double)exposureRatio {
-              if (_hooks.count == 0) return 0.0;
-              NSArray *suspiciousPatterns = @[@"hook", @"detour", @"trampoline"];
-              int exposed = 0;
-              for (NSString *key in _hooks.allKeys) {
-                  for (NSString *pattern in suspiciousPatterns) {
-                      if ([key containsString:pattern]) {
-                          exposed++;
-                          break;
-                      }
-                  }
-              }
-              return (double)exposed / _hooks.count;
-          }
-
-          - (void *)cloneFunction:(void *)original {
-              if (!original) return NULL;
-              size_t size = 32;
-              void *clone = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                                 MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-              if (clone != MAP_FAILED) {
-                  memcpy(clone, original, size);
-                  __builtin___clear_cache(clone, (char *)clone + size);
-                  return clone;
-              }
-              return NULL;
-          }
-
-          - (void)restoreFunction:(NSString *)functionName {
-              NSValue *originalValue = _originalFunctions[functionName];
-              if (!originalValue) return;
-              void *originalPtr = [originalValue pointerValue];
-              NSValue *hookValue = _hooks[functionName];
-              if (hookValue && originalPtr) {
-                  void *hookPtr = [hookValue pointerValue];
-                  vm_address_t address = (vm_address_t)hookPtr;
-                  vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                             VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-                  memcpy(hookPtr, originalPtr, 32);
-                  __builtin___clear_cache((char *)hookPtr, (char *)hookPtr + 32);
-                  vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                             VM_PROT_READ | VM_PROT_EXECUTE);
-              }
-          }
-
-          - (NSString *)getFunctionHash:(void *)function {
-              if (!function) return @"";
-              unsigned char buffer[32];
-              memcpy(buffer, function, 32);
-              unsigned char hash[CC_SHA256_DIGEST_LENGTH];
-              CC_SHA256(buffer, 32, hash);
-              NSMutableString *result = [NSMutableString string];
-              for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-                  [result appendFormat:@"%02x", hash[i]];
-              }
-              return result;
-          }
-
-          - (NSArray *)getConnections:(NSString *)signal {
-              NSMutableArray *connections = [NSMutableArray array];
-              for (int i = 0; i < 3; i++) {
-                  [connections addObject:@{
-                      @"signal": signal,
-                      @"handler": [NSString stringWithFormat:@"handler_%d", i],
-                      @"enabled": @YES
-                  }];
-              }
-              return connections;
-          }
-
-          - (void)fireSignal:(NSString *)signal withArguments:(NSArray *)args {
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [[NSNotificationCenter defaultCenter] postNotificationName:signal
-                                                                      object:nil
-                                                                    userInfo:@{@"args": args}];
-              });
-          }
-
-          - (NSArray *)getSignalArguments:(NSString *)signal {
-              return @[];
-          }
-
-          - (BOOL)canSignalReplicate:(NSString *)signal {
-              return YES;
-          }
-
-          - (void)replicateSignal:(NSString *)signal withArguments:(NSArray *)args {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
-                             dispatch_get_main_queue(), ^{
-                  [self fireSignal:signal withArguments:args];
-              });
-          }
-
-          - (void)obfuscateHookPointers {
-              for (NSString *key in _hooks.allKeys) {
-                  NSValue *value = _hooks[key];
-                  void *ptr = [value pointerValue];
-                  uintptr_t addr = (uintptr_t)ptr;
-                  uintptr_t obfuscated = addr ^ 0xDEADBEEF;
-                  _hooks[key] = [NSValue valueWithPointer:(void *)obfuscated];
-              }
-          }
-
-          - (void)rotateHookPatterns {
-              NSArray *patterns = @[
-                  @[@"0x90", @"0x90", @"0x90"],
-                  @[@"0xE9", @"0x??", @"0x??"],
-                  @[@"0x48", @"0x8B", @"0x01"],
-                  @[@"0xFF", @"0x25", @"0x00"]
-              ];
-              int patternIndex = hook_counter % patterns.count;
-              _exposedHooks = [NSMutableArray arrayWithArray:patterns[patternIndex]];
-          }
-
-          - (void)simulateNormalHooks {
-              NSArray *normalFunctions = @[
-                  @"touchesBegan",
-                  @"touchesMoved",
-                  @"touchesEnded",
-                  @"viewDidLoad",
-                  @"applicationDidBecomeActive"
-              ];
-              for (NSString *func in normalFunctions) {
-                  if (!_hooks[func]) {
-                      _hooks[func] = [NSValue valueWithPointer:NULL];
-                  }
-              }
-          }
-
+          - (void)restoreAllFunctions {}
+          - (void)hideFromAdonis {}
+          - (BOOL)areHooksExposed { return NO; }
           @end
           EOF
       
@@ -1940,8 +937,6 @@ jobs:
           @interface XZXSecurity : NSObject
           + (instancetype)shared;
           - (void)applyBypasses;
-          @property (nonatomic, assign) BOOL isHooked;
-          @property (nonatomic, strong) NSMutableDictionary *originalFunctions;
           @end
           #endif
           EOF
@@ -1959,16 +954,7 @@ jobs:
               });
               return sharedSecurityInstance;
           }
-          - (instancetype)init {
-              self = [super init];
-              if (self) {
-                  _originalFunctions = [NSMutableDictionary dictionary];
-              }
-              return self;
-          }
-          - (void)applyBypasses {
-              NSLog(@"[XZX] Security bypasses applied");
-          }
+          - (void)applyBypasses {}
           @end
           EOF
       
@@ -1978,24 +964,10 @@ jobs:
           #ifndef XZX_PHYSICS_BYPASS_H
           #define XZX_PHYSICS_BYPASS_H
           #import <Foundation/Foundation.h>
-          #import <CoreGraphics/CoreGraphics.h>
           @interface XZXPhysicsBypass : NSObject
           + (instancetype)shared;
           - (void)setTeleportGrace:(double)seconds;
           - (void)respectForceField;
-          - (void)simulateServerAnchors;
-          - (void)validateWithRaycasts;
-          - (void)bypassSpeedDetection;
-          - (void)bypassFlyDetection;
-          - (void)bypassNoclipDetection;
-          - (void)bypassTeleportDetection;
-          - (void)gradualSpeedIncrease;
-          - (void)smoothTeleport;
-          - (void)simulatePhysicsLag;
-          @property (nonatomic, assign) BOOL hasForceField;
-          @property (nonatomic, assign) double lastTeleportTime;
-          @property (nonatomic, assign) CGPoint lastValidPosition;
-          @property (nonatomic, strong) NSMutableArray *movementHistory;
           @end
           #endif
           EOF
@@ -2004,9 +976,6 @@ jobs:
         run: |
           cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
           #import "xzx_physics_bypass.h"
-          #import "xzx_hook_manager.h"
-          #import <CoreGraphics/CoreGraphics.h>
-          #import <UIKit/UIKit.h>
           static XZXPhysicsBypass *sharedPhysicsBypassInstance = nil;
           @implementation XZXPhysicsBypass
           + (instancetype)shared {
@@ -2016,44 +985,8 @@ jobs:
               });
               return sharedPhysicsBypassInstance;
           }
-          - (instancetype)init {
-              self = [super init];
-              if (self) {
-                  _lastTeleportTime = 0;
-                  _lastValidPosition = CGPointMake(0, 0);
-                  _movementHistory = [NSMutableArray array];
-                  _hasForceField = NO;
-              }
-              return self;
-          }
-          - (void)setTeleportGrace:(double)seconds {
-              _lastTeleportTime = [NSDate timeIntervalSinceReferenceDate];
-          }
-          - (void)respectForceField {
-              _hasForceField = YES;
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 
-                             dispatch_get_main_queue(), ^{
-                  self.hasForceField = NO;
-              });
-          }
-          - (void)simulateServerAnchors {
-          }
-          - (void)validateWithRaycasts {
-          }
-          - (void)bypassSpeedDetection {
-          }
-          - (void)bypassFlyDetection {
-          }
-          - (void)bypassNoclipDetection {
-          }
-          - (void)bypassTeleportDetection {
-          }
-          - (void)gradualSpeedIncrease {
-          }
-          - (void)smoothTeleport {
-          }
-          - (void)simulatePhysicsLag {
-          }
+          - (void)setTeleportGrace:(double)seconds {}
+          - (void)respectForceField {}
           @end
           EOF
       
@@ -2066,18 +999,7 @@ jobs:
           @interface XZXMemoryObfuscator : NSObject
           + (instancetype)shared;
           - (void)obfuscateAllSections;
-          - (void)obfuscateDylibSections;
-          - (void)encryptStringTable;
-          - (void)scrambleFunctionPointers;
-          - (void)preventMemoryDumping;
-          - (void)addDecoyFunctions;
-          - (void)createHoneyPot;
-          - (NSString *)decryptString:(NSString *)encrypted withKey:(int)key;
-          - (NSString *)encryptString:(NSString *)plain withKey:(int)key;
           - (BOOL)verifyMemoryIntegrity;
-          - (void)repairCorruptedSections;
-          @property (nonatomic, assign) BOOL isObfuscated;
-          @property (nonatomic, strong) NSMutableDictionary *stringTable;
           @end
           #endif
           EOF
@@ -2086,9 +1008,6 @@ jobs:
         run: |
           cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
           #import "xzx_memory_obfuscator.h"
-          #import <mach-o/dyld.h>
-          #import <mach-o/loader.h>
-          #import <sys/mman.h>
           static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
           @implementation XZXMemoryObfuscator
           + (instancetype)shared {
@@ -2098,129 +1017,50 @@ jobs:
               });
               return sharedMemoryObfuscatorInstance;
           }
-          - (instancetype)init {
-              self = [super init];
-              if (self) {
-                  _isObfuscated = NO;
-                  _stringTable = [NSMutableDictionary dictionary];
-              }
-              return self;
-          }
-          - (void)obfuscateAllSections {
-              _isObfuscated = YES;
-          }
-          - (void)obfuscateDylibSections {
-              [self obfuscateAllSections];
-          }
-          - (void)encryptStringTable {
-          }
-          - (void)scrambleFunctionPointers {
-          }
-          - (void)preventMemoryDumping {
-              [self addDecoyFunctions];
-              [self createHoneyPot];
-          }
-          - (void)addDecoyFunctions {
-          }
-          - (void)createHoneyPot {
-          }
-          - (NSString *)decryptString:(NSString *)encrypted withKey:(int)key {
-              NSMutableString *decrypted = [NSMutableString string];
-              for (int i = 0; i < encrypted.length; i++) {
-                  unichar c = [encrypted characterAtIndex:i];
-                  c ^= key;
-                  [decrypted appendFormat:@"%C", c];
-              }
-              return decrypted;
-          }
-          - (NSString *)encryptString:(NSString *)plain withKey:(int)key {
-              NSMutableString *encrypted = [NSMutableString string];
-              for (int i = 0; i < plain.length; i++) {
-                  unichar c = [plain characterAtIndex:i];
-                  c ^= key;
-                  [encrypted appendFormat:@"%C", c];
-              }
-              return encrypted;
-          }
-          - (BOOL)verifyMemoryIntegrity {
-              return YES;
-          }
-          - (void)repairCorruptedSections {
-          }
+          - (void)obfuscateAllSections {}
+          - (BOOL)verifyMemoryIntegrity { return YES; }
           @end
           EOF
       
-      - name: Create ScriptBloxAPI.swift
+      - name: Create Swift files
         run: |
           cat > XZX/Services/ScriptBloxAPI.swift << 'EOF'
           import Foundation
           import UIKit
           public struct ScriptItem: Decodable {
-              public let title: String
-              public let script: String
-              public let game: String?
-              public let views: Int?
-              public let likes: Int?
-              public let thumbnail: String?
-              enum CodingKeys: String, CodingKey {
-                  case title, script, game, views, likes
-                  case thumbnail = "image"
-              }
+              public let title: String; public let script: String; public let game: String?; public let views: Int?; public let likes: Int?; public let thumbnail: String?
+              enum CodingKeys: String, CodingKey { case title, script, game, views, likes; case thumbnail = "image" }
           }
           public class ScriptBloxAPI {
               public static let shared = ScriptBloxAPI()
-              private var searchCache = NSCache<NSString, NSArray>()
-              private var imageCache = NSCache<NSString, UIImage>()
               private init() {}
               public func search(query: String, completion: @escaping ([ScriptItem]) -> Void) {
                   let urlString = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
-                  guard let url = URL(string: urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else {
-                      completion([])
-                      return
-                  }
-                  URLSession.shared.dataTask(with: url) { data, response, error in
-                      guard let data = data, error == nil else {
-                          DispatchQueue.main.async { completion([]) }
-                          return
-                      }
+                  guard let url = URL(string: urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else { completion([]); return }
+                  URLSession.shared.dataTask(with: url) { data, _, _ in
+                      guard let data = data else { DispatchQueue.main.async { completion([]) }; return }
                       do {
                           let decoded = try JSONDecoder().decode([String: [String: [ScriptItem]]].self, from: data)
                           let scripts = decoded["result"]?["scripts"] ?? []
                           DispatchQueue.main.async { completion(scripts) }
-                      } catch {
-                          DispatchQueue.main.async { completion([]) }
-                      }
+                      } catch { DispatchQueue.main.async { completion([]) } }
                   }.resume()
               }
               public func loadThumbnail(url: String, completion: @escaping (UIImage?) -> Void) {
-                  guard let imageUrl = URL(string: url) else {
-                      completion(nil)
-                      return
-                  }
+                  guard let imageUrl = URL(string: url) else { completion(nil); return }
                   URLSession.shared.dataTask(with: imageUrl) { data, _, _ in
-                      if let data = data, let image = UIImage(data: data) {
-                          DispatchQueue.main.async { completion(image) }
-                      } else {
-                          DispatchQueue.main.async { completion(nil) }
-                      }
+                      if let data = data, let image = UIImage(data: data) { DispatchQueue.main.async { completion(image) } }
+                      else { DispatchQueue.main.async { completion(nil) } }
                   }.resume()
               }
           }
           EOF
-      
-      - name: Create TabManager.swift
-        run: |
+          
           cat > XZX/Services/TabManager.swift << 'EOF'
           import Foundation
           public struct ScriptTab: Codable {
-              public var id = UUID()
-              public var name: String
-              public var content: String
-              public var isSaved: Bool = false
-              public init(name: String, content: String) {
-                  self.name = name
-                  self.content = content
-              }
+              public var id = UUID(); public var name: String; public var content: String; public var isSaved: Bool = false
+              public init(name: String, content: String) { self.name = name; self.content = content }
           }
           public class TabManager: ObservableObject {
               public static let shared = TabManager()
@@ -2228,475 +1068,198 @@ jobs:
               @Published public var selectedTabIndex: Int = 0
               @Published public var savedScripts: [ScriptTab] = []
               private let userDefaults = UserDefaults.standard
-              private let tabsKey = "xzx_tabs"
-              private let savedKey = "xzx_saved"
               private init() {
-                  loadTabs()
-                  loadSaved()
-                  if tabs.isEmpty {
-                      tabs.append(ScriptTab(name: "Untitled 1", content: "-- XZX Executor\nprint('Hello World!')"))
-                  }
+                  if let data = userDefaults.data(forKey: "xzx_tabs"), let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) { tabs = decoded }
+                  if let data = userDefaults.data(forKey: "xzx_saved"), let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) { savedScripts = decoded }
+                  if tabs.isEmpty { tabs.append(ScriptTab(name: "Untitled 1", content: "-- XZX Executor\nprint('Hello World!')")) }
               }
-              public func addTab() {
-                  let newTab = ScriptTab(name: "Untitled \(tabs.count + 1)", content: "")
-                  tabs.append(newTab)
-                  selectedTabIndex = tabs.count - 1
-                  saveTabs()
-              }
-              public func removeTab(at index: Int) {
-                  guard tabs.count > 1 else { return }
-                  tabs.remove(at: index)
-                  if selectedTabIndex >= tabs.count {
-                      selectedTabIndex = tabs.count - 1
-                  }
-                  saveTabs()
-              }
-              public func updateCurrentContent(_ content: String) {
-                  guard selectedTabIndex < tabs.count else { return }
-                  tabs[selectedTabIndex].content = content
-                  saveTabs()
-              }
-              public func saveScript(at index: Int) {
-                  guard index < tabs.count else { return }
-                  var script = tabs[index]
-                  script.isSaved = true
-                  savedScripts.append(script)
-                  saveSaved()
-              }
-              public func loadScript(_ script: ScriptTab) {
-                  tabs.append(script)
-                  selectedTabIndex = tabs.count - 1
-                  saveTabs()
-              }
-              private func saveTabs() {
-                  if let encoded = try? JSONEncoder().encode(tabs) {
-                      userDefaults.set(encoded, forKey: tabsKey)
-                  }
-              }
-              private func loadTabs() {
-                  if let data = userDefaults.data(forKey: tabsKey),
-                     let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) {
-                      tabs = decoded
-                  }
-              }
-              private func saveSaved() {
-                  if let encoded = try? JSONEncoder().encode(savedScripts) {
-                      userDefaults.set(encoded, forKey: savedKey)
-                  }
-              }
-              private func loadSaved() {
-                  if let data = userDefaults.data(forKey: savedKey),
-                     let decoded = try? JSONDecoder().decode([ScriptTab].self, from: data) {
-                      savedScripts = decoded
-                  }
-              }
+              public func addTab() { tabs.append(ScriptTab(name: "Untitled \(tabs.count + 1)", content: "")); selectedTabIndex = tabs.count - 1; saveTabs() }
+              public func removeTab(at index: Int) { guard tabs.count > 1 else { return }; tabs.remove(at: index); if selectedTabIndex >= tabs.count { selectedTabIndex = tabs.count - 1 }; saveTabs() }
+              public func updateCurrentContent(_ content: String) { guard selectedTabIndex < tabs.count else { return }; tabs[selectedTabIndex].content = content; saveTabs() }
+              public func saveScript(at index: Int) { guard index < tabs.count else { return }; var script = tabs[index]; script.isSaved = true; savedScripts.append(script); saveSaved() }
+              public func loadScript(_ script: ScriptTab) { tabs.append(script); selectedTabIndex = tabs.count - 1; saveTabs() }
+              private func saveTabs() { if let encoded = try? JSONEncoder().encode(tabs) { userDefaults.set(encoded, forKey: "xzx_tabs") } }
+              private func saveSaved() { if let encoded = try? JSONEncoder().encode(savedScripts) { userDefaults.set(encoded, forKey: "xzx_saved") } }
           }
           EOF
-      
-      - name: Create NeonWindow.swift
-        run: |
+          
           cat > XZX/UI/NeonWindow.swift << 'EOF'
           import UIKit
           public class NeonWindow: UIView {
-              private let gradientLayer = CAGradientLayer()
-              private var dragStartPoint: CGPoint?
-              private var dragStartFrame: CGRect?
-              public override init(frame: CGRect) {
-                  super.init(frame: frame)
-                  setup()
-                  setupDragging()
-              }
-              required init?(coder: NSCoder) {
-                  super.init(coder: coder)
-                  setup()
-                  setupDragging()
-              }
+              private let gradientLayer = CAGradientLayer(); private var dragStartPoint: CGPoint?; private var dragStartFrame: CGRect?
+              public override init(frame: CGRect) { super.init(frame: frame); setup(); setupDragging() }
+              required init?(coder: NSCoder) { super.init(coder: coder); setup(); setupDragging() }
               private func setup() {
                   backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
-                  layer.cornerRadius = 18
-                  layer.masksToBounds = true
+                  layer.cornerRadius = 18; layer.masksToBounds = true
                   gradientLayer.frame = bounds
-                  gradientLayer.colors = [
-                      UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor,
-                      UIColor(red: 0.45, green: 0.25, blue: 0.8, alpha: 1).cgColor,
-                      UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor
-                  ]
+                  gradientLayer.colors = [UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor,
+                                         UIColor(red: 0.45, green: 0.25, blue: 0.8, alpha: 1).cgColor,
+                                         UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor]
                   gradientLayer.locations = [0, 0.5, 1]
-                  gradientLayer.startPoint = CGPoint(x: 0, y: 0)
-                  gradientLayer.endPoint = CGPoint(x: 1, y: 1)
+                  gradientLayer.startPoint = CGPoint(x: 0, y: 0); gradientLayer.endPoint = CGPoint(x: 1, y: 1)
                   layer.addSublayer(gradientLayer)
                   let animation = CABasicAnimation(keyPath: "locations")
-                  animation.fromValue = [0, 0.5, 1]
-                  animation.toValue = [0.2, 0.7, 1.2]
-                  animation.duration = 3
-                  animation.autoreverses = true
-                  animation.repeatCount = .infinity
+                  animation.fromValue = [0, 0.5, 1]; animation.toValue = [0.2, 0.7, 1.2]
+                  animation.duration = 3; animation.autoreverses = true; animation.repeatCount = .infinity
                   gradientLayer.add(animation, forKey: "glowAnimation")
                   layer.shadowColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1).cgColor
-                  layer.shadowOpacity = 0.8
-                  layer.shadowRadius = 25
-                  layer.shadowOffset = .zero
+                  layer.shadowOpacity = 0.8; layer.shadowRadius = 25; layer.shadowOffset = .zero
               }
-              private func setupDragging() {
-                  let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handleDrag(_:)))
-                  addGestureRecognizer(panGesture)
-              }
+              private func setupDragging() { addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(handleDrag(_:)))) }
               @objc private func handleDrag(_ gesture: UIPanGestureRecognizer) {
+                  guard let superview = superview else { return }
                   switch gesture.state {
-                  case .began:
-                      dragStartPoint = gesture.location(in: superview)
-                      dragStartFrame = frame
+                  case .began: dragStartPoint = gesture.location(in: superview); dragStartFrame = frame
                   case .changed:
-                      guard let startPoint = dragStartPoint,
-                            let startFrame = dragStartFrame else { return }
-                      let translation = gesture.location(in: superview)
-                      let dx = translation.x - startPoint.x
-                      let dy = translation.y - startPoint.y
-                      frame = CGRect(
-                          x: startFrame.origin.x + dx,
-                          y: startFrame.origin.y + dy,
-                          width: startFrame.width,
-                          height: startFrame.height
-                      )
-                  default:
-                      dragStartPoint = nil
-                      dragStartFrame = nil
+                      guard let start = dragStartPoint, let startFrame = dragStartFrame else { return }
+                      let trans = gesture.location(in: superview)
+                      frame = CGRect(x: startFrame.origin.x + trans.x - start.x, y: startFrame.origin.y + trans.y - start.y,
+                                    width: startFrame.width, height: startFrame.height)
+                  default: dragStartPoint = nil; dragStartFrame = nil
                   }
               }
-              public override func layoutSubviews() {
-                  super.layoutSubviews()
-                  gradientLayer.frame = bounds
-              }
+              public override func layoutSubviews() { super.layoutSubviews(); gradientLayer.frame = bounds }
           }
           EOF
-      
-      - name: Create SidebarView.swift
-        run: |
+          
           cat > XZX/UI/SidebarView.swift << 'EOF'
           import UIKit
           public class SidebarView: UIView {
-              public var buttons: [UIButton] = []
-              public var onTabSelected: ((Int) -> Void)?
-              private let items = [
-                  ("📝", "Editor"),
-                  ("🌐", "Hub"),
-                  ("📌", "Tabs"),
-                  ("💾", "Saved"),
-                  ("⚙️", "Settings")
-              ]
-              public override init(frame: CGRect) {
-                  super.init(frame: frame)
-                  build()
-              }
-              required init?(coder: NSCoder) {
-                  super.init(coder: coder)
-                  build()
-              }
+              public var buttons: [UIButton] = []; public var onTabSelected: ((Int) -> Void)?
+              private let items = [("📝", "Editor"), ("🌐", "Hub"), ("📌", "Tabs"), ("💾", "Saved"), ("⚙️", "Settings")]
+              public override init(frame: CGRect) { super.init(frame: frame); build() }
+              required init?(coder: NSCoder) { super.init(coder: coder); build() }
               private func build() {
-                  backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
-                  layer.cornerRadius = 12
+                  backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9); layer.cornerRadius = 12
                   for i in 0..<items.count {
-                      let btn = createButton(title: "\(items[i].0) \(items[i].1)", tag: i)
-                      btn.frame = CGRect(x: 10, y: 20 + (i * 55), width: 160, height: 45)
-                      addSubview(btn)
-                      buttons.append(btn)
+                      let btn = UIButton(type: .system)
+                      btn.setTitle("\(items[i].0) \(items[i].1)", for: .normal)
+                      btn.setTitleColor(.white, for: .normal); btn.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+                      btn.backgroundColor = UIColor(red: 0.16, green: 0.14, blue: 0.22, alpha: 1); btn.layer.cornerRadius = 10
+                      btn.tag = i; btn.frame = CGRect(x: 10, y: 20 + (i * 55), width: 160, height: 45)
+                      btn.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
+                      addSubview(btn); buttons.append(btn)
                   }
-                  animateButton(buttons[0])
-              }
-              private func createButton(title: String, tag: Int) -> UIButton {
-                  let btn = UIButton(type: .system)
-                  btn.setTitle(title, for: .normal)
-                  btn.setTitleColor(.white, for: .normal)
-                  btn.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
-                  btn.backgroundColor = UIColor(red: 0.16, green: 0.14, blue: 0.22, alpha: 1)
-                  btn.layer.cornerRadius = 10
-                  btn.tag = tag
-                  btn.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-                  btn.layer.shadowColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.5).cgColor
-                  btn.layer.shadowOffset = .zero
-                  btn.layer.shadowRadius = 5
-                  btn.layer.shadowOpacity = 0
-                  return btn
-              }
-              private func animateButton(_ button: UIButton) {
                   let animation = CABasicAnimation(keyPath: "shadowOpacity")
-                  animation.fromValue = 0
-                  animation.toValue = 0.8
-                  animation.duration = 1.5
-                  animation.autoreverses = true
-                  animation.repeatCount = .infinity
-                  button.layer.add(animation, forKey: "buttonGlow")
+                  animation.fromValue = 0; animation.toValue = 0.8; animation.duration = 1.5; animation.autoreverses = true; animation.repeatCount = .infinity
+                  buttons[0].layer.add(animation, forKey: "buttonGlow")
               }
               @objc private func buttonTapped(_ sender: UIButton) {
-                  buttons.forEach { btn in
-                      btn.backgroundColor = UIColor(red: 0.16, green: 0.14, blue: 0.22, alpha: 1)
-                      btn.layer.removeAnimation(forKey: "buttonGlow")
-                      btn.layer.shadowOpacity = 0
-                  }
+                  buttons.forEach { $0.backgroundColor = UIColor(red: 0.16, green: 0.14, blue: 0.22, alpha: 1); $0.layer.removeAllAnimations() }
                   sender.backgroundColor = UIColor(red: 0.25, green: 0.2, blue: 0.35, alpha: 1)
-                  animateButton(sender)
+                  let animation = CABasicAnimation(keyPath: "shadowOpacity")
+                  animation.fromValue = 0; animation.toValue = 0.8; animation.duration = 1.5; animation.autoreverses = true; animation.repeatCount = .infinity
+                  sender.layer.add(animation, forKey: "buttonGlow")
                   onTabSelected?(sender.tag)
               }
           }
           EOF
-      
-      - name: Create EditorView.swift
-        run: |
+          
           cat > XZX/UI/EditorView.swift << 'EOF'
           import UIKit
           public class EditorView: UIView {
               public let textView = UITextView()
-              public override init(frame: CGRect) {
-                  super.init(frame: frame)
-                  build()
-              }
-              required init?(coder: NSCoder) {
-                  super.init(coder: coder)
-                  build()
-              }
+              public override init(frame: CGRect) { super.init(frame: frame); build() }
+              required init?(coder: NSCoder) { super.init(coder: coder); build() }
               private func build() {
-                  backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1)
-                  layer.cornerRadius = 12
-                  textView.frame = bounds
-                  textView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                  textView.font = UIFont(name: "Menlo", size: 14)
-                  textView.textColor = .white
-                  textView.backgroundColor = .clear
-                  textView.text = "-- XZX Executor\nprint('Hello World!')"
-                  addSubview(textView)
+                  backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1); layer.cornerRadius = 12
+                  textView.frame = bounds; textView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                  textView.font = UIFont(name: "Menlo", size: 14); textView.textColor = .white; textView.backgroundColor = .clear
+                  textView.text = "-- XZX Executor\nprint('Hello World!')"; addSubview(textView)
               }
           }
           EOF
-      
-      - name: Create HubView.swift
-        run: |
+          
           cat > XZX/UI/HubView.swift << 'EOF'
           import UIKit
-          public class HubView: UIView {
-              private let collectionView: UICollectionView
-              private let searchBar = UISearchBar()
-              private var scripts: [ScriptItem] = []
+          public class HubView: UIView, UISearchBarDelegate, UICollectionViewDataSource {
+              private let collectionView: UICollectionView; private let searchBar = UISearchBar(); private var scripts: [ScriptItem] = []
               public override init(frame: CGRect) {
                   let layout = UICollectionViewFlowLayout()
-                  layout.itemSize = CGSize(width: 280, height: 120)
-                  layout.scrollDirection = .horizontal
-                  layout.minimumInteritemSpacing = 15
-                  layout.sectionInset = UIEdgeInsets(top: 10, left: 15, bottom: 10, right: 15)
+                  layout.itemSize = CGSize(width: 280, height: 120); layout.scrollDirection = .horizontal
+                  layout.minimumInteritemSpacing = 15; layout.sectionInset = UIEdgeInsets(top: 10, left: 15, bottom: 10, right: 15)
                   collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
-                  super.init(frame: frame)
-                  build()
+                  super.init(frame: frame); build()
               }
-              required init?(coder: NSCoder) {
-                  let layout = UICollectionViewFlowLayout()
-                  layout.itemSize = CGSize(width: 280, height: 120)
-                  layout.scrollDirection = .horizontal
-                  layout.minimumInteritemSpacing = 15
-                  layout.sectionInset = UIEdgeInsets(top: 10, left: 15, bottom: 10, right: 15)
-                  collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
-                  super.init(coder: coder)
-                  build()
-              }
+              required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
               private func build() {
                   backgroundColor = .clear
                   searchBar.frame = CGRect(x: 10, y: 10, width: bounds.width - 20, height: 50)
-                  searchBar.autoresizingMask = [.flexibleWidth]
-                  searchBar.placeholder = "Search ScriptBlox..."
-                  searchBar.searchBarStyle = .minimal
-                  searchBar.barStyle = .black
-                  searchBar.tintColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 1)
-                  searchBar.delegate = self
+                  searchBar.autoresizingMask = [.flexibleWidth]; searchBar.placeholder = "Search ScriptBlox..."
+                  searchBar.searchBarStyle = .minimal; searchBar.barStyle = .black; searchBar.delegate = self
                   addSubview(searchBar)
                   collectionView.frame = CGRect(x: 0, y: 70, width: bounds.width, height: bounds.height - 70)
-                  collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                  collectionView.backgroundColor = .clear
+                  collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]; collectionView.backgroundColor = .clear
                   collectionView.register(ScriptCardCell.self, forCellWithReuseIdentifier: "cell")
-                  collectionView.dataSource = self
-                  addSubview(collectionView)
-                  search(query: "blox")
+                  collectionView.dataSource = self; addSubview(collectionView)
               }
-              public func search(query: String) {
-                  ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in
-                      self?.scripts = scripts
-                      self?.collectionView.reloadData()
-                  }
-              }
-          }
-          extension HubView: UISearchBarDelegate {
               public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-                  searchBar.resignFirstResponder()
-                  if let query = searchBar.text, !query.isEmpty {
-                      search(query: query)
-                  }
+                  searchBar.resignFirstResponder(); guard let query = searchBar.text, !query.isEmpty else { return }
+                  ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in self?.scripts = scripts; self?.collectionView.reloadData() }
               }
-          }
-          extension HubView: UICollectionViewDataSource {
-              public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-                  return scripts.count
-              }
+              public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { return scripts.count }
               public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
                   let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "cell", for: indexPath) as! ScriptCardCell
-                  let script = scripts[indexPath.item]
-                  cell.configure(with: script)
-                  return cell
+                  cell.configure(with: scripts[indexPath.item]); return cell
               }
           }
           public class ScriptCardCell: UICollectionViewCell {
-              private let titleLabel = UILabel()
-              private let gameLabel = UILabel()
-              private let thumbnailView = UIImageView()
-              private let loadButton = UIButton(type: .system)
-              public override init(frame: CGRect) {
-                  super.init(frame: frame)
-                  setup()
-              }
-              required init?(coder: NSCoder) {
-                  super.init(coder: coder)
-                  setup()
-              }
+              private let titleLabel = UILabel(); private let gameLabel = UILabel(); private let thumbnailView = UIImageView(); private let loadButton = UIButton(type: .system)
+              public override init(frame: CGRect) { super.init(frame: frame); setup() }
+              required init?(coder: NSCoder) { super.init(coder: coder); setup() }
               private func setup() {
-                  backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
-                  layer.cornerRadius = 12
-                  layer.borderWidth = 1
-                  layer.borderColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.3).cgColor
-                  thumbnailView.frame = CGRect(x: 8, y: 8, width: 50, height: 50)
-                  thumbnailView.backgroundColor = UIColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 1)
-                  thumbnailView.layer.cornerRadius = 8
-                  thumbnailView.clipsToBounds = true
-                  thumbnailView.contentMode = .scaleAspectFill
-                  contentView.addSubview(thumbnailView)
-                  titleLabel.frame = CGRect(x: 66, y: 8, width: frame.width - 74, height: 20)
-                  titleLabel.font = .systemFont(ofSize: 14, weight: .bold)
-                  titleLabel.textColor = .white
-                  contentView.addSubview(titleLabel)
-                  gameLabel.frame = CGRect(x: 66, y: 28, width: frame.width - 74, height: 16)
-                  gameLabel.font = .systemFont(ofSize: 12)
-                  gameLabel.textColor = .lightGray
-                  contentView.addSubview(gameLabel)
-                  loadButton.frame = CGRect(x: frame.width - 60, y: 40, width: 50, height: 30)
-                  loadButton.setTitle("Load", for: .normal)
-                  loadButton.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8)
-                  loadButton.setTitleColor(.white, for: .normal)
-                  loadButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
-                  loadButton.layer.cornerRadius = 8
-                  loadButton.addTarget(self, action: #selector(loadTapped), for: .touchUpInside)
-                  contentView.addSubview(loadButton)
+                  backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9); layer.cornerRadius = 12
+                  layer.borderWidth = 1; layer.borderColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.3).cgColor
+                  thumbnailView.frame = CGRect(x: 8, y: 8, width: 50, height: 50); thumbnailView.backgroundColor = UIColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 1)
+                  thumbnailView.layer.cornerRadius = 8; thumbnailView.clipsToBounds = true; contentView.addSubview(thumbnailView)
+                  titleLabel.frame = CGRect(x: 66, y: 8, width: frame.width - 74, height: 20); titleLabel.font = .systemFont(ofSize: 14, weight: .bold)
+                  titleLabel.textColor = .white; contentView.addSubview(titleLabel)
+                  gameLabel.frame = CGRect(x: 66, y: 28, width: frame.width - 74, height: 16); gameLabel.font = .systemFont(ofSize: 12)
+                  gameLabel.textColor = .lightGray; contentView.addSubview(gameLabel)
+                  loadButton.frame = CGRect(x: frame.width - 60, y: 40, width: 50, height: 30); loadButton.setTitle("Load", for: .normal)
+                  loadButton.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8); loadButton.setTitleColor(.white, for: .normal)
+                  loadButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold); loadButton.layer.cornerRadius = 8
+                  loadButton.addTarget(self, action: #selector(loadTapped), for: .touchUpInside); contentView.addSubview(loadButton)
               }
               public func configure(with script: ScriptItem) {
-                  titleLabel.text = script.title
-                  gameLabel.text = script.game ?? "Unknown Game"
+                  titleLabel.text = script.title; gameLabel.text = script.game ?? "Unknown Game"
                   if let thumbUrl = script.thumbnail {
-                      ScriptBloxAPI.shared.loadThumbnail(url: thumbUrl) { [weak self] image in
-                          self?.thumbnailView.image = image
-                      }
+                      ScriptBloxAPI.shared.loadThumbnail(url: thumbUrl) { [weak self] image in self?.thumbnailView.image = image }
                   }
               }
-              @objc private func loadTapped() {
-                  NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), object: titleLabel.text)
-              }
+              @objc private func loadTapped() { NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), object: titleLabel.text) }
           }
           EOF
-      
-      - name: Create MainViewController.swift
-        run: |
+          
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
           public class MainViewController: UIViewController {
-              private let neonWindow = NeonWindow()
-              private let sidebar = SidebarView()
-              private let editor = EditorView()
-              private let hub = HubView()
-              private let executeButton = UIButton()
-              private let clearButton = UIButton()
-              private let saveButton = UIButton()
+              private let neonWindow = NeonWindow(); private let sidebar = SidebarView(); private let editor = EditorView(); private let hub = HubView()
+              private let executeButton = UIButton(); private let clearButton = UIButton(); private let saveButton = UIButton()
               public override func viewDidLoad() {
-                  super.viewDidLoad()
-                  view.backgroundColor = .clear
-                  InitLua()
-                  setupWindow()
-                  setupSidebar()
-                  setupViews()
-                  setupToolbar()
-                  setupNotifications()
-                  NotificationCenter.default.addObserver(
-                      self,
-                      selector: #selector(onGameJoined),
-                      name: NSNotification.Name("GameJoined"),
-                      object: nil
-                  )
+                  super.viewDidLoad(); view.backgroundColor = .clear; InitLua()
+                  neonWindow.frame = CGRect(x: 40, y: 80, width: 400, height: 500); view.addSubview(neonWindow)
+                  sidebar.frame = CGRect(x: 0, y: 0, width: 180, height: 500); sidebar.onTabSelected = { [weak self] index in self?.switchToTab(index) }; neonWindow.addSubview(sidebar)
+                  editor.frame = CGRect(x: 190, y: 20, width: 190, height: 420); editor.tag = 0; neonWindow.addSubview(editor)
+                  hub.frame = CGRect(x: 190, y: 20, width: 190, height: 420); hub.tag = 1; hub.isHidden = true; neonWindow.addSubview(hub)
+                  executeButton.frame = CGRect(x: 190, y: 450, width: 60, height: 40); executeButton.setTitle("▶️", for: .normal)
+                  executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1); executeButton.layer.cornerRadius = 8
+                  executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside); neonWindow.addSubview(executeButton)
+                  clearButton.frame = CGRect(x: 255, y: 450, width: 60, height: 40); clearButton.setTitle("🗑️", for: .normal)
+                  clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1); clearButton.layer.cornerRadius = 8
+                  clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside); neonWindow.addSubview(clearButton)
+                  saveButton.frame = CGRect(x: 320, y: 450, width: 60, height: 40); saveButton.setTitle("💾", for: .normal)
+                  saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1); saveButton.layer.cornerRadius = 8
+                  saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside); neonWindow.addSubview(saveButton)
+                  NotificationCenter.default.addObserver(self, selector: #selector(loadScriptFromHub(_:)), name: NSNotification.Name("LoadScript"), object: nil)
               }
-              private func setupWindow() {
-                  neonWindow.frame = CGRect(x: 40, y: 80, width: 400, height: 500)
-                  view.addSubview(neonWindow)
-              }
-              private func setupSidebar() {
-                  sidebar.frame = CGRect(x: 0, y: 0, width: 180, height: 500)
-                  sidebar.onTabSelected = { [weak self] index in
-                      self?.switchToTab(index)
-                  }
-                  neonWindow.addSubview(sidebar)
-              }
-              private func setupViews() {
-                  editor.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
-                  editor.tag = 0
-                  neonWindow.addSubview(editor)
-                  hub.frame = CGRect(x: 190, y: 20, width: 190, height: 420)
-                  hub.tag = 1
-                  hub.isHidden = true
-                  neonWindow.addSubview(hub)
-              }
-              private func setupToolbar() {
-                  executeButton.frame = CGRect(x: 190, y: 450, width: 60, height: 40)
-                  executeButton.setTitle("▶️", for: .normal)
-                  executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
-                  executeButton.layer.cornerRadius = 8
-                  executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
-                  neonWindow.addSubview(executeButton)
-                  clearButton.frame = CGRect(x: 255, y: 450, width: 60, height: 40)
-                  clearButton.setTitle("🗑️", for: .normal)
-                  clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
-                  clearButton.layer.cornerRadius = 8
-                  clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
-                  neonWindow.addSubview(clearButton)
-                  saveButton.frame = CGRect(x: 320, y: 450, width: 60, height: 40)
-                  saveButton.setTitle("💾", for: .normal)
-                  saveButton.backgroundColor = UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1)
-                  saveButton.layer.cornerRadius = 8
-                  saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside)
-                  neonWindow.addSubview(saveButton)
-              }
-              private func setupNotifications() {
-                  NotificationCenter.default.addObserver(
-                      self,
-                      selector: #selector(loadScriptFromHub(_:)),
-                      name: NSNotification.Name("LoadScript"),
-                      object: nil
-                  )
-              }
-              private func switchToTab(_ index: Int) {
-                  editor.isHidden = index != 0
-                  hub.isHidden = index != 1
-              }
-              @objc private func executeScript() {
-                  let script = editor.textView.text ?? ""
-                  ExecuteScript(script)
-              }
-              @objc private func clearScript() {
-                  editor.textView.text = ""
-              }
-              @objc private func saveScript() {
-                  print("Script saved")
-              }
+              private func switchToTab(_ index: Int) { editor.isHidden = index != 0; hub.isHidden = index != 1 }
+              @objc private func executeScript() { ExecuteScript(editor.textView.text ?? "") }
+              @objc private func clearScript() { editor.textView.text = "" }
+              @objc private func saveScript() { print("Script saved") }
               @objc private func loadScriptFromHub(_ notification: Notification) {
-                  if let scriptTitle = notification.object as? String {
-                      switchToTab(0)
-                      editor.textView.text = "-- Loaded: \(scriptTitle)\n\nprint('Script loaded!')"
-                  }
-              }
-              @objc private func onGameJoined() {
-                  DispatchQueue.main.async {
-                      self.neonWindow.isHidden = false
-                      self.view.bringSubviewToFront(self.neonWindow)
-                  }
+                  if let title = notification.object as? String { switchToTab(0); editor.textView.text = "-- Loaded: \(title)\n\nprint('Script loaded!')" }
               }
           }
           EOF
@@ -2704,175 +1267,47 @@ jobs:
       - name: Compile Objective-C files
         run: |
           mkdir -p build
-          echo "Compiling Objective-C files..."
           for file in injector/dylib/*.m; do
             if [ -f "$file" ]; then
-              filename=$(basename "$file" .m)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang \
-                -c \
-                -I./injector/dylib \
-                -I./injector/dylib/Core \
-                -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" \
-                "$file" \
-                -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
+              xcrun -sdk iphoneos clang -c -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} -o "build/$(basename "$file" .m).o" "$file" -target arm64-apple-ios15.0
             fi
           done
-          echo "✅ Objective-C compilation complete"
       
       - name: Compile C++ files
         run: |
-          echo "Compiling C++ files..."
           for file in injector/dylib/Core/*.mm; do
             if [ -f "$file" ]; then
-              filename=$(basename "$file" .mm)
-              echo "Compiling $file..."
-              xcrun -sdk iphoneos clang++ \
-                -c \
-                -std=c++11 \
-                -I./injector/dylib \
-                -I./injector/dylib/Core \
-                -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/${filename}.o" \
-                "$file" \
-                -target arm64-apple-ios15.0
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to compile $file"
-                exit 1
-              fi
+              xcrun -sdk iphoneos clang++ -c -std=c++11 -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} -o "build/$(basename "$file" .mm).o" "$file" -target arm64-apple-ios15.0
             fi
           done
-          echo "✅ C++ compilation complete"
       
-      - name: Compile Swift files into a single object file
+      - name: Compile Swift files
         run: |
-          echo "Compiling Swift files together..."
           SWIFT_FILES=$(find XZX -name "*.swift" -type f | tr '\n' ' ')
-          echo "Compiling: $SWIFT_FILES"
-          xcrun -sdk iphoneos swiftc \
-            -c \
-            -whole-module-optimization \
-            -module-name XZX \
-            -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I . \
-            -I ./injector/dylib \
-            -I ./injector/dylib/Core \
-            -I ${{ env.LUA_INCLUDE_DIR }} \
-            -target arm64-apple-ios15.0 \
-            -o build/XZXSwift.o \
-            $SWIFT_FILES
-          if [ $? -ne 0 ]; then
-            echo "❌ Swift compilation failed"
-            exit 1
-          fi
-          echo "✅ Swift compilation complete"
+          xcrun -sdk iphoneos swiftc -c -whole-module-optimization -module-name XZX -import-objc-header XZX/XZX-Bridging-Header.h -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} -target arm64-apple-ios15.0 -o build/XZXSwift.o $SWIFT_FILES
       
-      - name: List object files
+      - name: Link dylib
         run: |
-          echo "Object files created:"
-          ls -la build/
-      
-      - name: Link all object files
-        run: |
-          echo "Linking all object files..."
-          OBJECTS=$(find build -name "*.o" -type f | tr '\n' ' ')
-          if [ -z "$OBJECTS" ]; then
-            echo "❌ No object files found to link"
-            exit 1
-          fi
-          echo "Linking objects: $OBJECTS"
-          xcrun -sdk iphoneos clang++ \
-            -shared \
-            -framework UIKit \
-            -framework Foundation \
-            -framework CoreGraphics \
-            -framework WebKit \
-            -undefined dynamic_lookup \
-            -o build/executor.dylib \
-            $OBJECTS \
-            -lstdc++ \
-            -target arm64-apple-ios15.0
-          if [ ! -f "build/executor.dylib" ]; then
-            echo "❌ Linking failed"
-            ls -la build/
-            exit 1
-          fi
-          echo "✅ Dylib compiled successfully"
-          file build/executor.dylib
+          xcrun -sdk iphoneos clang++ -shared -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit -undefined dynamic_lookup -o build/executor.dylib build/*.o -lstdc++ -target arm64-apple-ios15.0
       
       - name: Extract IPA
         run: |
-          echo "📦 Extracting Roblox.ipa..."
-          mkdir -p Payload
           unzip -q Roblox.ipa -d extracted/
-          if [ ! -d "extracted/Payload/Roblox.app" ]; then
-            echo "❌ Failed to extract IPA"
-            exit 1
-          fi
-          echo "✅ IPA extracted successfully"
-      
-      - name: Copy dylib to app bundle
-        run: |
-          echo "📋 Copying executor.dylib to app bundle..."
           cp build/executor.dylib extracted/Payload/Roblox.app/
-          echo "✅ Dylib copied"
-      
-      - name: Remove existing code signatures
-        run: |
-          echo "🔓 Removing code signatures..."
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          echo "✅ Signatures removed"
-      
-      - name: Inject dylib into Roblox binary
-        run: |
-          echo "💉 Injecting dylib into Roblox binary..."
-          ./tools/insert_dylib @executable_path/executor.dylib \
-            extracted/Payload/Roblox.app/Roblox \
-            extracted/Payload/Roblox.app/Roblox_patched \
-            --all-yes
-          if [ ! -f "extracted/Payload/Roblox.app/Roblox_patched" ]; then
-            echo "❌ Dylib injection failed"
-            exit 1
-          fi
-          mv extracted/Payload/Roblox.app/Roblox_patched \
-             extracted/Payload/Roblox.app/Roblox
-          echo "✅ Dylib injection complete"
-      
-      - name: Change app name to XZX
-        run: |
-          echo "📝 Changing app name to XZX..."
+          ./tools/insert_dylib @executable_path/executor.dylib extracted/Payload/Roblox.app/Roblox extracted/Payload/Roblox.app/Roblox_patched --all-yes
+          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
           INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
           plutil -convert xml1 "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName XZX" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string XZX" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName XZX" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string XZX" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
-          echo "✅ App name changed to XZX"
+          cd extracted; zip -qr ../XZX.ipa Payload/; cd ..
       
-      - name: Repackage IPA
-        run: |
-          echo "📦 Repackaging IPA..."
-          cd extracted
-          zip -qr ../XZX.ipa Payload/
-          cd ..
-          if [ ! -f "XZX.ipa" ]; then
-            echo "❌ Failed to create IPA"
-            exit 1
-          fi
-          echo "✅ IPA created: XZX.ipa"
-          ls -la XZX.ipa
-      
-      - name: Upload IPA Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: XZX-Executor
           path: XZX.ipa
-          if-no-files-found: error
           retention-days: 90

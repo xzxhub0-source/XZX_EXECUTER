@@ -446,7 +446,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_core.m (FIXED)
+      - name: Create xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
@@ -598,7 +598,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_antidetection.m (FIXED)
+      - name: Create xzx_antidetection.m
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
@@ -860,6 +860,206 @@ jobs:
           }
 
           @end
+          EOF
+      
+      - name: Create xzx_editor.h
+        run: |
+          cat > injector/dylib/xzx_editor.h << 'EOF'
+          #ifndef XZX_EDITOR_H
+          #define XZX_EDITOR_H
+          #import <UIKit/UIKit.h>
+          @interface XZXEditor : NSObject
+          + (instancetype)shared;
+          - (UIWindow *)createEditorWindow;
+          - (void)show;
+          - (void)hide;
+          - (void)executeScript;
+          - (void)clearScript;
+          - (void)saveScript;
+          - (void)loadScript;
+          @property (nonatomic, strong) UIWindow *window;
+          @property (nonatomic, strong) UITextView *scriptView;
+          @property (nonatomic, strong) NSMutableArray *savedScripts;
+          @end
+          #endif
+          EOF
+      
+      - name: Create xzx_editor.m
+        run: |
+          cat > injector/dylib/xzx_editor.m << 'EOF'
+          #import "xzx_editor.h"
+          #import "Core/LuaExecutor.h"
+          #import <UIKit/UIKit.h>
+          #import <QuartzCore/QuartzCore.h>
+
+          static XZXEditor *sharedEditorInstance = nil;
+
+          @implementation XZXEditor
+
+          + (instancetype)shared {
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  sharedEditorInstance = [[self alloc] init];
+              });
+              return sharedEditorInstance;
+          }
+
+          - (instancetype)init {
+              self = [super init];
+              if (self) {
+                  _savedScripts = [NSMutableArray array];
+              }
+              return self;
+          }
+
+          - (UIWindow *)createEditorWindow {
+              CGRect screenBounds = [UIScreen mainScreen].bounds;
+              
+              self.window = [[UIWindow alloc] initWithFrame:screenBounds];
+              self.window.windowLevel = UIWindowLevelAlert + 1;
+              self.window.backgroundColor = [UIColor clearColor];
+              self.window.rootViewController = [UIViewController new];
+              self.window.rootViewController.view.backgroundColor = [UIColor clearColor];
+              self.window.hidden = YES;
+              
+              UIView *mainContainer = [[UIView alloc] initWithFrame:CGRectMake(40, 40, screenBounds.size.width - 80, screenBounds.size.height - 80)];
+              mainContainer.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.9];
+              mainContainer.layer.cornerRadius = 16;
+              mainContainer.layer.borderColor = [UIColor colorWithRed:0.8 green:0.2 blue:1.0 alpha:1.0].CGColor;
+              mainContainer.layer.borderWidth = 2;
+              
+              self.scriptView = [[UITextView alloc] initWithFrame:CGRectInset(mainContainer.bounds, 10, 10)];
+              self.scriptView.backgroundColor = [UIColor clearColor];
+              self.scriptView.textColor = [UIColor colorWithRed:0.8 green:0.2 blue:1.0 alpha:1.0];
+              self.scriptView.font = [UIFont fontWithName:@"Menlo" size:14];
+              self.scriptView.text = @"-- XZX Executor\nprint('Hello World!')";
+              [mainContainer addSubview:self.scriptView];
+              
+              UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              closeBtn.frame = CGRectMake(mainContainer.frame.size.width - 60, 10, 50, 50);
+              [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+              [closeBtn setTitleColor:[UIColor colorWithRed:0.8 green:0.2 blue:1.0 alpha:1.0] forState:UIControlStateNormal];
+              closeBtn.titleLabel.font = [UIFont systemFontOfSize:24];
+              [closeBtn addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
+              [mainContainer addSubview:closeBtn];
+              
+              [self.window.rootViewController.view addSubview:mainContainer];
+              
+              return self.window;
+          }
+
+          - (void)executeScript {
+              NSString *script = self.scriptView.text;
+              if (script.length > 0) {
+                  ExecuteScript([script UTF8String]);
+              }
+          }
+
+          - (void)clearScript {
+              self.scriptView.text = @"";
+          }
+
+          - (void)saveScript {
+              if (self.scriptView.text.length > 0) {
+                  [_savedScripts addObject:self.scriptView.text];
+                  [[NSUserDefaults standardUserDefaults] setObject:_savedScripts forKey:@"XZXSavedScripts"];
+              }
+          }
+
+          - (void)loadScript {
+              NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:@"XZXSavedScripts"];
+              if (saved.count > 0) {
+                  self.scriptView.text = [saved lastObject];
+              }
+          }
+
+          - (void)show {
+              self.window.hidden = NO;
+          }
+
+          - (void)hide {
+              self.window.hidden = YES;
+          }
+
+          @end
+          EOF
+      
+      - name: Create xzx_hooks.h
+        run: |
+          cat > injector/dylib/xzx_hooks.h << 'EOF'
+          #ifndef XZX_HOOKS_H
+          #define XZX_HOOKS_H
+          #include <stdio.h>
+          #include <stdint.h>
+          #include <stdbool.h>
+          void hook_roblox_functions(void);
+          void unhook_roblox_functions(void);
+          bool isPlayerInGame(void);
+          #endif
+          EOF
+      
+      - name: Create xzx_hooks.m
+        run: |
+          cat > injector/dylib/xzx_hooks.m << 'EOF'
+          #import "xzx_hooks.h"
+          #import "xzx_core.h"
+          #import <Foundation/Foundation.h>
+          #import <objc/runtime.h>
+          #import <objc/message.h>
+          #import <mach/mach.h>
+          #import <mach-o/dyld.h>
+
+          static void *original_functions[256];
+          static int hook_count = 0;
+
+          void install_hook(void *target, void *replacement) {
+              if (!target || !replacement) return;
+              original_functions[hook_count++] = target;
+              vm_address_t address = (vm_address_t)target;
+              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
+                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+              uint32_t branch_instruction = 0x14000000 | 
+                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
+              memcpy(target, &branch_instruction, 4);
+              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
+                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_EXECUTE);
+          }
+
+          void hook_roblox_functions(void) {
+              uint32_t count = _dyld_image_count();
+              uintptr_t roblox_base = 0;
+              for (uint32_t i = 0; i < count; i++) {
+                  const char *name = _dyld_get_image_name(i);
+                  if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
+                      roblox_base = (uintptr_t)_dyld_get_image_header(i);
+                      break;
+                  }
+              }
+          }
+
+          void unhook_roblox_functions(void) {
+              hook_count = 0;
+          }
+
+          bool isPlayerInGame(void) {
+              @try {
+                  Class cls = NSClassFromString(@"RobloxDataModel");
+                  if (cls) {
+                      SEL sel = NSSelectorFromString(@"sharedDataModel");
+                      if ([cls respondsToSelector:sel]) {
+                          id dm = ((id(*)(id, SEL))objc_msgSend)((id)cls, sel);
+                          if (dm) {
+                              SEL placeSel = NSSelectorFromString(@"placeId");
+                              if ([dm respondsToSelector:placeSel]) {
+                                  id pid = ((id(*)(id, SEL))objc_msgSend)(dm, placeSel);
+                                  return pid != nil;
+                              }
+                          }
+                      }
+                  }
+              } @catch (NSException *exception) {}
+              return NO;
+          }
           EOF
       
       - name: Create xzx_injection_randomizer.h

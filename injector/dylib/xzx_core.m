@@ -1,6 +1,5 @@
 #import "xzx_core.h"
 #import "XZX-Swift.h"
-#import "Core/LuaExecutor.h"
 #import <UIKit/UIKit.h>
 
 static XZXCore *sharedCoreInstance = nil;
@@ -23,78 +22,36 @@ static XZXCore *sharedCoreInstance = nil;
     return self;
 }
 
+// Do absolutely nothing in +load
 + (void)load {
-    // DO NOTHING in load – it's too early and can trigger codesigning
+    // Empty
 }
 
+// Do absolutely nothing in initialize
 - (void)initialize {
-    // Delay all initialization to avoid early execution
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
-                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-        [self delayedInit];
-    });
+    // Empty
 }
 
-- (void)delayedInit {
-    // Initialize Lua safely
-    InitLua();
-    
-    // Start polling for game state (using only safe KVC, no swizzling)
-    [self startSafePolling];
-}
-
-- (void)startSafePolling {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        while (YES) {
-            @autoreleasepool {
-                BOOL inGame = [self safeCheckInGame];
-                if (inGame && !self.isInGame) {
-                    self.isInGame = YES;
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [self showUI];
-                    });
-                } else if (!inGame && self.isInGame) {
-                    self.isInGame = NO;
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [self hideUI];
-                    });
-                }
-            }
-            [NSThread sleepForTimeInterval:2.0]; // Poll less frequently
-        }
-    });
-}
-
-- (BOOL)safeCheckInGame {
-    @try {
-        // Use only KVC – no performSelector with unknown selectors
-        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
-        if (!dataModelClass) return NO;
-        
-        id dataModel = [dataModelClass valueForKey:@"sharedDataModel"];
-        if (!dataModel) return NO;
-        
-        id placeId = [dataModel valueForKey:@"placeId"];
-        return (placeId != nil);
-    } @catch (NSException *e) {
-        return NO;
-    }
-}
-
-- (void)showUI {
-    if (!self.editorWindow) {
+// Separate method to show UI after a long delay
+- (void)showUIAfterDelay {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         MainViewController *vc = [[MainViewController alloc] init];
-        self.editorWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        self.editorWindow.windowLevel = UIWindowLevelAlert + 1;
-        self.editorWindow.rootViewController = vc;
-        self.editorWindow.backgroundColor = [UIColor clearColor];
-    }
-    self.editorWindow.hidden = NO;
-    [self.editorWindow makeKeyAndVisible];
+        UIWindow *window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        window.windowLevel = UIWindowLevelAlert + 1;
+        window.rootViewController = vc;
+        window.backgroundColor = [UIColor clearColor];
+        window.hidden = NO;
+        [window makeKeyAndVisible];
+        self.editorWindow = window;
+    });
 }
 
-- (void)hideUI {
-    self.editorWindow.hidden = YES;
+- (void)onGameJoined {
+    // No-op
+}
+
+- (void)onGameLeft {
+    // No-op
 }
 
 @end

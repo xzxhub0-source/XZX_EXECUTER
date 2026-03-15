@@ -90,7 +90,12 @@ static XZXAntiDetection *sharedAntiDetectionInstance = nil;
 }
 
 - (BOOL)isUnderInvestigation {
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    int mib[4];
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC;
+    mib[2] = KERN_PROC_PID;
+    mib[3] = getpid();
+    
     struct kinfo_proc info;
     size_t size = sizeof(info);
     info.kp_proc.p_flag = 0;

@@ -82,8 +82,6 @@ jobs:
           #include "LuaExecutor.h"
           #import "xzx_antidetection.h"
           #import "xzx_ban_protection.h"
-          #import "xzx_injection_randomizer.h"
-          #import "xzx_hook_manager.h"
 
           static lua_State *L = nil;
           static std::mutex lua_mutex;
@@ -446,7 +444,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_core.m
+      - name: Create xzx_core.m (SAFE VERSION)
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
@@ -491,7 +489,9 @@ jobs:
                   [[XZXBanProtection shared] protectAccount];
                   InitLua();
                   [self startGameStateMonitoring];
-              } @catch (NSException *exception) {}
+              } @catch (NSException *exception) {
+                  NSLog(@"[XZX] Init exception: %@", exception);
+              }
           }
 
           - (void)startGameStateMonitoring {
@@ -598,7 +598,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_antidetection.m
+      - name: Create xzx_antidetection.m (SAFE - NO MEMORY MODIFICATION)
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
@@ -630,57 +630,31 @@ jobs:
           }
 
           - (void)initializeProtection {
-              [self hideFromDyld];
               [self setupAntiDebug];
-          }
-
-          - (void)hideFromDyld {
-              uint32_t count = _dyld_image_count();
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "executor.dylib")) {
-                      uintptr_t header = (uintptr_t)_dyld_get_image_header(i);
-                      size_t size = 0;
-                      const uint8_t *cmd = (const uint8_t *)header + sizeof(struct mach_header_64);
-                      for (int j = 0; j < ((struct mach_header_64 *)header)->ncmds; j++) {
-                          struct load_command *lc = (struct load_command *)cmd;
-                          if (lc->cmd == LC_SEGMENT_64) {
-                              struct segment_command_64 *seg = (struct segment_command_64 *)cmd;
-                              if (strcmp(seg->segname, "__TEXT") == 0) {
-                                  size = seg->vmsize;
-                                  break;
-                              }
-                          }
-                          cmd += lc->cmdsize;
-                      }
-                      if (size > 0) {
-                          vm_address_t addr = header;
-                          vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), size + PAGE_SIZE, 0,
-                                    VM_PROT_READ | VM_PROT_WRITE);
-                          memset((void *)header, 0, 0x100);
-                          vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), size + PAGE_SIZE, 0,
-                                    VM_PROT_READ | VM_PROT_EXECUTE);
-                      }
-                      break;
-                  }
-              }
+              [self startIntegrityChecks];
           }
 
           - (void)setupAntiDebug {
-              void *handle = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_NOW);
-              if (handle) {
-                  void *ptrace = dlsym(handle, "ptrace");
-                  if (ptrace) {
-                      vm_address_t addr = (vm_address_t)ptrace;
-                      vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                                VM_PROT_READ | VM_PROT_WRITE);
-                      uint32_t ret = 0x00000020;
-                      memcpy(ptrace, &ret, 4);
-                      vm_protect(mach_task_self(), addr & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                                VM_PROT_READ | VM_PROT_EXECUTE);
+              int mib[4];
+              struct kinfo_proc info;
+              size_t size = sizeof(info);
+              info.kp_proc.p_flag = 0;
+              
+              mib[0] = CTL_KERN;
+              mib[1] = KERN_PROC;
+              mib[2] = KERN_PROC_PID;
+              mib[3] = getpid();
+              
+              sysctl(mib, 4, &info, &size, NULL, 0);
+          }
+
+          - (void)startIntegrityChecks {
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                  while (YES) {
+                      [self checkForDebugger];
+                      [NSThread sleepForTimeInterval:5.0];
                   }
-                  dlclose(handle);
-              }
+              });
           }
 
           - (void)randomizeInjectionPattern {
@@ -692,24 +666,28 @@ jobs:
               [[NSUserDefaults standardUserDefaults] synchronize];
           }
 
-          - (BOOL)isUnderInvestigation {
+          - (void)checkForDebugger {
               int mib[4];
+              struct kinfo_proc info;
+              size_t size = sizeof(info);
+              
               mib[0] = CTL_KERN;
               mib[1] = KERN_PROC;
               mib[2] = KERN_PROC_PID;
               mib[3] = getpid();
               
-              struct kinfo_proc info;
-              size_t size = sizeof(info);
-              info.kp_proc.p_flag = 0;
-              
               if (sysctl(mib, 4, &info, &size, NULL, 0) == 0) {
                   if ((info.kp_proc.p_flag & P_TRACED) != 0) {
                       _currentStrikes += 5;
-                      return YES;
+                      if ([self isUnderInvestigation]) {
+                          [self emergencyShutdown];
+                      }
                   }
               }
-              return NO;
+          }
+
+          - (BOOL)isUnderInvestigation {
+              return _currentStrikes > 10;
           }
 
           - (void)emergencyShutdown {
@@ -1012,26 +990,11 @@ jobs:
           static void *original_functions[256];
           static int hook_count = 0;
 
-          void install_hook(void *target, void *replacement) {
-              if (!target || !replacement) return;
-              original_functions[hook_count++] = target;
-              vm_address_t address = (vm_address_t)target;
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
-                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-              uint32_t branch_instruction = 0x14000000 | 
-                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
-              memcpy(target, &branch_instruction, 4);
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), 
-                         PAGE_SIZE, 0, VM_PROT_READ | VM_PROT_EXECUTE);
-          }
-
           void hook_roblox_functions(void) {
               uint32_t count = _dyld_image_count();
-              uintptr_t roblox_base = 0;
               for (uint32_t i = 0; i < count; i++) {
                   const char *name = _dyld_get_image_name(i);
                   if (strstr(name, "Roblox") || strstr(name, "RobloxPlayer")) {
-                      roblox_base = (uintptr_t)_dyld_get_image_header(i);
                       break;
                   }
               }
@@ -1062,99 +1025,6 @@ jobs:
           }
           EOF
       
-      - name: Create xzx_injection_randomizer.h
-        run: |
-          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
-          #ifndef XZX_INJECTION_RANDOMIZER_H
-          #define XZX_INJECTION_RANDOMIZER_H
-          #import <Foundation/Foundation.h>
-          @interface XZXInjectionRandomizer : NSObject
-          + (instancetype)shared;
-          - (void)randomizeNextInjection;
-          - (void)randomizeInjectionTiming;
-          - (void)avoidSignaturePatterns;
-          - (double)randomnessScore;
-          @property (nonatomic, assign) NSInteger lastInjectionMethod;
-          @end
-          #endif
-          EOF
-      
-      - name: Create xzx_injection_randomizer.m
-        run: |
-          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
-          #import "xzx_injection_randomizer.h"
-          static XZXInjectionRandomizer *sharedInjectionRandomizerInstance = nil;
-          @implementation XZXInjectionRandomizer
-          + (instancetype)shared {
-              static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  sharedInjectionRandomizerInstance = [[self alloc] init];
-              });
-              return sharedInjectionRandomizerInstance;
-          }
-          - (instancetype)init {
-              self = [super init];
-              if (self) _lastInjectionMethod = -1;
-              return self;
-          }
-          - (void)randomizeNextInjection {
-              _lastInjectionMethod = arc4random_uniform(5);
-          }
-          - (void)randomizeInjectionTiming {
-              usleep((arc4random_uniform(500) + 100) * 1000);
-          }
-          - (void)avoidSignaturePatterns {}
-          - (double)randomnessScore { return 1.0; }
-          @end
-          EOF
-      
-      - name: Create xzx_hook_manager.h
-        run: |
-          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
-          #ifndef XZX_HOOK_MANAGER_H
-          #define XZX_HOOK_MANAGER_H
-          #import <Foundation/Foundation.h>
-          @interface XZXHookManager : NSObject
-          + (instancetype)shared;
-          - (void)initializeHookSystem;
-          - (void)addHook:(NSString *)functionName hook:(void *)hook;
-          - (void)restoreAllFunctions;
-          - (void)hideFromAdonis;
-          - (BOOL)areHooksExposed;
-          @property (nonatomic, strong) NSMutableDictionary *hooks;
-          @end
-          #endif
-          EOF
-      
-      - name: Create xzx_hook_manager.m
-        run: |
-          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
-          #import "xzx_hook_manager.h"
-          #import <objc/runtime.h>
-          static XZXHookManager *sharedHookManagerInstance = nil;
-          @implementation XZXHookManager
-          + (instancetype)shared {
-              static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  sharedHookManagerInstance = [[self alloc] init];
-              });
-              return sharedHookManagerInstance;
-          }
-          - (instancetype)init {
-              self = [super init];
-              if (self) _hooks = [NSMutableDictionary dictionary];
-              return self;
-          }
-          - (void)initializeHookSystem {}
-          - (void)addHook:(NSString *)functionName hook:(void *)hook {
-              if (functionName && hook) _hooks[functionName] = [NSValue valueWithPointer:hook];
-          }
-          - (void)restoreAllFunctions {}
-          - (void)hideFromAdonis {}
-          - (BOOL)areHooksExposed { return NO; }
-          @end
-          EOF
-      
       - name: Create xzx_security.h
         run: |
           cat > injector/dylib/xzx_security.h << 'EOF'
@@ -1182,70 +1052,6 @@ jobs:
               return sharedSecurityInstance;
           }
           - (void)applyBypasses {}
-          @end
-          EOF
-      
-      - name: Create xzx_physics_bypass.h
-        run: |
-          cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
-          #ifndef XZX_PHYSICS_BYPASS_H
-          #define XZX_PHYSICS_BYPASS_H
-          #import <Foundation/Foundation.h>
-          @interface XZXPhysicsBypass : NSObject
-          + (instancetype)shared;
-          - (void)setTeleportGrace:(double)seconds;
-          - (void)respectForceField;
-          @end
-          #endif
-          EOF
-      
-      - name: Create xzx_physics_bypass.m
-        run: |
-          cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
-          #import "xzx_physics_bypass.h"
-          static XZXPhysicsBypass *sharedPhysicsBypassInstance = nil;
-          @implementation XZXPhysicsBypass
-          + (instancetype)shared {
-              static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  sharedPhysicsBypassInstance = [[self alloc] init];
-              });
-              return sharedPhysicsBypassInstance;
-          }
-          - (void)setTeleportGrace:(double)seconds {}
-          - (void)respectForceField {}
-          @end
-          EOF
-      
-      - name: Create xzx_memory_obfuscator.h
-        run: |
-          cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
-          #ifndef XZX_MEMORY_OBFUSCATOR_H
-          #define XZX_MEMORY_OBFUSCATOR_H
-          #import <Foundation/Foundation.h>
-          @interface XZXMemoryObfuscator : NSObject
-          + (instancetype)shared;
-          - (void)obfuscateAllSections;
-          - (BOOL)verifyMemoryIntegrity;
-          @end
-          #endif
-          EOF
-      
-      - name: Create xzx_memory_obfuscator.m
-        run: |
-          cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
-          #import "xzx_memory_obfuscator.h"
-          static XZXMemoryObfuscator *sharedMemoryObfuscatorInstance = nil;
-          @implementation XZXMemoryObfuscator
-          + (instancetype)shared {
-              static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  sharedMemoryObfuscatorInstance = [[self alloc] init];
-              });
-              return sharedMemoryObfuscatorInstance;
-          }
-          - (void)obfuscateAllSections {}
-          - (BOOL)verifyMemoryIntegrity { return YES; }
           @end
           EOF
       
@@ -1420,7 +1226,7 @@ jobs:
                   collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]; collectionView.backgroundColor = .clear
                   collectionView.register(ScriptCardCell.self, forCellWithReuseIdentifier: "cell")
                   collectionView.dataSource = self; addSubview(collectionView)
-                  search(query: "blox")
+                  self.search(query: "blox")
               }
               public func search(query: String) {
                   ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in
@@ -1430,7 +1236,7 @@ jobs:
               }
               public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
                   searchBar.resignFirstResponder(); guard let query = searchBar.text, !query.isEmpty else { return }
-                  search(query: query)
+                  self.search(query: query)
               }
               public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { return scripts.count }
               public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {

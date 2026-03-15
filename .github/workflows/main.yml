@@ -34,24 +34,59 @@ jobs:
           chmod +x ../tools/insert_dylib
           cd ..
       
-      - name: Download and build Lua
+      - name: Download and patch Lua for iOS
         run: |
           mkdir -p $HOME/lua-ios
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           tar -xzf lua-5.4.6.tar.gz
           cd lua-5.4.6
-          # Compile Lua library for iOS
+          
+          # Patch loslib.c to remove system() dependency
+          cat > src/loslib.c.patch << 'PATCH'
+          --- src/loslib.c.original	2026-03-15 00:00:00.000000000 +0000
+          +++ src/loslib.c	2026-03-15 00:00:00.000000000 +0000
+          @@ -134,7 +134,11 @@
+             return 0;
+           }
+           
+          -#define l_system(cmd)	system(cmd)	/* default definition */
+          +#ifdef LUA_USE_IOS
+          +#define l_system(cmd)	(0)	/* iOS: system() is unavailable */
+          +#else
+          +#define l_system(cmd)	system(cmd)
+          +#endif
+           
+           static int os_execute (lua_State *L) {
+             const char *cmd = luaL_optstring(L, 1, NULL);
+          PATCH
+          
+          # Apply the patch
+          patch -p0 < src/loslib.c.patch || true
+          
+          # Compile Lua for iOS - exclude files that cause issues
           for file in src/*.c; do
-            if [ "$file" != "src/lua.c" ] && [ "$file" != "src/luac.c" ]; then
-              xcrun -sdk iphoneos clang -c -O2 -DNO_CRT_STDIO_SETUP -arch arm64 -o "${file%.c}.o" "$file" -target arm64-apple-ios15.0
+            filename=$(basename "$file" .c)
+            # Skip lua.c (interpreter) and luac.c (compiler)
+            if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
+              echo "Compiling $filename.c..."
+              xcrun -sdk iphoneos clang -c -O2 \
+                -DLUA_USE_IOS \
+                -arch arm64 \
+                -o "src/$filename.o" \
+                "src/$filename.c" \
+                -target arm64-apple-ios15.0 \
+                -I src
             fi
           done
+          
+          # Create static library
           ar rcs $HOME/lua-ios/liblua.a src/*.o
           mkdir -p $HOME/lua-ios/include
           cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
           cd ..
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
+          echo "✅ Lua compiled successfully for iOS"
       
       - name: Create directory structure
         run: |
@@ -82,14 +117,8 @@ jobs:
           #include <lua.h>
           #include <lauxlib.h>
           #include <lualib.h>
-          #include <vector>
-          #include <string>
-          #include <map>
-          #include <mutex>
-          #include <thread>
 
           static lua_State *L = nil;
-          static std::mutex lua_mutex;
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
@@ -186,9 +215,14 @@ jobs:
                                                                                  message:[NSString stringWithUTF8String:text]
                                                                           preferredStyle:UIAlertControllerStyleAlert];
                   [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                  UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                  UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
-                  [rootVC presentViewController:alert animated:YES completion:nil];
+                  if (@available(iOS 13.0, *)) {
+                      UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+                      UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
+                      [rootVC presentViewController:alert animated:YES completion:nil];
+                  } else {
+                      UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                      [rootVC presentViewController:alert animated:YES completion:nil];
+                  }
               });
               return 0;
           }
@@ -199,7 +233,6 @@ jobs:
           }
 
           void InitLua(void) {
-              std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) {
                   L = luaL_newstate();
                   if (L) {
@@ -221,10 +254,6 @@ jobs:
                       lua_setfield(L, -2, "name");
                       lua_pushstring(L, "3.0.0");
                       lua_setfield(L, -2, "version");
-                      lua_pushnumber(L, 95);
-                      lua_setfield(L, -2, "unc");
-                      lua_pushnumber(L, 85);
-                      lua_setfield(L, -2, "sunc");
                       lua_setglobal(L, "xzx");
                       
                       NSLog(@"[XZX] Lua initialized successfully");
@@ -233,20 +262,15 @@ jobs:
           }
 
           void ExecuteScript(const char *script) {
-              std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) InitLua();
               if (L && script && strlen(script) > 0) {
-                  @try {
-                      int status = luaL_loadstring(L, script);
-                      if (status == 0) {
-                          lua_pcall(L, 0, 0, 0);
-                      } else {
-                          const char *error = lua_tostring(L, -1);
-                          NSLog(@"[XZX] Lua Error: %s", error);
-                          lua_pop(L, 1);
-                      }
-                  } @catch (NSException *exception) {
-                      NSLog(@"[XZX] ExecuteScript exception: %@", exception);
+                  int status = luaL_loadstring(L, script);
+                  if (status == 0) {
+                      lua_pcall(L, 0, 0, 0);
+                  } else {
+                      const char *error = lua_tostring(L, -1);
+                      NSLog(@"[XZX] Lua Error: %s", error);
+                      lua_pop(L, 1);
                   }
               }
           }
@@ -287,7 +311,7 @@ jobs:
                   titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
                   view.addSubview(titleLabel)
                   
-                  textView.frame = CGRect(x: 20, y: 60, width: view.bounds.width - 40, height: 300)
+                  textView.frame = CGRect(x: 20, y: 60, width: view.bounds.width - 40, height: view.bounds.height - 160)
                   textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
                   textView.textColor = .white
                   textView.font = UIFont(name: "Menlo", size: 14)
@@ -295,14 +319,14 @@ jobs:
                   textView.text = "-- XZX Executor\nprint('Hello World!')"
                   view.addSubview(textView)
                   
-                  executeButton.frame = CGRect(x: 20, y: 380, width: 120, height: 50)
+                  executeButton.frame = CGRect(x: 20, y: view.bounds.height - 80, width: 120, height: 50)
                   executeButton.setTitle("Execute", for: .normal)
                   executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
                   executeButton.layer.cornerRadius = 8
                   executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
                   view.addSubview(executeButton)
                   
-                  clearButton.frame = CGRect(x: 160, y: 380, width: 120, height: 50)
+                  clearButton.frame = CGRect(x: 160, y: view.bounds.height - 80, width: 120, height: 50)
                   clearButton.setTitle("Clear", for: .normal)
                   clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
                   clearButton.layer.cornerRadius = 8
@@ -431,6 +455,9 @@ jobs:
             build/MainViewController.o \
             -lstdc++ \
             -target arm64-apple-ios15.0
+          
+          echo "✅ Dylib compiled successfully"
+          file build/executor.dylib
       
       - name: Extract and modify IPA
         run: |
@@ -468,6 +495,9 @@ jobs:
           cd extracted
           zip -qr ../XZX.ipa Payload/
           cd ..
+          
+          echo "✅ IPA created: XZX.ipa"
+          ls -la XZX.ipa
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4

@@ -34,21 +34,28 @@ jobs:
           chmod +x ../tools/insert_dylib
           cd ..
       
-      - name: Download Lua headers
+      - name: Download and build Lua
         run: |
-          mkdir -p $HOME/lua-ios/include
+          mkdir -p $HOME/lua-ios
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           tar -xzf lua-5.4.6.tar.gz
-          cp lua-5.4.6/src/lua.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/luaconf.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lauxlib.h $HOME/lua-ios/include/
-          cp lua-5.4.6/src/lualib.h $HOME/lua-ios/include/
+          cd lua-5.4.6
+          # Compile Lua library for iOS
+          for file in src/*.c; do
+            if [ "$file" != "src/lua.c" ] && [ "$file" != "src/luac.c" ]; then
+              xcrun -sdk iphoneos clang -c -O2 -DNO_CRT_STDIO_SETUP -arch arm64 -o "${file%.c}.o" "$file" -target arm64-apple-ios15.0
+            fi
+          done
+          ar rcs $HOME/lua-ios/liblua.a src/*.o
+          mkdir -p $HOME/lua-ios/include
+          cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
+          cd ..
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
+          echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
       
       - name: Create directory structure
         run: |
-          mkdir -p XZX/Services
-          mkdir -p XZX/UI
+          mkdir -p XZX
           mkdir -p injector/dylib/Core
       
       - name: Create LuaExecutor.h
@@ -74,6 +81,7 @@ jobs:
           #import <UIKit/UIKit.h>
           #include <lua.h>
           #include <lauxlib.h>
+          #include <lualib.h>
           #include <vector>
           #include <string>
           #include <map>
@@ -106,7 +114,6 @@ jobs:
               if (status != 0) {
                   lua_pushnil(L);
                   lua_pushstring(L, lua_tostring(L, -1));
-                  lua_remove(L, -2);
                   return 2;
               }
               return 1;
@@ -116,20 +123,32 @@ jobs:
               const char *url = luaL_checkstring(L, 1);
               dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
               __block NSString *result = nil;
+              __block int status_code = 0;
+              
               NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
               [request setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
+              [request setTimeoutInterval:30];
+              
               NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-                  if (data) result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                  if (data) {
+                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                      if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                          status_code = (int)((NSHTTPURLResponse *)response).statusCode;
+                      }
+                  }
                   dispatch_semaphore_signal(semaphore);
               }];
               [task resume];
-              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+              
               if (result) {
                   lua_pushstring(L, [result UTF8String]);
-                  return 1;
+                  lua_pushinteger(L, status_code);
+                  return 2;
               }
               lua_pushnil(L);
-              return 1;
+              lua_pushstring(L, "Request failed");
+              return 2;
           }
 
           static int xzx_base64_encode(lua_State *L) {
@@ -174,11 +193,18 @@ jobs:
               return 0;
           }
 
+          static int xzx_identifyexecutor(lua_State *L) {
+              lua_pushstring(L, "XZX");
+              return 1;
+          }
+
           void InitLua(void) {
               std::lock_guard<std::mutex> lock(lua_mutex);
               if (!L) {
                   L = luaL_newstate();
                   if (L) {
+                      luaL_openlibs(L);
+                      
                       lua_register(L, "print", xzx_print);
                       lua_register(L, "loadstring", xzx_loadstring);
                       lua_register(L, "HttpGet", xzx_httpget);
@@ -187,15 +213,21 @@ jobs:
                       lua_register(L, "base64decode", xzx_base64_decode);
                       lua_register(L, "base64codes", xzx_base64codes);
                       lua_register(L, "messagebox", xzx_messagebox);
+                      lua_register(L, "identifyexecutor", xzx_identifyexecutor);
+                      lua_register(L, "getexecutorname", xzx_identifyexecutor);
                       
                       lua_newtable(L);
                       lua_pushstring(L, "XZX");
                       lua_setfield(L, -2, "name");
                       lua_pushstring(L, "3.0.0");
                       lua_setfield(L, -2, "version");
+                      lua_pushnumber(L, 95);
+                      lua_setfield(L, -2, "unc");
+                      lua_pushnumber(L, 85);
+                      lua_setfield(L, -2, "sunc");
                       lua_setglobal(L, "xzx");
                       
-                      NSLog(@"[XZX] Lua initialized");
+                      NSLog(@"[XZX] Lua initialized successfully");
                   }
               }
           }
@@ -208,8 +240,14 @@ jobs:
                       int status = luaL_loadstring(L, script);
                       if (status == 0) {
                           lua_pcall(L, 0, 0, 0);
+                      } else {
+                          const char *error = lua_tostring(L, -1);
+                          NSLog(@"[XZX] Lua Error: %s", error);
+                          lua_pop(L, 1);
                       }
-                  } @catch (NSException *exception) {}
+                  } @catch (NSException *exception) {
+                      NSLog(@"[XZX] ExecuteScript exception: %@", exception);
+                  }
               }
           }
           EOF
@@ -230,7 +268,7 @@ jobs:
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
 
-          public class MainViewController: UIViewController {
+          @objc public class MainViewController: UIViewController {
               private let textView = UITextView()
               private let executeButton = UIButton()
               private let clearButton = UIButton()
@@ -301,15 +339,31 @@ jobs:
           #import <objc/runtime.h>
           #import "Core/LuaExecutor.h"
 
+          @interface UIApplication (XZXWindow)
+          @end
+
+          @implementation UIApplication (XZXWindow)
+          static void *XZXWindowKey = &XZXWindowKey;
+          @end
+
           __attribute__((constructor))
           static void initializer() {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), 
                              dispatch_get_main_queue(), ^{
-                  UIViewController *vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+                  UIViewController *vc = nil;
+                  
+                  // Try different class name possibilities
+                  vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
                   if (!vc) {
                       vc = [[NSClassFromString(@"MainViewController") alloc] init];
                   }
-                  if (!vc) return;
+                  if (!vc) {
+                      vc = [[NSClassFromString(@"XZX_MainViewController") alloc] init];
+                  }
+                  if (!vc) {
+                      NSLog(@"[XZX] Could not create MainViewController");
+                      return;
+                  }
                   
                   UIWindow *window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
                   window.windowLevel = UIWindowLevelAlert + 1;
@@ -318,12 +372,14 @@ jobs:
                   window.hidden = NO;
                   [window makeKeyAndVisible];
                   
+                  // Store window globally
                   objc_setAssociatedObject([UIApplication sharedApplication], 
                                            @"XZXWindow", 
                                            window, 
                                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                   
                   InitLua();
+                  NSLog(@"[XZX] Executor loaded successfully");
               });
           }
           EOF
@@ -351,7 +407,7 @@ jobs:
             injector/dylib/Core/LuaExecutor.mm \
             -target arm64-apple-ios15.0
           
-          # Compile Swift file
+          # Compile Swift file with proper module
           xcrun -sdk iphoneos swiftc -c \
             -module-name XZX \
             -import-objc-header XZX/XZX-Bridging-Header.h \
@@ -363,12 +419,16 @@ jobs:
             -o build/MainViewController.o \
             XZX/MainViewController.swift
           
-          # Link all object files
+          # Link all object files with Lua library
           xcrun -sdk iphoneos clang++ -shared \
             -framework UIKit \
             -framework Foundation \
+            -L${{ env.LUA_LIB_DIR }} \
+            -llua \
             -o build/executor.dylib \
-            build/*.o \
+            build/entry.o \
+            build/LuaExecutor.o \
+            build/MainViewController.o \
             -lstdc++ \
             -target arm64-apple-ios15.0
       

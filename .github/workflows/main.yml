@@ -1422,9 +1422,15 @@ jobs:
                   collectionView.dataSource = self; addSubview(collectionView)
                   search(query: "blox")
               }
+              public func search(query: String) {
+                  ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in
+                      self?.scripts = scripts
+                      self?.collectionView.reloadData()
+                  }
+              }
               public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
                   searchBar.resignFirstResponder(); guard let query = searchBar.text, !query.isEmpty else { return }
-                  ScriptBloxAPI.shared.search(query: query) { [weak self] scripts in self?.scripts = scripts; self?.collectionView.reloadData() }
+                  search(query: query)
               }
               public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { return scripts.count }
               public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {

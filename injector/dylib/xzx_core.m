@@ -1,6 +1,7 @@
 #import "xzx_core.h"
 #import "XZX-Swift.h"
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 static XZXCore *sharedCoreInstance = nil;
 
@@ -22,36 +23,36 @@ static XZXCore *sharedCoreInstance = nil;
     return self;
 }
 
-// Do absolutely nothing in +load
 + (void)load {
-    // Empty
+    // CRITICAL: DO NOTHING in load - this executes too early
 }
 
-// Do absolutely nothing in initialize
 - (void)initialize {
-    // Empty
-}
-
-// Separate method to show UI after a long delay
-- (void)showUIAfterDelay {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        MainViewController *vc = [[MainViewController alloc] init];
-        UIWindow *window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        window.windowLevel = UIWindowLevelAlert + 1;
-        window.rootViewController = vc;
-        window.backgroundColor = [UIColor clearColor];
-        window.hidden = NO;
-        [window makeKeyAndVisible];
-        self.editorWindow = window;
+    // Wait for app to fully launch
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), 
+                   dispatch_get_main_queue(), ^{
+        [self showUI];
     });
 }
 
-- (void)onGameJoined {
-    // No-op
+- (void)showUI {
+    if (!self.editorWindow) {
+        MainViewController *vc = [[MainViewController alloc] init];
+        self.editorWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        self.editorWindow.windowLevel = UIWindowLevelAlert + 1;
+        self.editorWindow.rootViewController = vc;
+        self.editorWindow.backgroundColor = [UIColor clearColor];
+    }
+    self.editorWindow.hidden = NO;
+    [self.editorWindow makeKeyAndVisible];
 }
 
-- (void)onGameLeft {
-    // No-op
+- (void)hideUI {
+    self.editorWindow.hidden = YES;
 }
+
+// NO GAME STATE MONITORING - it always triggers codesigning
+// NO HOOKS - they always trigger codesigning
+// NO NSClassFromString with unknown classes - triggers detection
 
 @end

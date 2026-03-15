@@ -446,7 +446,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_core.m
+      - name: Create xzx_core.m (FIXED)
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
@@ -455,6 +455,7 @@ jobs:
           #import "Core/LuaExecutor.h"
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
+          #import <objc/message.h>
 
           static XZXCore *sharedCoreInstance = nil;
 
@@ -523,7 +524,7 @@ jobs:
                   if (cls) {
                       SEL sel = NSSelectorFromString(@"sharedDataModel");
                       if ([cls respondsToSelector:sel]) {
-                          id dm = ((id(*)(id, SEL))objc_msgSend)(cls, sel);
+                          id dm = ((id(*)(id, SEL))objc_msgSend)((id)cls, sel);
                           if (dm) {
                               SEL placeSel = NSSelectorFromString(@"placeId");
                               if ([dm respondsToSelector:placeSel]) {
@@ -542,10 +543,29 @@ jobs:
               self.isInGame = YES;
               [[XZXAntiDetection shared] randomizeInjectionPattern];
               [[XZXBanProtection shared] simulateHumanBehavior];
+              
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  if (!self.editorWindow) {
+                      UIViewController *vc = [[NSClassFromString(@"MainViewController") alloc] init];
+                      if (vc) {
+                          self.editorWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+                          self.editorWindow.windowLevel = UIWindowLevelAlert + 1;
+                          self.editorWindow.rootViewController = vc;
+                          self.editorWindow.backgroundColor = [UIColor clearColor];
+                          self.editorWindow.hidden = NO;
+                          [self.editorWindow makeKeyAndVisible];
+                      }
+                  } else {
+                      self.editorWindow.hidden = NO;
+                  }
+              });
           }
 
           - (void)onGameLeft {
               self.isInGame = NO;
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  self.editorWindow.hidden = YES;
+              });
           }
 
           void notify_game_joined(void) {
@@ -578,7 +598,7 @@ jobs:
           #endif
           EOF
       
-      - name: Create xzx_antidetection.m (FIXED VERSION)
+      - name: Create xzx_antidetection.m (FIXED)
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"

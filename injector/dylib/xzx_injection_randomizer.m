@@ -1,60 +1,24 @@
 #import "xzx_injection_randomizer.h"
 
-static XZXInjectionRandomizer *sharedInjectionRandomizerInstance = nil;
-
 @implementation XZXInjectionRandomizer
 
 + (instancetype)shared {
+    static XZXInjectionRandomizer *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        sharedInjectionRandomizerInstance = [[self alloc] init];
+        instance = [[XZXInjectionRandomizer alloc] init];
     });
-    return sharedInjectionRandomizerInstance;
+    return instance;
 }
 
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _injectionHistory = [NSMutableArray array];
-        _lastInjectionMethod = 0;
-    }
-    return self;
-}
-
-- (void)randomizeNextInjection {
-    return;
-}
-
-- (void)randomizeInjectionTiming {
-    return;
-}
-
-- (void)randomizeMemoryAllocation {
-    return;
-}
-
-- (void)randomizeThreadCreation {
-    return;
-}
-
-- (void)avoidSignaturePatterns {
-    return;
-}
-
-- (void)useAsynchronousInjection {
-    return;
-}
-
-- (void)useMemoryMappedInjection {
-    return;
-}
-
-- (double)randomnessScore {
-    return 1.0;
-}
-
-- (BOOL)isPatternDetectable {
-    return NO;
-}
+- (void)randomizeNextInjection {}
+- (void)randomizeInjectionTiming {}
+- (void)randomizeMemoryAllocation {}
+- (void)randomizeThreadCreation {}
+- (void)avoidSignaturePatterns {}
+- (void)useAsynchronousInjection {}
+- (void)useMemoryMappedInjection {}
+- (double)randomnessScore { return 1.0; }
+- (BOOL)isPatternDetectable { return NO; }
 
 @end

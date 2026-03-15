@@ -63,7 +63,7 @@ jobs:
           # Apply the patch
           patch -p0 < src/loslib.c.patch || true
           
-          # Compile Lua for iOS - exclude files that cause issues
+          # Compile Lua for iOS as C (not C++)
           for file in src/*.c; do
             filename=$(basename "$file" .c)
             # Skip lua.c (interpreter) and luac.c (compiler)
@@ -114,9 +114,11 @@ jobs:
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
-          #include <lua.h>
-          #include <lauxlib.h>
-          #include <lualib.h>
+          extern "C" {
+              #include <lua.h>
+              #include <lauxlib.h>
+              #include <lualib.h>
+          }
 
           static lua_State *L = nil;
 
@@ -215,14 +217,15 @@ jobs:
                                                                                  message:[NSString stringWithUTF8String:text]
                                                                           preferredStyle:UIAlertControllerStyleAlert];
                   [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                  
+                  UIViewController *rootVC = nil;
                   if (@available(iOS 13.0, *)) {
                       UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                      UIViewController *rootVC = windowScene.windows.firstObject.rootViewController;
-                      [rootVC presentViewController:alert animated:YES completion:nil];
+                      rootVC = windowScene.windows.firstObject.rootViewController;
                   } else {
-                      UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-                      [rootVC presentViewController:alert animated:YES completion:nil];
+                      rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
                   }
+                  [rootVC presentViewController:alert animated:YES completion:nil];
               });
               return 0;
           }
@@ -421,7 +424,7 @@ jobs:
             injector/dylib/entry.m \
             -target arm64-apple-ios15.0
           
-          # Compile LuaExecutor.mm
+          # Compile LuaExecutor.mm with extern C wrapper
           xcrun -sdk iphoneos clang++ -c \
             -std=c++11 \
             -I./injector/dylib \
@@ -448,7 +451,7 @@ jobs:
             -framework UIKit \
             -framework Foundation \
             -L${{ env.LUA_LIB_DIR }} \
-            -llua \
+            -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
             -o build/executor.dylib \
             build/entry.o \
             build/LuaExecutor.o \
@@ -458,6 +461,7 @@ jobs:
           
           echo "✅ Dylib compiled successfully"
           file build/executor.dylib
+          otool -L build/executor.dylib
       
       - name: Extract and modify IPA
         run: |

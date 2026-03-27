@@ -516,6 +516,7 @@ jobs:
           cat > injector/dylib/xzx_antidetection.h << 'EOF'
           #ifndef XZX_ANTIDETECTION_H
           #define XZX_ANTIDETECTION_H
+          #import <Foundation/Foundation.h>
           @interface XZXAntiDetection : NSObject
           + (instancetype)shared;
           @end
@@ -532,6 +533,7 @@ jobs:
           cat > injector/dylib/xzx_ban_protection.h << 'EOF'
           #ifndef XZX_BAN_PROTECTION_H
           #define XZX_BAN_PROTECTION_H
+          #import <Foundation/Foundation.h>
           @interface XZXBanProtection : NSObject
           + (instancetype)shared;
           @end
@@ -548,6 +550,7 @@ jobs:
           cat > injector/dylib/xzx_editor.h << 'EOF'
           #ifndef XZX_EDITOR_H
           #define XZX_EDITOR_H
+          #import <Foundation/Foundation.h>
           @interface XZXEditor : NSObject
           + (instancetype)shared;
           @end
@@ -564,6 +567,7 @@ jobs:
           cat > injector/dylib/xzx_security.h << 'EOF'
           #ifndef XZX_SECURITY_H
           #define XZX_SECURITY_H
+          #import <Foundation/Foundation.h>
           @interface XZXSecurity : NSObject
           + (instancetype)shared;
           @end

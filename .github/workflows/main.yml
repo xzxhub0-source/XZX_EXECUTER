@@ -1,4 +1,4 @@
-name: Build XZX Executor (iOS 26 Compatible)
+name: Build XZX Executor (Minimal)
 
 on:
   workflow_dispatch:
@@ -8,22 +8,22 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Install dependencies
         run: |
           brew install pipx
           pipx ensurepath
           pipx install gdown
-      
+
       - name: Download Roblox IPA
         run: |
           FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
-      
+
       - name: Download and compile insert_dylib
         run: |
           git clone https://github.com/tyilo/insert_dylib.git
@@ -33,18 +33,18 @@ jobs:
           cp /Users/runner/Library/Developer/Xcode/DerivedData/insert_dylib-*/Build/Products/Release/insert_dylib ../tools/
           chmod +x ../tools/insert_dylib
           cd ..
-      
-      - name: Download and patch Lua for iOS
+
+      - name: Download and build Lua (iOS patch)
         run: |
           mkdir -p $HOME/lua-ios
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           tar -xzf lua-5.4.6.tar.gz
           cd lua-5.4.6
-          
-          # Patch loslib.c to remove system() dependency
+
+          # Patch loslib.c to remove system()
           cat > src/loslib.c.patch << 'PATCH'
-          --- src/loslib.c.original	2026-03-15 00:00:00.000000000 +0000
-          +++ src/loslib.c	2026-03-15 00:00:00.000000000 +0000
+          --- src/loslib.c.original	2026-01-01 00:00:00.000000000 +0000
+          +++ src/loslib.c	2026-01-01 00:00:00.000000000 +0000
           @@ -134,7 +134,11 @@
              return 0;
            }
@@ -59,10 +59,8 @@ jobs:
            static int os_execute (lua_State *L) {
              const char *cmd = luaL_optstring(L, 1, NULL);
           PATCH
-          
-          # Apply the patch
           patch -p0 < src/loslib.c.patch || true
-          
+
           # Compile Lua for iOS as C
           for file in src/*.c; do
             filename=$(basename "$file" .c)
@@ -77,434 +75,8 @@ jobs:
                 -I src
             fi
           done
-          
+
           # Create static library
           ar rcs $HOME/lua-ios/liblua.a src/*.o
           mkdir -p $HOME/lua-ios/include
-          cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
-          cd ..
-          echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
-          echo "✅ Lua compiled successfully for iOS"
-      
-      - name: Create directory structure
-        run: |
-          mkdir -p XZX
-          mkdir -p injector/dylib/Core
-      
-      - name: Create LuaExecutor.h
-        run: |
-          cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
-          #ifndef LuaExecutor_h
-          #define LuaExecutor_h
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          void InitLua(void);
-          void ExecuteScript(const char *script);
-          #ifdef __cplusplus
-          }
-          #endif
-          #endif
-          EOF
-      
-      - name: Create LuaExecutor.mm
-        run: |
-          cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
-          #import <Foundation/Foundation.h>
-          #import <UIKit/UIKit.h>
-          extern "C" {
-              #include <lua.h>
-              #include <lauxlib.h>
-              #include <lualib.h>
-          }
-
-          static lua_State *L = nil;
-
-          static int xzx_print(lua_State *L) {
-              int n = lua_gettop(L);
-              NSMutableString *output = [NSMutableString string];
-              for (int i = 1; i <= n; i++) {
-                  if (i > 1) [output appendString:@" "];
-                  if (lua_isstring(L, i)) [output appendFormat:@"%s", lua_tostring(L, i)];
-                  else if (lua_isnumber(L, i)) [output appendFormat:@"%g", lua_tonumber(L, i)];
-                  else if (lua_isboolean(L, i)) [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
-                  else if (lua_istable(L, i)) [output appendString:@"table"];
-                  else if (lua_isfunction(L, i)) [output appendString:@"function"];
-                  else [output appendString:@"nil"];
-              }
-              NSLog(@"[XZX] %@", output);
-              return 0;
-          }
-
-          static int xzx_loadstring(lua_State *L) {
-              const char *code = luaL_checkstring(L, 1);
-              const char *chunkname = luaL_optstring(L, 2, "=xzx");
-              int status = luaL_loadbuffer(L, code, strlen(code), chunkname);
-              if (status != 0) {
-                  lua_pushnil(L);
-                  lua_pushstring(L, lua_tostring(L, -1));
-                  return 2;
-              }
-              return 1;
-          }
-
-          static int xzx_httpget(lua_State *L) {
-              const char *url = luaL_checkstring(L, 1);
-              dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-              __block NSString *result = nil;
-              __block int status_code = 0;
-              
-              NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
-              [request setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
-              [request setTimeoutInterval:30];
-              
-              NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-                  if (data) {
-                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-                      if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-                          status_code = (int)((NSHTTPURLResponse *)response).statusCode;
-                      }
-                  }
-                  dispatch_semaphore_signal(semaphore);
-              }];
-              [task resume];
-              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
-              
-              if (result) {
-                  lua_pushstring(L, [result UTF8String]);
-                  lua_pushinteger(L, status_code);
-                  return 2;
-              }
-              lua_pushnil(L);
-              lua_pushstring(L, "Request failed");
-              return 2;
-          }
-
-          static int xzx_base64_encode(lua_State *L) {
-              const char *data = luaL_checkstring(L, 1);
-              NSData *nsdata = [NSData dataWithBytes:data length:strlen(data)];
-              NSString *encoded = [nsdata base64EncodedStringWithOptions:0];
-              lua_pushstring(L, [encoded UTF8String]);
-              return 1;
-          }
-
-          static int xzx_base64_decode(lua_State *L) {
-              const char *data = luaL_checkstring(L, 1);
-              NSData *nsdata = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:data] options:0];
-              NSString *decoded = [[NSString alloc] initWithData:nsdata encoding:NSUTF8StringEncoding];
-              lua_pushstring(L, [decoded UTF8String]);
-              return 1;
-          }
-
-          static int xzx_base64codes(lua_State *L) {
-              if (lua_gettop(L) < 1) { lua_pushnil(L); return 1; }
-              const char *input = luaL_checkstring(L, 1);
-              NSData *data = [NSData dataWithBytes:input length:strlen(input)];
-              NSString *encoded = [data base64EncodedStringWithOptions:0];
-              NSData *decoded = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
-              NSString *result = [[NSString alloc] initWithData:decoded encoding:NSUTF8StringEncoding];
-              lua_pushstring(L, [result UTF8String]);
-              return 1;
-          }
-
-          static int xzx_messagebox(lua_State *L) {
-              const char *text = luaL_checkstring(L, 1);
-              const char *caption = luaL_optstring(L, 2, "XZX");
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
-                                                                                 message:[NSString stringWithUTF8String:text]
-                                                                          preferredStyle:UIAlertControllerStyleAlert];
-                  [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                  
-                  UIViewController *rootVC = nil;
-                  if (@available(iOS 13.0, *)) {
-                      UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                      rootVC = windowScene.windows.firstObject.rootViewController;
-                  } else {
-                      rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-                  }
-                  [rootVC presentViewController:alert animated:YES completion:nil];
-              });
-              return 0;
-          }
-
-          static int xzx_identifyexecutor(lua_State *L) {
-              lua_pushstring(L, "XZX");
-              return 1;
-          }
-
-          void InitLua(void) {
-              if (!L) {
-                  L = luaL_newstate();
-                  if (L) {
-                      luaL_openlibs(L);
-                      
-                      lua_register(L, "print", xzx_print);
-                      lua_register(L, "loadstring", xzx_loadstring);
-                      lua_register(L, "HttpGet", xzx_httpget);
-                      lua_register(L, "game_HttpGet", xzx_httpget);
-                      lua_register(L, "base64encode", xzx_base64_encode);
-                      lua_register(L, "base64decode", xzx_base64_decode);
-                      lua_register(L, "base64codes", xzx_base64codes);
-                      lua_register(L, "messagebox", xzx_messagebox);
-                      lua_register(L, "identifyexecutor", xzx_identifyexecutor);
-                      lua_register(L, "getexecutorname", xzx_identifyexecutor);
-                      
-                      lua_newtable(L);
-                      lua_pushstring(L, "XZX");
-                      lua_setfield(L, -2, "name");
-                      lua_pushstring(L, "3.0.0");
-                      lua_setfield(L, -2, "version");
-                      lua_setglobal(L, "xzx");
-                      
-                      NSLog(@"[XZX] Lua initialized successfully");
-                  }
-              }
-          }
-
-          void ExecuteScript(const char *script) {
-              if (!L) InitLua();
-              if (L && script && strlen(script) > 0) {
-                  int status = luaL_loadstring(L, script);
-                  if (status == 0) {
-                      lua_pcall(L, 0, 0, 0);
-                  } else {
-                      const char *error = lua_tostring(L, -1);
-                      NSLog(@"[XZX] Lua Error: %s", error);
-                      lua_pop(L, 1);
-                  }
-              }
-          }
-          EOF
-      
-      - name: Create bridging header
-        run: |
-          cat > XZX/XZX-Bridging-Header.h << 'EOF'
-          #ifndef XZX_Bridging_Header_h
-          #define XZX_Bridging_Header_h
-          #import <Foundation/Foundation.h>
-          #import <UIKit/UIKit.h>
-          #include "injector/dylib/Core/LuaExecutor.h"
-          #endif
-          EOF
-      
-      - name: Create MainViewController.swift
-        run: |
-          cat > XZX/MainViewController.swift << 'EOF'
-          import UIKit
-          import Foundation
-
-          @objc public class MainViewController: UIViewController {
-              private let textView = UITextView()
-              private let executeButton = UIButton()
-              private let clearButton = UIButton()
-              private let closeButton = UIButton()
-              
-              public override func viewDidLoad() {
-                  super.viewDidLoad()
-                  view.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
-                  view.layer.cornerRadius = 18
-                  view.layer.masksToBounds = true
-                  
-                  let titleLabel = UILabel()
-                  titleLabel.frame = CGRect(x: 20, y: 20, width: 200, height: 30)
-                  titleLabel.text = "XZX Executor"
-                  titleLabel.textColor = .white
-                  titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
-                  view.addSubview(titleLabel)
-                  
-                  textView.frame = CGRect(x: 20, y: 60, width: view.bounds.width - 40, height: view.bounds.height - 160)
-                  textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
-                  textView.textColor = .white
-                  textView.font = UIFont(name: "Menlo", size: 14)
-                  textView.layer.cornerRadius = 8
-                  textView.text = "-- XZX Executor\nprint('Hello World!')"
-                  textView.autocorrectionType = .no
-                  textView.autocapitalizationType = .none
-                  view.addSubview(textView)
-                  
-                  executeButton.frame = CGRect(x: 20, y: view.bounds.height - 80, width: 120, height: 50)
-                  executeButton.setTitle("Execute", for: .normal)
-                  executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
-                  executeButton.layer.cornerRadius = 8
-                  executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
-                  view.addSubview(executeButton)
-                  
-                  clearButton.frame = CGRect(x: 160, y: view.bounds.height - 80, width: 120, height: 50)
-                  clearButton.setTitle("Clear", for: .normal)
-                  clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
-                  clearButton.layer.cornerRadius = 8
-                  clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
-                  view.addSubview(clearButton)
-                  
-                  closeButton.frame = CGRect(x: view.bounds.width - 60, y: 20, width: 40, height: 40)
-                  closeButton.setTitle("✕", for: .normal)
-                  closeButton.setTitleColor(.white, for: .normal)
-                  closeButton.titleLabel?.font = .systemFont(ofSize: 24)
-                  closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
-                  view.addSubview(closeButton)
-              }
-              
-              @objc func executeScript() {
-                  let script = textView.text ?? ""
-                  ExecuteScript(script)
-              }
-              
-              @objc func clearScript() {
-                  textView.text = ""
-              }
-              
-              @objc func close() {
-                  view.isHidden = true
-              }
-          }
-          EOF
-      
-      - name: Create entry.m
-        run: |
-          cat > injector/dylib/entry.m << 'EOF'
-          #import <UIKit/UIKit.h>
-          #import <objc/runtime.h>
-          #import "Core/LuaExecutor.h"
-
-          __attribute__((constructor))
-          static void initializer() {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), 
-                             dispatch_get_main_queue(), ^{
-                  UIViewController *vc = nil;
-                  
-                  // Try different class name possibilities
-                  vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
-                  if (!vc) {
-                      vc = [[NSClassFromString(@"MainViewController") alloc] init];
-                  }
-                  if (!vc) {
-                      vc = [[NSClassFromString(@"XZX_MainViewController") alloc] init];
-                  }
-                  if (!vc) {
-                      NSLog(@"[XZX] Could not create MainViewController");
-                      return;
-                  }
-                  
-                  UIWindow *window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-                  window.windowLevel = UIWindowLevelAlert + 1;
-                  window.rootViewController = vc;
-                  window.backgroundColor = [UIColor clearColor];
-                  window.hidden = NO;
-                  [window makeKeyAndVisible];
-                  
-                  // Store window globally
-                  objc_setAssociatedObject([UIApplication sharedApplication], 
-                                           @"XZXWindow", 
-                                           window, 
-                                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                  
-                  InitLua();
-                  NSLog(@"[XZX] Executor loaded successfully");
-              });
-          }
-          EOF
-      
-      - name: Compile dylib
-        run: |
-          mkdir -p build
-          
-          # Compile entry.m
-          xcrun -sdk iphoneos clang -c \
-            -I./injector/dylib \
-            -I./injector/dylib/Core \
-            -I${{ env.LUA_INCLUDE_DIR }} \
-            -o build/entry.o \
-            injector/dylib/entry.m \
-            -target arm64-apple-ios15.0
-          
-          # Compile LuaExecutor.mm with extern C wrapper
-          xcrun -sdk iphoneos clang++ -c \
-            -std=c++11 \
-            -I./injector/dylib \
-            -I./injector/dylib/Core \
-            -I${{ env.LUA_INCLUDE_DIR }} \
-            -o build/LuaExecutor.o \
-            injector/dylib/Core/LuaExecutor.mm \
-            -target arm64-apple-ios15.0
-          
-          # Compile Swift file into a static archive first
-          xcrun -sdk iphoneos swiftc \
-            -emit-library -static \
-            -module-name XZX \
-            -import-objc-header XZX/XZX-Bridging-Header.h \
-            -L${{ env.LUA_LIB_DIR }} \
-            -I . \
-            -I ./injector/dylib \
-            -I ./injector/dylib/Core \
-            -I ${{ env.LUA_INCLUDE_DIR }} \
-            -target arm64-apple-ios15.0 \
-            -o build/libXZXSwift.a \
-            XZX/MainViewController.swift
-          
-          # Link all object files
-          xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit \
-            -framework Foundation \
-            -L${{ env.LUA_LIB_DIR }} \
-            -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
-            -Wl,-force_load,build/libXZXSwift.a \
-            -o build/executor.dylib \
-            build/entry.o \
-            build/LuaExecutor.o \
-            -lstdc++ \
-            -target arm64-apple-ios15.0 \
-            -Xlinker -rpath -Xlinker /usr/lib/swift \
-            -Xlinker -rpath -Xlinker @executable_path/Frameworks
-          
-          echo "✅ Dylib compiled successfully"
-          file build/executor.dylib
-          otool -L build/executor.dylib
-      
-      - name: Extract and modify IPA
-        run: |
-          unzip -q Roblox.ipa -d extracted/
-          
-          # Create Frameworks directory and copy dylib
-          mkdir -p extracted/Payload/Roblox.app/Frameworks
-          cp build/executor.dylib extracted/Payload/Roblox.app/Frameworks/
-          
-          # Set correct install name
-          install_name_tool -id @rpath/executor.dylib extracted/Payload/Roblox.app/Frameworks/executor.dylib
-          
-          # Remove existing signatures
-          rm -rf extracted/Payload/Roblox.app/_CodeSignature
-          rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          
-          # Inject dylib reference
-          ./tools/insert_dylib @rpath/executor.dylib \
-            extracted/Payload/Roblox.app/Roblox \
-            extracted/Payload/Roblox.app/Roblox_patched \
-            --all-yes
-          
-          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
-          
-          # Change app name
-          INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
-          plutil -convert xml1 "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName XZX" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string XZX" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName XZX" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
-          plutil -convert binary1 "$INFO_PLIST"
-          
-          # Repackage
-          cd extracted
-          zip -qr ../XZX.ipa Payload/
-          cd ..
-          
-          echo "✅ IPA created: XZX.ipa"
-          ls -la XZX.ipa
-      
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: XZX-Executor-iOS26
-          path: XZX.ipa
-          retention-days: 90
+          cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME

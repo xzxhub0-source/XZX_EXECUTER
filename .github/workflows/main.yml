@@ -490,7 +490,7 @@ jobs:
           }
           EOF
 
-      - name: Create placeholder files
+      - name: Create all placeholder files
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
@@ -569,6 +569,57 @@ jobs:
           cat > injector/dylib/xzx_security.m << 'EOF'
           #import "xzx_security.h"
           @implementation XZXSecurity
+          + (instancetype)shared { return [[self alloc] init]; }
+          @end
+          EOF
+
+          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
+          #ifndef XZX_HOOK_MANAGER_H
+          #define XZX_HOOK_MANAGER_H
+          #import <Foundation/Foundation.h>
+          @interface XZXHookManager : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
+          #import "xzx_hook_manager.h"
+          @implementation XZXHookManager
+          + (instancetype)shared { return [[self alloc] init]; }
+          @end
+          EOF
+
+          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
+          #ifndef XZX_INJECTION_RANDOMIZER_H
+          #define XZX_INJECTION_RANDOMIZER_H
+          #import <Foundation/Foundation.h>
+          @interface XZXInjectionRandomizer : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
+          #import "xzx_injection_randomizer.h"
+          @implementation XZXInjectionRandomizer
+          + (instancetype)shared { return [[self alloc] init]; }
+          @end
+          EOF
+
+          cat > injector/dylib/xzx_functions.h << 'EOF'
+          #ifndef XZX_FUNCTIONS_H
+          #define XZX_FUNCTIONS_H
+          #import <Foundation/Foundation.h>
+          @interface XZXFunctions : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+          cat > injector/dylib/xzx_functions.m << 'EOF'
+          #import "xzx_functions.h"
+          @implementation XZXFunctions
           + (instancetype)shared { return [[self alloc] init]; }
           @end
           EOF

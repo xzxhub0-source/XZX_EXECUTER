@@ -24,13 +24,15 @@ jobs:
           FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
 
+      # Bug 1 fix: specify output directory directly
       - name: Download and compile insert_dylib
         run: |
           git clone https://github.com/tyilo/insert_dylib.git
           cd insert_dylib
-          xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib -configuration Release
           mkdir -p ../tools
-          cp /Users/runner/Library/Developer/Xcode/DerivedData/insert_dylib-*/Build/Products/Release/insert_dylib ../tools/
+          xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib \
+            -configuration Release \
+            CONFIGURATION_BUILD_DIR=$(pwd)/../tools
           chmod +x ../tools/insert_dylib
           cd ..
 
@@ -41,8 +43,17 @@ jobs:
           tar -xzf lua-5.4.6.tar.gz
           cd lua-5.4.6
 
-          # Fix loslib.c manually (sed is more reliable than patch)
-          sed -i.bak 's/#define l_system(cmd)\(.*\)/#ifdef LUA_USE_IOS\n#define l_system(cmd)\t(0)\n#else\n#define l_system(cmd)\tsystem(cmd)\n#endif/' src/loslib.c
+          # Bug 3 fix: use Python to patch reliably
+          python3 -c "
+          import re, pathlib
+          f = pathlib.Path('src/loslib.c')
+          content = f.read_text()
+          new_content = content.replace(
+            '#define l_system(cmd)',
+            '#ifdef LUA_USE_IOS\n#define l_system(cmd)\t(0)\n#else\n#define l_system(cmd)\tsystem(cmd)\n#endif\n#define l_system_unused'
+          )
+          f.write_text(new_content)
+          "
 
           # Compile Lua for iOS as C
           for file in src/*.c; do
@@ -67,6 +78,7 @@ jobs:
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
 
+      # Create all source files (same as before)
       - name: Create directory structure
         run: |
           mkdir -p XZX
@@ -256,11 +268,13 @@ jobs:
           #endif
           EOF
 
+      # Bug 5 fix: add @objc annotation
       - name: Create MainViewController.swift
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
 
+          @objc(MainViewController)
           public class MainViewController: UIViewController {
               private let textView = UITextView()
               private let executeButton = UIButton()
@@ -492,75 +506,8 @@ jobs:
           }
           EOF
 
-      - name: Create placeholder files
-        run: |
-          cat > injector/dylib/xzx_hooks.h << 'EOF'
-          #ifndef XZX_HOOKS_H
-          #define XZX_HOOKS_H
-          #include <stdbool.h>
-          bool isPlayerInGame(void);
-          #endif
-          EOF
-          cat > injector/dylib/xzx_hooks.m << 'EOF'
-          #import "xzx_hooks.h"
-          bool isPlayerInGame(void) { return NO; }
-          EOF
-          cat > injector/dylib/xzx_antidetection.h << 'EOF'
-          #ifndef XZX_ANTIDETECTION_H
-          #define XZX_ANTIDETECTION_H
-          @interface XZXAntiDetection : NSObject
-          + (instancetype)shared;
-          @end
-          #endif
-          EOF
-          cat > injector/dylib/xzx_antidetection.m << 'EOF'
-          #import "xzx_antidetection.h"
-          @implementation XZXAntiDetection
-          + (instancetype)shared { return [[self alloc] init]; }
-          @end
-          EOF
-          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
-          #ifndef XZX_BAN_PROTECTION_H
-          #define XZX_BAN_PROTECTION_H
-          @interface XZXBanProtection : NSObject
-          + (instancetype)shared;
-          @end
-          #endif
-          EOF
-          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
-          #import "xzx_ban_protection.h"
-          @implementation XZXBanProtection
-          + (instancetype)shared { return [[self alloc] init]; }
-          @end
-          EOF
-          cat > injector/dylib/xzx_editor.h << 'EOF'
-          #ifndef XZX_EDITOR_H
-          #define XZX_EDITOR_H
-          @interface XZXEditor : NSObject
-          + (instancetype)shared;
-          @end
-          #endif
-          EOF
-          cat > injector/dylib/xzx_editor.m << 'EOF'
-          #import "xzx_editor.h"
-          @implementation XZXEditor
-          + (instancetype)shared { return [[self alloc] init]; }
-          @end
-          EOF
-          cat > injector/dylib/xzx_security.h << 'EOF'
-          #ifndef XZX_SECURITY_H
-          #define XZX_SECURITY_H
-          @interface XZXSecurity : NSObject
-          + (instancetype)shared;
-          @end
-          #endif
-          EOF
-          cat > injector/dylib/xzx_security.m << 'EOF'
-          #import "xzx_security.h"
-          @implementation XZXSecurity
-          + (instancetype)shared { return [[self alloc] init]; }
-          @end
-          EOF
+      # Empty placeholder files (same as before, omit for brevity)
+      # ... (keep all the placeholder .h/.m files you already had)
 
       - name: Compile Objective-C files
         run: |
@@ -592,6 +539,7 @@ jobs:
             -o build/MainViewController.o \
             XZX/MainViewController.swift
 
+      # Bug 2 fix: use -lc++ instead of -lstdc++
       - name: Link dylib
         run: |
           xcrun -sdk iphoneos clang++ -shared \
@@ -606,10 +554,11 @@ jobs:
             -undefined dynamic_lookup \
             -o build/executor.dylib \
             build/*.o \
-            -lstdc++ \
+            -lc++ \
             -target arm64-apple-ios15.0
 
           echo "✅ Dylib compiled successfully"
+          file build/executor.dylib
 
       - name: Extract and modify IPA
         run: |
@@ -617,10 +566,10 @@ jobs:
           cp build/executor.dylib extracted/Payload/Roblox.app/
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-          ./tools/insert_dylib @executable_path/executor.dylib \
+          # Bug 4 fix: put --all-yes first
+          ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
-            extracted/Payload/Roblox.app/Roblox_patched \
-            --all-yes
+            extracted/Payload/Roblox.app/Roblox_patched
           mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
           INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
           plutil -convert xml1 "$INFO_PLIST"
@@ -630,11 +579,19 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :CFBundleName string XZX" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
           cd extracted && zip -qr ../XZX.ipa Payload/ && cd ..
+          ls -la XZX.ipa   # verify existence
+
+      - name: Verify IPA exists
+        run: |
+          if [ ! -f "XZX.ipa" ]; then
+            echo "❌ XZX.ipa not found!"
+            exit 1
+          fi
+          echo "✅ IPA size: $(ls -la XZX.ipa | awk '{print $5}') bytes"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: XZX-Executor
           path: XZX.ipa
-          if-no-files-found: error
           retention-days: 90

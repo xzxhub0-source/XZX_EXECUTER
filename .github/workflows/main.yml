@@ -24,7 +24,6 @@ jobs:
           FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
 
-      # FIX 1: specify CONFIGURATION_BUILD_DIR to avoid hardcoded DerivedData glob
       - name: Download and compile insert_dylib
         run: |
           git clone https://github.com/tyilo/insert_dylib.git
@@ -36,7 +35,6 @@ jobs:
           chmod +x ../tools/insert_dylib
           cd ..
 
-      # FIX 3: removed unreliable sed patch — Lua 5.4.6 already handles LUA_USE_IOS natively
       - name: Download and compile Lua for iOS
         run: |
           mkdir -p $HOME/lua-ios
@@ -86,7 +84,6 @@ jobs:
           #endif
           EOF
 
-      # FIX 8a: replaced deprecated windowScene.windows with windowScene.keyWindow
       - name: Create LuaExecutor.mm
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
@@ -183,7 +180,6 @@ jobs:
                                                                                  message:[NSString stringWithUTF8String:text]
                                                                           preferredStyle:UIAlertControllerStyleAlert];
                   [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                  // FIX 8a: use keyWindow instead of deprecated windows.firstObject
                   UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
                   UIViewController *rootVC = windowScene.keyWindow.rootViewController;
                   [rootVC presentViewController:alert animated:YES completion:nil];
@@ -251,7 +247,6 @@ jobs:
           #endif
           EOF
 
-      # FIX 5: @objc(MainViewController) so NSClassFromString lookup works at runtime
       - name: Create MainViewController.swift
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
@@ -349,7 +344,6 @@ jobs:
           #endif
           EOF
 
-      # FIX 8b: replaced UIScreen.mainScreen + deprecated windows API with initWithWindowScene
       - name: Create xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
@@ -448,7 +442,6 @@ jobs:
                   if (!self.editorWindow) {
                       UIViewController *vc = [[NSClassFromString(@"MainViewController") alloc] init];
                       if (vc) {
-                          // FIX 8b: use initWithWindowScene instead of UIScreen.mainScreen
                           UIWindowScene *scene = (UIWindowScene *)
                               [UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
                           self.editorWindow = [[UIWindow alloc] initWithWindowScene:scene];
@@ -497,7 +490,6 @@ jobs:
           }
           EOF
 
-      # FIX 6: placeholder files fully restored (not omitted)
       - name: Create placeholder files
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
@@ -509,8 +501,8 @@ jobs:
           EOF
 
           cat > injector/dylib/xzx_hooks.m << 'EOF'
-          #import "xzx_hooks.h"
-          bool isPlayerInGame(void) { return NO; }
+          #include "xzx_hooks.h"
+          bool isPlayerInGame(void) { return false; }
           EOF
 
           cat > injector/dylib/xzx_antidetection.h << 'EOF'
@@ -625,7 +617,6 @@ jobs:
             -o build/MainViewController.o \
             XZX/MainViewController.swift
 
-      # FIX 2: -lc++ instead of -lstdc++ (removed from Xcode 15+)
       - name: Link dylib
         run: |
           xcrun -sdk iphoneos clang++ -shared \
@@ -653,7 +644,6 @@ jobs:
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
           rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
 
-          # FIX 4: --all-yes flag must come before positional arguments
           ./tools/insert_dylib --all-yes \
             @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \

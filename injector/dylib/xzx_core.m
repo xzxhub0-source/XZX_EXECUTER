@@ -72,6 +72,50 @@ static dispatch_queue_t monitorQueue = nil;
     @try {
         if ([UIApplication sharedApplication] == nil) return NO;
         
+        // Method 1: Check root view controller
+        UIWindow *keyWindow = nil;
+        UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+        if (scene) {
+            keyWindow = scene.keyWindow;
+        }
+        if (!keyWindow) {
+            keyWindow = [UIApplication sharedApplication].keyWindow;
+        }
+        
+        if (keyWindow && keyWindow.rootViewController) {
+            UIViewController *rootVC = keyWindow.rootViewController;
+            NSString *className = NSStringFromClass([rootVC class]);
+            
+            if ([className containsString:@"Roblox"] || 
+                [className containsString:@"Game"] ||
+                [className containsString:@"Play"]) {
+                return YES;
+            }
+        }
+        
+        // Method 2: Check all windows
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            if (window.hidden == NO) {
+                NSString *description = [window description];
+                if ([description containsString:@"Roblox"] || 
+                    [description containsString:@"GameView"]) {
+                    return YES;
+                }
+            }
+        }
+        
+        // Method 3: Check subviews of key window
+        if (keyWindow) {
+            for (UIView *view in [keyWindow subviews]) {
+                NSString *viewClass = NSStringFromClass([view class]);
+                if ([viewClass containsString:@"Roblox"] || 
+                    [viewClass containsString:@"Game"]) {
+                    return YES;
+                }
+            }
+        }
+        
+        // Method 4: Original DataModel method (fallback)
         const char* className = "\x8e\xf5\x9a\xc5\x86\xd1\x8c\xc3\x9c\xd8\x88\xc2\x91\xd7";
         const char* methodName = "\x93\xd1\x80\xce\x9d\xdb\x86\xc2\x9c\xc8\x95\xcf\x83\xcf";
         
@@ -85,28 +129,47 @@ static dispatch_queue_t monitorQueue = nil;
                     SEL placeSel = xzx_getSelector(placeSelName);
                     if ([dm respondsToSelector:placeSel]) {
                         id pid = ((id(*)(id, SEL))objc_msgSend)(dm, placeSel);
-                        return pid != nil;
+                        if (pid != nil) return YES;
                     }
                 }
             }
         }
+        
     } @catch (NSException *e) {
-        NSLog(@"[XZX] Error checking game state: %@", e);
+        NSLog(@"[XZX] Detection error: %@", e);
     }
+    
     return NO;
 }
 
 - (void)showOverlay {
-    if (_overlayWindow && !_overlayWindow.hidden) return;
+    if (_overlayWindow && !_overlayWindow.hidden) {
+        NSLog(@"[XZX] Overlay already visible");
+        return;
+    }
+    
+    NSLog(@"[XZX] Attempting to show overlay...");
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        if ([UIApplication sharedApplication] == nil) return;
+        if ([UIApplication sharedApplication] == nil) {
+            NSLog(@"[XZX] UIApplication not available");
+            return;
+        }
         
         UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-        if (!scene) return;
+        if (!scene) {
+            NSLog(@"[XZX] No window scene available, retrying...");
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                [self showOverlay];
+            });
+            return;
+        }
         
         UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-        if (!vc) return;
+        if (!vc) {
+            NSLog(@"[XZX] Failed to create MainViewController");
+            return;
+        }
         
         self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
         self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
@@ -114,6 +177,7 @@ static dispatch_queue_t monitorQueue = nil;
         self.overlayWindow.backgroundColor = [UIColor clearColor];
         self.overlayWindow.hidden = NO;
         [self.overlayWindow makeKeyAndVisible];
+        NSLog(@"[XZX] Overlay shown successfully!");
     });
 }
 
@@ -121,6 +185,7 @@ static dispatch_queue_t monitorQueue = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.overlayWindow) {
             self.overlayWindow.hidden = YES;
+            NSLog(@"[XZX] Overlay hidden");
         }
     });
 }

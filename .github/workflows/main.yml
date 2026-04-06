@@ -59,6 +59,7 @@ jobs:
           mkdir -p XZX
           mkdir -p injector/dylib/Core
 
+      # ========== 1. Lua Executor (same as before) ==========
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -224,6 +225,7 @@ jobs:
           }
           EOF
 
+      # ========== 2. Bridging header ==========
       - name: Create bridging header
         run: |
           cat > XZX/XZX-Bridging-Header.h << 'EOF'
@@ -235,86 +237,20 @@ jobs:
           #endif
           EOF
 
-      - name: Create MainViewController.swift
-        run: |
-          cat > XZX/MainViewController.swift << 'EOF'
-          import UIKit
+      # ========== 3. No UIViewController – we inject Lua directly ==========
+      # MainViewController.swift is not needed. We will create the GUI via Lua.
 
-          @objc(XZXMainViewController)
-          public class XZXMainViewController: UIViewController {
-              private let textView = UITextView()
-              private let executeButton = UIButton()
-              private let clearButton = UIButton()
-              private let closeButton = UIButton()
-
-              public override func viewDidLoad() {
-                  super.viewDidLoad()
-                  view.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
-                  view.layer.cornerRadius = 18
-                  view.layer.masksToBounds = true
-
-                  let titleLabel = UILabel()
-                  titleLabel.frame = CGRect(x: 20, y: 20, width: 200, height: 30)
-                  titleLabel.text = "XZX"
-                  titleLabel.textColor = .white
-                  titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
-                  view.addSubview(titleLabel)
-
-                  textView.frame = CGRect(x: 20, y: 60, width: view.bounds.width - 40, height: view.bounds.height - 160)
-                  textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
-                  textView.textColor = .white
-                  textView.font = UIFont(name: "Menlo", size: 14)
-                  textView.layer.cornerRadius = 8
-                  textView.text = "-- XZX Executor\nprint('Hello World!')"
-                  textView.autocorrectionType = .no
-                  textView.autocapitalizationType = .none
-                  view.addSubview(textView)
-
-                  executeButton.frame = CGRect(x: 20, y: view.bounds.height - 80, width: 120, height: 50)
-                  executeButton.setTitle("Execute", for: .normal)
-                  executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
-                  executeButton.layer.cornerRadius = 8
-                  executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
-                  view.addSubview(executeButton)
-
-                  clearButton.frame = CGRect(x: 160, y: view.bounds.height - 80, width: 120, height: 50)
-                  clearButton.setTitle("Clear", for: .normal)
-                  clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
-                  clearButton.layer.cornerRadius = 8
-                  clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
-                  view.addSubview(clearButton)
-
-                  closeButton.frame = CGRect(x: view.bounds.width - 60, y: 20, width: 40, height: 40)
-                  closeButton.setTitle("✕", for: .normal)
-                  closeButton.setTitleColor(.white, for: .normal)
-                  closeButton.titleLabel?.font = .systemFont(ofSize: 24)
-                  closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
-                  view.addSubview(closeButton)
-              }
-
-              @objc func executeScript() {
-                  let script = textView.text ?? ""
-                  guard !script.isEmpty else { return }
-                  script.withCString { ptr in ExecuteScript(ptr) }
-              }
-
-              @objc func clearScript() { textView.text = "" }
-              @objc func close() { view.isHidden = true }
-          }
-          EOF
-
+      # ========== 4. Core logic: find Roblox Lua state and inject GUI script ==========
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
           #ifndef XZX_CORE_H
           #define XZX_CORE_H
           #import <Foundation/Foundation.h>
-          #import <UIKit/UIKit.h>
 
           @interface XZXCore : NSObject
           + (instancetype)shared;
           - (void)initialize;
-          @property (nonatomic, strong) UIWindow *overlayWindow;
           @end
           #endif
           EOF
@@ -325,9 +261,11 @@ jobs:
           #import "xzx_core.h"
           #import "Core/LuaExecutor.h"
           #import <UIKit/UIKit.h>
+          #import <objc/runtime.h>
+          #import <objc/message.h>
 
           static XZXCore *sharedCore = nil;
-          static BOOL coreReady = NO;
+          static BOOL isInitialized = NO;
 
           @implementation XZXCore
 
@@ -337,36 +275,162 @@ jobs:
               return sharedCore;
           }
 
-          - (instancetype)init {
-              self = [super init];
-              if (self) {
-                  _overlayWindow = nil;
-              }
-              return self;
+          - (void)initialize {
+              if (isInitialized) return;
+              isInitialized = YES;
+
+              // Wait for Roblox to fully load before trying to get its Lua state
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                  [self performSelectorInBackground:@selector(findAndInject) withObject:nil];
+              });
           }
 
-          - (void)initialize {
-              if (coreReady) return;
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                      if ([UIApplication sharedApplication] == nil) return;
-                      UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                      if (scene) {
-                          UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-                          if (vc) {
-                              self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-                              self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-                              self.overlayWindow.rootViewController = vc;
-                              self.overlayWindow.backgroundColor = [UIColor clearColor];
-                              self.overlayWindow.hidden = NO;
-                              [self.overlayWindow makeKeyAndVisible];
-                              InitLua();
-                              coreReady = YES;
-                              NSLog(@"[XZX] Core ready");
-                          }
+          - (void)findAndInject {
+              // Poll until we find Roblox's Lua state
+              while (YES) {
+                  @autoreleasepool {
+                      lua_State *rbxL = [self getRobloxLuaState];
+                      if (rbxL) {
+                          [self injectGUIScript:rbxL];
+                          break;
                       }
-                  });
-              });
+                      [NSThread sleepForTimeInterval:1.0];
+                  }
+              }
+          }
+
+          - (lua_State*)getRobloxLuaState {
+              // Use the known Roblox class hierarchy to get the Lua state.
+              // This is safe because we only call it after Roblox has started.
+              Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+              if (!dataModelClass) return NULL;
+
+              SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
+              if (![dataModelClass respondsToSelector:sharedSel]) return NULL;
+
+              id dataModel = ((id(*)(id, SEL))objc_msgSend)(dataModelClass, sharedSel);
+              if (!dataModel) return NULL;
+
+              // Get ScriptContext (offset may change, but we search dynamically)
+              Ivar scriptContextIvar = class_getInstanceVariable([dataModel class], "_scriptContext");
+              if (!scriptContextIvar) return NULL;
+
+              id scriptContext = object_getIvar(dataModel, scriptContextIvar);
+              if (!scriptContext) return NULL;
+
+              // Get the Lua state from ScriptContext
+              Ivar luaStateIvar = class_getInstanceVariable([scriptContext class], "_luaState");
+              if (!luaStateIvar) return NULL;
+
+              return (__bridge lua_State*)object_getIvar(scriptContext, luaStateIvar);
+          }
+
+          - (void)injectGUIScript:(lua_State*)rbxL {
+              // Lua script that creates a draggable ScreenGui in CoreGui
+              const char *guiScript =
+                  "local gui = Instance.new('ScreenGui')\n"
+                  "gui.Name = 'XZX_Executor'\n"
+                  "gui.Parent = game:GetService('CoreGui')\n"
+                  "gui.ResetOnSpawn = false\n\n"
+                  "local frame = Instance.new('Frame')\n"
+                  "frame.Size = UDim2.new(0, 400, 0, 500)\n"
+                  "frame.Position = UDim2.new(0.5, -200, 0.5, -250)\n"
+                  "frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)\n"
+                  "frame.BorderSizePixel = 0\n"
+                  "frame.Parent = gui\n\n"
+                  "local title = Instance.new('TextLabel')\n"
+                  "title.Size = UDim2.new(1, 0, 0, 40)\n"
+                  "title.BackgroundColor3 = Color3.fromRGB(30, 30, 40)\n"
+                  "title.Text = 'XZX Executor'\n"
+                  "title.TextColor3 = Color3.fromRGB(255, 255, 255)\n"
+                  "title.Font = Enum.Font.GothamBold\n"
+                  "title.TextSize = 20\n"
+                  "title.Parent = frame\n\n"
+                  "local scriptBox = Instance.new('TextBox')\n"
+                  "scriptBox.Size = UDim2.new(1, -20, 1, -90)\n"
+                  "scriptBox.Position = UDim2.new(0, 10, 0, 50)\n"
+                  "scriptBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)\n"
+                  "scriptBox.TextColor3 = Color3.fromRGB(255, 255, 255)\n"
+                  "scriptBox.PlaceholderText = '-- Enter your script here'\n"
+                  "scriptBox.TextXAlignment = Enum.TextXAlignment.Left\n"
+                  "scriptBox.TextYAlignment = Enum.TextYAlignment.Top\n"
+                  "scriptBox.MultiLine = true\n"
+                  "scriptBox.ClearTextOnFocus = false\n"
+                  "scriptBox.Font = Enum.Font.Code\n"
+                  "scriptBox.TextSize = 14\n"
+                  "scriptBox.Parent = frame\n\n"
+                  "local execute = Instance.new('TextButton')\n"
+                  "execute.Size = UDim2.new(0.5, -5, 0, 30)\n"
+                  "execute.Position = UDim2.new(0, 10, 1, -40)\n"
+                  "execute.BackgroundColor3 = Color3.fromRGB(0, 255, 0)\n"
+                  "execute.Text = 'Execute'\n"
+                  "execute.TextColor3 = Color3.fromRGB(0, 0, 0)\n"
+                  "execute.Font = Enum.Font.GothamBold\n"
+                  "execute.TextSize = 16\n"
+                  "execute.Parent = frame\n\n"
+                  "local clear = Instance.new('TextButton')\n"
+                  "clear.Size = UDim2.new(0.5, -5, 0, 30)\n"
+                  "clear.Position = UDim2.new(0.5, 5, 1, -40)\n"
+                  "clear.BackgroundColor3 = Color3.fromRGB(255, 0, 0)\n"
+                  "clear.Text = 'Clear'\n"
+                  "clear.TextColor3 = Color3.fromRGB(255, 255, 255)\n"
+                  "clear.Font = Enum.Font.GothamBold\n"
+                  "clear.TextSize = 16\n"
+                  "clear.Parent = frame\n\n"
+                  "local drag = Instance.new('ImageButton')\n"
+                  "drag.Size = UDim2.new(1, 0, 0, 40)\n"
+                  "drag.BackgroundTransparency = 1\n"
+                  "drag.Parent = gui\n\n"
+                  "local dragging = false\n"
+                  "local dragStart = nil\n"
+                  "local framePos = nil\n\n"
+                  "drag.MouseButton1Down:Connect(function()\n"
+                  "    dragging = true\n"
+                  "    dragStart = game:GetService('UserInputService'):GetMouseLocation()\n"
+                  "    framePos = frame.Position\n"
+                  "end)\n\n"
+                  "game:GetService('UserInputService').InputChanged:Connect(function(input)\n"
+                  "    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then\n"
+                  "        local delta = game:GetService('UserInputService'):GetMouseLocation() - dragStart\n"
+                  "        frame.Position = UDim2.new(\n"
+                  "            framePos.X.Scale,\n"
+                  "            framePos.X.Offset + delta.X,\n"
+                  "            framePos.Y.Scale,\n"
+                  "            framePos.Y.Offset + delta.Y\n"
+                  "        )\n"
+                  "    end\n"
+                  "end)\n\n"
+                  "game:GetService('UserInputService').InputEnded:Connect(function(input)\n"
+                  "    if input.UserInputType == Enum.UserInputType.MouseButton1 then\n"
+                  "        dragging = false\n"
+                  "    end\n"
+                  "end)\n\n"
+                  "execute.MouseButton1Click:Connect(function()\n"
+                  "    local script = scriptBox.Text\n"
+                  "    if script and #script > 0 then\n"
+                  "        local f, err = loadstring(script)\n"
+                  "        if f then\n"
+                  "            pcall(f)\n"
+                  "        else\n"
+                  "            warn('XZX Error: ' .. tostring(err))\n"
+                  "        end\n"
+                  "    end\n"
+                  "end)\n\n"
+                  "clear.MouseButton1Click:Connect(function()\n"
+                  "    scriptBox.Text = ''\n"
+                  "end)\n";
+
+              if (rbxL) {
+                  int status = luaL_loadstring(rbxL, guiScript);
+                  if (status == 0) {
+                      lua_pcall(rbxL, 0, 0, 0);
+                      NSLog(@"[XZX] GUI injected successfully");
+                  } else {
+                      const char *error = lua_tostring(rbxL, -1);
+                      NSLog(@"[XZX] Failed to inject GUI: %s", error);
+                      lua_pop(rbxL, 1);
+                  }
+              }
           }
 
           @end
@@ -386,115 +450,205 @@ jobs:
           }
           EOF
 
-      - name: Create placeholder files (minimal, no duplicates)
+      # ========== 5. Minimal placeholder files (no duplicates)attribute__((constructor))
+          static void entry() {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [[XZXCore shared] initialize];
+              });
+          }
+          EOF
+
+      # ========== 5. Minimal placeholder files (no duplicates) ==========
+      ==========
+      - name: Create placeholder files
+        run: |
+          cat > injector/dylib/xzx_hooks.h << 'EOF'
+          #ifndef XZX_HOOKS_H
+          #define XZX_HOOKS_H
+          #include <std - name: Create placeholder files
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
           #define XZX_HOOKS_H
           #include <stdbool.h>
+         bool.h>
           bool xzx_is_in_game(void);
           #endif
           EOF
           cat > injector/dylib/xzx_hooks.m << 'EOF'
           #include "xzx_hooks.h"
+          bool xzx_is_in_game(void) { return false bool xzx_is_in_game(void);
+          #endif
+          EOF
+          cat > injector/dylib/xzx_hooks.m << 'EOF'
+          #include "xzx_hooks.h"
           bool xzx_is_in_game(void) { return false; }
+          EOF; }
           EOF
           cat > injector/dylib/xzx_antidetection.h << 'EOF'
-          #ifndef XZX_ANTIDETECTION_H
-          #define XZX_ANTIDETECTION_H
           @interface XZXAntiDetection : NSObject
           + (instancetype)shared;
           @end
-          #endif
           EOF
-          cat > injector/dylib/xzx_antidetection.m << 'EOF'
+          cat >
+          cat > injector/dylib/xzx_antidetection.h << 'EOF'
+          @interface XZXAntiDetection : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/x injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
           @implementation XZXAntiDetection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&zx_antidetection.m << 'EOF'
+          #import "xzx_antidetection.h"
+          @implementation XZXAntiDetection
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ it, ^{ i = [self new]; }); return i; }
           @end
           EOF
           cat > injector/dylib/xzx_ban_protection.h << 'EOF'
-          #ifndef XZX_BAN_PROTECTION_H
-          #define XZX_BAN_PROTECTION_H
           @interface XZXBanProtection : NSObject
-          + (instancetype)shared;
+          + (instancetype = [self new]; }); return i; }
           @end
-          #endif
+          EOF
+          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
+          @interface XZXBanProtection : NSObject
+          + (instancetype)shared)shared;
+          @end
           EOF
           cat > injector/dylib/xzx_ban_protection.m << 'EOF'
           #import "xzx_ban_protection.h"
           @implementation XZXBanProtection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          +;
           @end
           EOF
-          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
-          #ifndef XZX_HOOK_MANAGER_H
-          #define XZX_HOOK_MANAGER_H
+          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
+          #import "xzx_ban_protection.h"
+          @implementation XZXBanProtection
+          + (instancetype (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          @end
+          EOF
+          cat > injector/dylib/xzx_hook_manager.h)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          @end
+          EOF
+          cat > injector/dylib/xzx_hook_manager.h << 'EOF << 'EOF'
           @interface XZXHookManager : NSObject
           + (instancetype)shared;
           @end
-          #endif
+          EOF
+          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
+          #import "xzx_h'
+          @interface XZXHookManager : NSObject
+          + (instancetype)shared;
+          @end
           EOF
           cat > injector/dylib/xzx_hook_manager.m << 'EOF'
           #import "xzx_hook_manager.h"
           @implementation XZXHookManager
           + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
           @end
+         ook_manager.h"
+          @implementation XZXHookManager
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          @end
           EOF
 
-      - name: Compile Objective-C files (explicit list)
+      # ========= EOF
+
+      # ========== 6. Compilation ==========
+      - name: Compile Objective-C files
+        run: |
+          mkdir -p build
+          FILES="
+            injector/dylib/entry.m
+            injector/dylib/xzx_core.m= 6. Compilation ==========
+      - name: Compile Objective-C files
         run: |
           mkdir -p build
           FILES="
             injector/dylib/entry.m
             injector/dylib/xzx_core.m
+            injector/dyl
             injector/dylib/xzx_hooks.m
             injector/dylib/xzx_antidetection.m
             injector/dylib/xzx_ban_protection.m
             injector/dylib/xzx_hook_manager.m
           "
-          for file in $FILES; do
+          for file in $ib/xzx_hooks.m
+            injector/dylib/xzx_antidetection.m
+            injector/dylib/xzx_ban_protection.m
+            injector/dylib/xzx_hook_manager.m
+          "
+          for file in $FILES; doFILES; do
             if [ -f "$file" ]; then
-              echo "Compiling ObjC: $file"
               xcrun -sdk iphoneos clang -c \
-                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA
+            if [ -f "$file" ]; then
+              xcrun -sdk iphoneos clang -c \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_INCLUDE_DIR }} \
+                -o "build/$(basename "$file" .m).o" "$file" -target arm64-apple-ios15.0
+            fi
+          done
+
+      - name: Compile C++ files
+       _DIR }} \
                 -o "build/$(basename "$file" .m).o" "$file" -target arm64-apple-ios15.0
             fi
           done
 
       - name: Compile C++ files
         run: |
+          run: |
           for file in injector/dylib/Core/*.mm; do
             if [ -f "$file" ]; then
               xcrun -sdk iphoneos clang++ -c -std=c++11 \
                 -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
-                -o "build/$(basename "$file" .mm).o" "$file" -target arm64-apple-ios15.0
+                -o "build/$(basename for file in injector/dylib/Core/*.mm; do
+            if [ -f "$file" ]; then
+              xcrun -sdk iphoneos clang++ -c -std=c++11 \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/$(basename "$file" .mm).o" "$file" -target "$file" .mm).o" "$file" -target arm64-apple-ios15.0
             fi
           done
 
-      - name: Compile Swift file
+      - name: Compile Swift file (placeholder, not used)
         run: |
-          xcrun -sdk iphoneos swiftc -c \
-            -module-name XZX \
-            -import-objc-header XZX/XZX-Bridging-Header.h \
-            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
-            -target arm64-apple-ios15.0 \
-            -o build/XZXSwift.o \
-            XZX/MainViewController.swift
+          echo "import Foundation" > XZX/Placeholder.swift
+          xcrun -sdk iphoneos swiftc -c -module-name XZX -target arm64-apple-ios15.0 -o build/Placeholder.o XZX/Placeholder.swift
 
-      - name: Link dylib
+      - name: Link arm64-apple-ios15.0
+            fi
+          done
+
+      - name: Compile Swift file (placeholder, not used)
+        run: |
+          echo "import Foundation" > XZX/Placeholder.swift
+          xcrun -sdk iphoneos swiftc -c -module-name XZX -target arm64-apple-ios15.0 -o build/Placeholder.o XZX/Placeholder.swift
+
+      - name: Link dyl dylib
         run: |
           xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
-            -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
-            -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @executable_path/Frameworks \
+            -framework UIKit -framework Foundation \
+            -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/libib
+        run: |
+          xcrun -sdk iphoneos clang++ -shared \
+            -framework UIKit -framework Foundation \
+            -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.alua.a \
             -undefined dynamic_lookup \
             -o build/executor.dylib build/*.o -lc++ -target arm64-apple-ios15.0
-          echo "✅ Dylib compiled:"
-          file build/executor.dylib
 
+      # ========== 7. IPA modification ==========
+      - name: Extract and modify IPA \
+            -undefined dynamic_lookup \
+            -o build/executor.dylib build/*.o -lc++ -target arm64-apple-ios15.0
+
+      # ========== 7. IPA modification ==========
       - name: Extract and modify IPA
+        run
         run: |
+          unzip -q Roblox.ipa -d extracted/
+          cp build/executor.dylib extracted/Payload/Roblox.app/
+          rm -rf extracted/Payload/Roblox.app/_CodeSignature
+          rm -f extracted/Payload/Roblox.app/embedded: |
           unzip -q Roblox.ipa -d extracted/
           cp build/executor.dylib extracted/Payload/Roblox.app/
           rm -rf extracted/Payload/Roblox.app/_CodeSignature
@@ -502,13 +656,25 @@ jobs:
           ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
             extracted/Payload/Roblox.app/Roblox_patched
-          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
+          mv extracted/Payload/Roblox.app/Roblox.mobileprovision
+          ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
+            extracted/Payload/Roblox.app/Roblox \
+            extracted/Payload/Roblox.app/Roblox_patched
+          mv extracted/Payload/Roblox.app/Roblox_patched_patched extracted/Payload/Roblox.app/Roblox
           INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
           plutil -convert xml1 "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$INFO_PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$ extracted/Payload/Roblox.app/Roblox
+          INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
+          plutil -convert xml1 "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$INFO_PINFO_PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
+          plutil -convert binary1 "$INFO_PLIST"
+          cd extracted && zip -qr ../XZX.ipa Payload/ && cdLIST" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
           cd extracted && zip -qr ../XZX.ipa Payload/ && cd ..
+
+      ..
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

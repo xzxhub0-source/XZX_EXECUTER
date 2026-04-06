@@ -19,9 +19,10 @@ jobs:
           pipx ensurepath
           pipx install gdown
 
+      # UPDATED: new file ID for Roblox 2.714.1077
       - name: Download Roblox IPA
         run: |
-          FILE_ID="12Aklt_7NQ6S6CEKtewn7k5ia8YJuJm9N"
+          FILE_ID="16uaCXW9O3SmjYEPjc1wRhIj-o2NAXqdW"
           pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
 
       - name: Download and compile insert_dylib
@@ -68,6 +69,7 @@ jobs:
           mkdir -p XZX
           mkdir -p injector/dylib/Core
 
+      # ========== LUNA EXECUTOR CORE ==========
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -96,7 +98,6 @@ jobs:
           }
 
           static lua_State *L = nil;
-          static int lua_refcount = 0;
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
@@ -198,7 +199,6 @@ jobs:
                   L = luaL_newstate();
                   if (L) {
                       luaL_openlibs(L);
-
                       lua_register(L, "print", xzx_print);
                       lua_register(L, "loadstring", xzx_loadstring);
                       lua_register(L, "HttpGet", xzx_httpget);
@@ -209,14 +209,12 @@ jobs:
                       lua_register(L, "messagebox", xzx_messagebox);
                       lua_register(L, "identifyexecutor", xzx_identifyexecutor);
                       lua_register(L, "getexecutorname", xzx_identifyexecutor);
-
                       lua_newtable(L);
                       lua_pushstring(L, "XZX");
                       lua_setfield(L, -2, "name");
                       lua_pushstring(L, "3.0.0");
                       lua_setfield(L, -2, "version");
                       lua_setglobal(L, "xzx");
-
                       NSLog(@"[XZX] Lua initialized");
                   }
               }
@@ -328,21 +326,16 @@ jobs:
           cat > injector/dylib/xzx_obfuscator.h << 'EOF'
           #ifndef XZX_OBFUSCATOR_H
           #define XZX_OBFUSCATOR_H
-
           #import <Foundation/Foundation.h>
-
           #define OBFUSCATE(str) xzx_obfuscate(str, sizeof(str))
-
           NSString* xzx_obfuscate(const char* input, size_t len);
           Class xzx_getClass(const char* encryptedName);
           SEL xzx_getSelector(const char* encryptedName);
-
           @interface XZXObfuscator : NSObject
           + (instancetype)shared;
           - (NSString*)decryptString:(NSString*)encrypted key:(int)key;
           - (NSString*)encryptString:(NSString*)plain key:(int)key;
           @end
-
           #endif
           EOF
 
@@ -351,19 +344,13 @@ jobs:
           cat > injector/dylib/xzx_obfuscator.m << 'EOF'
           #import "xzx_obfuscator.h"
           #import <objc/runtime.h>
-
           static XZXObfuscator *sharedInstance = nil;
-
           @implementation XZXObfuscator
-
           + (instancetype)shared {
               static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  sharedInstance = [[self alloc] init];
-              });
+              dispatch_once(&onceToken, ^{ sharedInstance = [[self alloc] init]; });
               return sharedInstance;
           }
-
           - (NSString*)decryptString:(NSString*)encrypted key:(int)key {
               NSMutableString *decrypted = [NSMutableString string];
               for (int i = 0; i < encrypted.length; i++) {
@@ -373,7 +360,6 @@ jobs:
               }
               return decrypted;
           }
-
           - (NSString*)encryptString:(NSString*)plain key:(int)key {
               NSMutableString *encrypted = [NSMutableString string];
               for (int i = 0; i < plain.length; i++) {
@@ -383,9 +369,7 @@ jobs:
               }
               return encrypted;
           }
-
           @end
-
           NSString* xzx_obfuscate(const char* input, size_t len) {
               NSMutableString *result = [NSMutableString string];
               int key = 0xAA;
@@ -396,12 +380,10 @@ jobs:
               }
               return result;
           }
-
           Class xzx_getClass(const char* encryptedName) {
               NSString *decrypted = xzx_obfuscate(encryptedName, strlen(encryptedName));
               return NSClassFromString(decrypted);
           }
-
           SEL xzx_getSelector(const char* encryptedName) {
               NSString *decrypted = xzx_obfuscate(encryptedName, strlen(encryptedName));
               return NSSelectorFromString(decrypted);
@@ -413,10 +395,8 @@ jobs:
           cat > injector/dylib/xzx_core.h << 'EOF'
           #ifndef XZX_CORE_H
           #define XZX_CORE_H
-
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
-
           @interface XZXCore : NSObject
           + (instancetype)shared;
           - (void)initialize;
@@ -426,10 +406,8 @@ jobs:
           @property (nonatomic, assign) BOOL inGame;
           @property (nonatomic, strong) UIWindow *overlayWindow;
           @end
-
           void XZXNotifyGameJoined(void);
           void XZXNotifyGameLeft(void);
-
           #endif
           EOF
 
@@ -442,21 +420,15 @@ jobs:
           #import "Core/LuaExecutor.h"
           #import <objc/runtime.h>
           #import <objc/message.h>
-
           static XZXCore *sharedCore = nil;
           static BOOL coreReady = NO;
           static dispatch_queue_t monitorQueue = nil;
-
           @implementation XZXCore
-
           + (instancetype)shared {
               static dispatch_once_t once;
-              dispatch_once(&once, ^{
-                  sharedCore = [[self alloc] init];
-              });
+              dispatch_once(&once, ^{ sharedCore = [[self alloc] init]; });
               return sharedCore;
           }
-
           - (instancetype)init {
               self = [super init];
               if (self) {
@@ -466,14 +438,11 @@ jobs:
               }
               return self;
           }
-
           - (void)initialize {
               if (coreReady) return;
-              
               dispatch_async(dispatch_get_main_queue(), ^{
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                       if ([UIApplication sharedApplication] == nil) return;
-                      
                       InitLua();
                       [[XZXUIManager shared] initialize];
                       [self startMonitoring];
@@ -482,7 +451,6 @@ jobs:
                   });
               });
           }
-
           - (void)startMonitoring {
               dispatch_async(monitorQueue, ^{
                   while (YES) {
@@ -490,28 +458,21 @@ jobs:
                           BOOL active = [self checkGameActive];
                           if (active && !self.inGame) {
                               self.inGame = YES;
-                              dispatch_async(dispatch_get_main_queue(), ^{
-                                  [self onGameJoined];
-                              });
+                              dispatch_async(dispatch_get_main_queue(), ^{ [self onGameJoined]; });
                           } else if (!active && self.inGame) {
                               self.inGame = NO;
-                              dispatch_async(dispatch_get_main_queue(), ^{
-                                  [self onGameLeft];
-                              });
+                              dispatch_async(dispatch_get_main_queue(), ^{ [self onGameLeft]; });
                           }
                       }
                       [NSThread sleepForTimeInterval:1.5];
                   }
               });
           }
-
           - (BOOL)checkGameActive {
               @try {
                   if ([UIApplication sharedApplication] == nil) return NO;
-                  
                   const char* className = "\x8e\xf5\x9a\xc5\x86\xd1\x8c\xc3\x9c\xd8\x88\xc2\x91\xd7";
                   const char* methodName = "\x93\xd1\x80\xce\x9d\xdb\x86\xc2\x9c\xc8\x95\xcf\x83\xcf";
-                  
                   Class cls = xzx_getClass(className);
                   if (cls) {
                       SEL sel = xzx_getSelector(methodName);
@@ -530,27 +491,17 @@ jobs:
               } @catch (NSException *e) {}
               return NO;
           }
-
           - (void)onGameJoined {
               [[XZXUIManager shared] showOverlay];
           }
-
           - (void)onGameLeft {
               [[XZXUIManager shared] hideOverlay];
           }
-
           - (BOOL)isGameActive {
               return self.inGame;
           }
-
-          void XZXNotifyGameJoined(void) {
-              [[XZXCore shared] onGameJoined];
-          }
-
-          void XZXNotifyGameLeft(void) {
-              [[XZXCore shared] onGameLeft];
-          }
-
+          void XZXNotifyGameJoined(void) { [[XZXCore shared] onGameJoined]; }
+          void XZXNotifyGameLeft(void) { [[XZXCore shared] onGameLeft]; }
           @end
           EOF
 
@@ -559,10 +510,8 @@ jobs:
           cat > injector/dylib/xzx_ui_manager.h << 'EOF'
           #ifndef XZX_UI_MANAGER_H
           #define XZX_UI_MANAGER_H
-
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
-
           @interface XZXUIManager : NSObject
           + (instancetype)shared;
           - (void)initialize;
@@ -570,7 +519,6 @@ jobs:
           - (void)hideOverlay;
           - (BOOL)isOverlayVisible;
           @end
-
           #endif
           EOF
 
@@ -579,34 +527,25 @@ jobs:
           cat > injector/dylib/xzx_ui_manager.m << 'EOF'
           #import "xzx_ui_manager.h"
           #import "xzx_obfuscator.h"
-
           static XZXUIManager *sharedManager = nil;
           static UIWindow *overlayWindow = nil;
           static BOOL windowReady = NO;
-
           @implementation XZXUIManager
-
           + (instancetype)shared {
               static dispatch_once_t once;
-              dispatch_once(&once, ^{
-                  sharedManager = [[self alloc] init];
-              });
+              dispatch_once(&once, ^{ sharedManager = [[self alloc] init]; });
               return sharedManager;
           }
-
           - (void)initialize {
               if (windowReady) return;
-              
               dispatch_async(dispatch_get_main_queue(), ^{
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                       if ([UIApplication sharedApplication] == nil) return;
-                      
                       UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
                       if (scene) {
                           const char* vcName = "\x92\xfa\x87\xc0\x94\xed\x81\xca\x97\xef\x86\xc9\x9b\xe8\x85\xc2\x9e\xec\x82\xcf\x9f\xeb\x8d\xcb\x91\xf1\x93\xcd\x99\xf0\x8c\xc8\x96\xe6\x89\xc9\x9a\xe4";
                           Class vcClass = xzx_getClass(vcName);
                           UIViewController *vc = [[vcClass alloc] init];
-                          
                           if (vc) {
                               overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
                               overlayWindow.windowLevel = UIWindowLevelAlert + 1;
@@ -620,13 +559,8 @@ jobs:
                   });
               });
           }
-
           - (void)showOverlay {
-              if (!windowReady) {
-                  [self initialize];
-                  return;
-              }
-              
+              if (!windowReady) { [self initialize]; return; }
               dispatch_async(dispatch_get_main_queue(), ^{
                   if (overlayWindow && overlayWindow.hidden) {
                       overlayWindow.hidden = NO;
@@ -634,19 +568,14 @@ jobs:
                   }
               });
           }
-
           - (void)hideOverlay {
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if (overlayWindow) {
-                      overlayWindow.hidden = YES;
-                  }
+                  if (overlayWindow) overlayWindow.hidden = YES;
               });
           }
-
           - (BOOL)isOverlayVisible {
               return overlayWindow && !overlayWindow.hidden;
           }
-
           @end
           EOF
 
@@ -656,7 +585,6 @@ jobs:
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
           #import "xzx_core.h"
-
           __attribute__((constructor))
           static void entry() {
               dispatch_async(dispatch_get_main_queue(), ^{
@@ -678,12 +606,10 @@ jobs:
           bool xzx_is_in_game(void);
           #endif
           EOF
-
           cat > injector/dylib/xzx_hooks.m << 'EOF'
           #include "xzx_hooks.h"
           bool xzx_is_in_game(void) { return false; }
           EOF
-
           cat > injector/dylib/xzx_antidetection.h << 'EOF'
           #ifndef XZX_ANTIDETECTION_H
           #define XZX_ANTIDETECTION_H
@@ -693,14 +619,12 @@ jobs:
           @end
           #endif
           EOF
-
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
           @implementation XZXAntiDetection
           + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
           @end
           EOF
-
           cat > injector/dylib/xzx_ban_protection.h << 'EOF'
           #ifndef XZX_BAN_PROTECTION_H
           #define XZX_BAN_PROTECTION_H
@@ -710,7 +634,6 @@ jobs:
           @end
           #endif
           EOF
-
           cat > injector/dylib/xzx_ban_protection.m << 'EOF'
           #import "xzx_ban_protection.h"
           @implementation XZXBanProtection

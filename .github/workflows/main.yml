@@ -354,13 +354,12 @@ jobs:
           #endif
           EOF
 
-      - name: Create MainViewController.swift
+      - name: Create MainViewController.swift (with @objc)
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
 
-          @objc(XZXMainViewController)
-          public class XZXMainViewController: UIViewController, UITextViewDelegate, UISearchBarDelegate {
+          @objc class MainViewController: UIViewController, UITextViewDelegate, UISearchBarDelegate {
               private let textView = UITextView()
               private let executeButton = UIButton()
               private let clearButton = UIButton()
@@ -560,7 +559,7 @@ jobs:
                   toggleScriptHub()
               }
 
-              @objc private func executeScript() {
+              @objc func executeScript() {
                   let script = textView.text ?? ""
                   guard !script.isEmpty else { return }
                   script.withCString { ptr in
@@ -568,11 +567,11 @@ jobs:
                   }
               }
 
-              @objc private func clearScript() {
+              @objc func clearScript() {
                   textView.text = ""
               }
 
-              @objc private func saveScript() {
+              @objc func saveScript() {
                   UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
                   UserDefaults.standard.synchronize()
 
@@ -581,7 +580,7 @@ jobs:
                   present(alert, animated: true)
               }
 
-              @objc private func close() {
+              @objc func close() {
                   view.isHidden = true
               }
 
@@ -678,17 +677,15 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  // Wait for Roblox to fully start
                   [NSThread sleepForTimeInterval:3.0];
 
                   while (YES) {
                       @autoreleasepool {
-                          BOOL currentlyInGame = [self detectGame];
+                          BOOL currentlyInGame = [self isGameEngineActive];
 
                           if (currentlyInGame && !self.inGame) {
                               self.inGame = YES;
                               dispatch_async(dispatch_get_main_queue(), ^{
-                                  // Small extra delay to ensure game UI is ready
                                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                                       [self showOverlay];
                                       NSLog(@"[XZX] Game detected - UI shown");
@@ -707,9 +704,9 @@ jobs:
               });
           }
 
-          - (BOOL)detectGame {
+          - (BOOL)isGameEngineActive {
               @try {
-                  // Most reliable: Check for PlayerList in CoreGui (only exists in-game)
+                  // Check for PlayerList in CoreGui (only exists in-game)
                   Class coreGuiClass = NSClassFromString(@"CoreGui");
                   if (coreGuiClass) {
                       SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
@@ -720,7 +717,7 @@ jobs:
                               if ([coreGui respondsToSelector:findFirstChildSel]) {
                                   id playerList = ((id(*)(id, SEL, id))objc_msgSend)(coreGui, findFirstChildSel, @"PlayerList");
                                   if (playerList) {
-                                      NSLog(@"[XZX] PlayerList found – definitely in game");
+                                      NSLog(@"[XZX] PlayerList found – game engine active");
                                       return YES;
                                   }
                               }
@@ -762,11 +759,15 @@ jobs:
                   UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
                   if (!scene) return;
 
-                  UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+                  // FIXED: Use correct class name that matches @objc class in Swift
+                  UIViewController *vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
                   if (!vc) {
-                      vc = [[NSClassFromString(@"XZX.XZXMainViewController") alloc] init];
+                      vc = [[NSClassFromString(@"MainViewController") alloc] init];
                   }
-                  if (!vc) return;
+                  if (!vc) {
+                      NSLog(@"[XZX] ERROR: MainViewController class not found!");
+                      return;
+                  }
 
                   self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
                   self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
@@ -774,6 +775,7 @@ jobs:
                   self.overlayWindow.backgroundColor = [UIColor clearColor];
                   self.overlayWindow.hidden = NO;
                   [self.overlayWindow makeKeyAndVisible];
+                  NSLog(@"[XZX] Overlay shown successfully!");
               });
           }
 

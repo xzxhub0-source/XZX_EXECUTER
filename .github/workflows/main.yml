@@ -865,7 +865,7 @@ jobs:
           }
           EOF
 
-      - name: Create placeholder files
+      - name: Create placeholder files (FIXED)
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
@@ -881,6 +881,7 @@ jobs:
           cat > injector/dylib/xzx_ban_protection.h << 'EOF'
           #ifndef XZX_BAN_PROTECTION_H
           #define XZX_BAN_PROTECTION_H
+          #import <Foundation/Foundation.h>
           @interface XZXBanProtection : NSObject
           + (instancetype)shared;
           @end
@@ -889,12 +890,20 @@ jobs:
           cat > injector/dylib/xzx_ban_protection.m << 'EOF'
           #import "xzx_ban_protection.h"
           @implementation XZXBanProtection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          + (instancetype)shared {
+              static XZXBanProtection *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  instance = [[self alloc] init];
+              });
+              return instance;
+          }
           @end
           EOF
           cat > injector/dylib/xzx_hook_manager.h << 'EOF'
           #ifndef XZX_HOOK_MANAGER_H
           #define XZX_HOOK_MANAGER_H
+          #import <Foundation/Foundation.h>
           @interface XZXHookManager : NSObject
           + (instancetype)shared;
           @end
@@ -903,7 +912,14 @@ jobs:
           cat > injector/dylib/xzx_hook_manager.m << 'EOF'
           #import "xzx_hook_manager.h"
           @implementation XZXHookManager
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          + (instancetype)shared {
+              static XZXHookManager *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  instance = [[self alloc] init];
+              });
+              return instance;
+          }
           @end
           EOF
 

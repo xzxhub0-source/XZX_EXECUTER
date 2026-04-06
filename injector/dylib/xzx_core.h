@@ -4,18 +4,17 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-@class XZXEditor;
-
 @interface XZXCore : NSObject
 + (instancetype)shared;
 - (void)initialize;
-- (void)onGameJoined;
-- (void)onGameLeft;
-@property (nonatomic, assign) BOOL isInGame;
-@property (nonatomic, strong) UIWindow *editorWindow;
+- (void)showOverlay;
+- (void)hideOverlay;
+- (BOOL)isOverlayVisible;
+- (void)startGameMonitoring;
+- (BOOL)isInGame;
+@property (nonatomic, strong) UIWindow *overlayWindow;
+@property (nonatomic, assign) BOOL isInitialized;
+@property (nonatomic, assign) BOOL inGame;
 @end
-
-void notify_game_joined(void);
-void notify_game_left(void);
 
 #endif

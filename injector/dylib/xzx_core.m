@@ -7,6 +7,7 @@
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
+static BOOL uiCreated = NO;
 
 @implementation XZXCore
 
@@ -33,12 +34,13 @@ static BOOL gameDetectionActive = NO;
     if (_isInitialized) return;
     _isInitialized = YES;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        InitLua();
-        NSLog(@"[XZX] Lua initialized");
-        [self startGameMonitoring];
-        NSLog(@"[XZX] Core initialized, waiting for game engine...");
-    });
+    // Start Lua but DO NOT show UI yet
+    InitLua();
+    NSLog(@"[XZX] Lua initialized");
+
+    // Start game monitoring in background
+    [self startGameMonitoring];
+    NSLog(@"[XZX] Core initialized, waiting for game join...");
 }
 
 - (void)startGameMonitoring {
@@ -46,36 +48,33 @@ static BOOL gameDetectionActive = NO;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait for Roblox to fully start
+        // Wait for Roblox to fully start before checking
         [NSThread sleepForTimeInterval:3.0];
-        
-        // Track state changes
-        BOOL wasInGame = NO;
-        
+
         while (YES) {
             @autoreleasepool {
-                BOOL isGameRunning = [self isGameEngineActive];
-                
-                // State change: entered game
-                if (isGameRunning && !wasInGame) {
-                    NSLog(@"[XZX] Game engine active - UI will appear");
+                BOOL currentlyInGame = [self isGameEngineActive];
+
+                if (currentlyInGame && !self.inGame) {
+                    self.inGame = YES;
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // Small delay to ensure render target is ready
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                            [self showOverlay];
-                            NSLog(@"[XZX] UI rendered");
+                        // Wait a bit more to ensure the game scene is ready
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                            if (!uiCreated) {
+                                [self createOverlay];
+                            } else {
+                                [self showOverlay];
+                            }
+                            NSLog(@"[XZX] Game detected - UI shown");
                         });
                     });
-                }
-                // State change: left game
-                else if (!isGameRunning && wasInGame) {
-                    NSLog(@"[XZX] Game engine stopped - hiding UI");
+                } else if (!currentlyInGame && self.inGame) {
+                    self.inGame = NO;
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
+                        NSLog(@"[XZX] Left game - UI hidden");
                     });
                 }
-                
-                wasInGame = isGameRunning;
             }
             [NSThread sleepForTimeInterval:1.0];
         }
@@ -84,7 +83,7 @@ static BOOL gameDetectionActive = NO;
 
 - (BOOL)isGameEngineActive {
     @try {
-        // Method 1: Check for PlayerList in CoreGui (most reliable)
+        // Most reliable: check for PlayerList in CoreGui (only exists in-game)
         Class coreGuiClass = NSClassFromString(@"CoreGui");
         if (coreGuiClass) {
             SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
@@ -102,8 +101,8 @@ static BOOL gameDetectionActive = NO;
                 }
             }
         }
-        
-        // Method 2: Check placeId
+
+        // Fallback: check placeId
         Class dataModelClass = NSClassFromString(@"RobloxDataModel");
         if (dataModelClass) {
             SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
@@ -121,45 +120,40 @@ static BOOL gameDetectionActive = NO;
                 }
             }
         }
-        
-        // Method 3: Check for game view controller
-        UIWindow *keyWindow = nil;
-        UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-        if (scene) keyWindow = scene.keyWindow;
-        if (!keyWindow) keyWindow = [UIApplication sharedApplication].keyWindow;
-        
-        if (keyWindow && keyWindow.rootViewController) {
-            UIViewController *topVC = keyWindow.rootViewController;
-            while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-            NSString *className = NSStringFromClass([topVC class]);
-            if ([className containsString:@"Gameplay"] || 
-                [className containsString:@"InGame"] ||
-                [className containsString:@"PlayView"]) {
-                NSLog(@"[XZX] Game view controller detected");
-                return YES;
-            }
-        }
-        
     } @catch (NSException *e) {
         // Ignore
     }
     return NO;
 }
 
-- (void)showOverlay {
-    if (_overlayWindow && !_overlayWindow.hidden) return;
+- (void)createOverlay {
+    if (uiCreated) return;
+    uiCreated = YES;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if ([UIApplication sharedApplication] == nil) return;
+        if ([UIApplication sharedApplication] == nil) {
+            NSLog(@"[XZX] UIApplication not available");
+            return;
+        }
 
         UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-        if (!scene) return;
-
-        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-        if (!vc) {
-            vc = [[NSClassFromString(@"XZX.XZXMainViewController") alloc] init];
+        if (!scene) {
+            NSLog(@"[XZX] No window scene available");
+            return;
         }
-        if (!vc) return;
+
+        // Try different class name possibilities
+        UIViewController *vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+        if (!vc) {
+            vc = [[NSClassFromString(@"MainViewController") alloc] init];
+        }
+        if (!vc) {
+            vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+        }
+        if (!vc) {
+            NSLog(@"[XZX] ERROR: MainViewController class not found!");
+            return;
+        }
 
         self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
         self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
@@ -167,15 +161,25 @@ static BOOL gameDetectionActive = NO;
         self.overlayWindow.backgroundColor = [UIColor clearColor];
         self.overlayWindow.hidden = NO;
         [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay window attached to renderer");
+        NSLog(@"[XZX] Overlay created and shown successfully!");
     });
+}
+
+- (void)showOverlay {
+    if (!uiCreated) {
+        [self createOverlay];
+    } else if (self.overlayWindow && self.overlayWindow.hidden) {
+        self.overlayWindow.hidden = NO;
+        [self.overlayWindow makeKeyAndVisible];
+        NSLog(@"[XZX] Overlay shown");
+    }
 }
 
 - (void)hideOverlay {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.overlayWindow) {
+        if (self.overlayWindow && !self.overlayWindow.hidden) {
             self.overlayWindow.hidden = YES;
-            NSLog(@"[XZX] Overlay detached");
+            NSLog(@"[XZX] Overlay hidden");
         }
     });
 }

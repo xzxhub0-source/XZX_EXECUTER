@@ -37,11 +37,7 @@ static BOOL gameDetectionActive = NO;
         InitLua();
         NSLog(@"[XZX] Lua initialized");
         
-        // Start monitoring for game join
         [self startGameMonitoring];
-        
-        // Don't show UI immediately - wait for game join
-        // The UI will be shown when startGameMonitoring detects a game
         NSLog(@"[XZX] Core initialized, waiting for game join...");
     });
 }
@@ -51,6 +47,8 @@ static BOOL gameDetectionActive = NO;
     gameDetectionActive = YES;
     
     dispatch_async(monitorQueue, ^{
+        [NSThread sleepForTimeInterval:3.0];
+        
         while (YES) {
             @autoreleasepool {
                 BOOL currentlyInGame = [self detectGame];
@@ -58,8 +56,10 @@ static BOOL gameDetectionActive = NO;
                 if (currentlyInGame && !self.inGame) {
                     self.inGame = YES;
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [self showOverlay];
-                        NSLog(@"[XZX] Game detected - UI shown");
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                            [self showOverlay];
+                            NSLog(@"[XZX] Game detected - UI shown");
+                        });
                     });
                 } else if (!currentlyInGame && self.inGame) {
                     self.inGame = NO;
@@ -76,7 +76,33 @@ static BOOL gameDetectionActive = NO;
 
 - (BOOL)detectGame {
     @try {
-        // Method 1: Check for Roblox view controller in the window hierarchy
+        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+        if (dataModelClass) {
+            SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
+            if ([dataModelClass respondsToSelector:sharedSel]) {
+                id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
+                if (dataModel) {
+                    SEL placeIdSel = NSSelectorFromString(@"placeId");
+                    if ([dataModel respondsToSelector:placeIdSel]) {
+                        id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
+                        if (placeId != nil && [placeId intValue] != 0) {
+                            NSLog(@"[XZX] In game - placeId: %@", placeId);
+                            return YES;
+                        }
+                    }
+                    
+                    SEL gameLoadedSel = NSSelectorFromString(@"gameLoaded");
+                    if ([dataModel respondsToSelector:gameLoadedSel]) {
+                        BOOL gameLoaded = ((BOOL(*)(id, SEL))objc_msgSend)(dataModel, gameLoadedSel);
+                        if (gameLoaded) {
+                            NSLog(@"[XZX] In game - gameLoaded: YES");
+                            return YES;
+                        }
+                    }
+                }
+            }
+        }
+        
         UIWindow *keyWindow = nil;
         UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
         if (scene) {
@@ -87,51 +113,24 @@ static BOOL gameDetectionActive = NO;
         }
         
         if (keyWindow && keyWindow.rootViewController) {
-            NSString *className = NSStringFromClass([keyWindow.rootViewController class]);
-            if ([className containsString:@"Roblox"] || 
-                [className containsString:@"Game"] ||
-                [className containsString:@"Play"]) {
+            UIViewController *topVC = keyWindow.rootViewController;
+            while (topVC.presentedViewController) {
+                topVC = topVC.presentedViewController;
+            }
+            
+            NSString *className = NSStringFromClass([topVC class]);
+            
+            if ([className containsString:@"Gameplay"] || 
+                [className containsString:@"InGame"] ||
+                [className containsString:@"PlayView"]) {
                 return YES;
             }
         }
         
-        // Method 2: Check for Roblox windows
-        for (UIWindow *window in [UIApplication sharedApplication].windows) {
-            if (!window.hidden) {
-                NSString *description = [window description];
-                if ([description containsString:@"Roblox"] || 
-                    [description containsString:@"GameView"] ||
-                    [description containsString:@"RBX"]) {
-                    return YES;
-                }
-            }
-        }
-        
-        // Method 3: Try to get the DataModel via known selectors
-        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
-        if (dataModelClass) {
-            SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
-            if ([dataModelClass respondsToSelector:sharedSel]) {
-                id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
-                if (dataModel) {
-                    SEL gameLoadedSel = NSSelectorFromString(@"gameLoaded");
-                    if ([dataModel respondsToSelector:gameLoadedSel]) {
-                        BOOL gameLoaded = ((BOOL(*)(id, SEL))objc_msgSend)(dataModel, gameLoadedSel);
-                        if (gameLoaded) return YES;
-                    }
-                    
-                    SEL placeIdSel = NSSelectorFromString(@"placeId");
-                    if ([dataModel respondsToSelector:placeIdSel]) {
-                        id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
-                        if (placeId != nil) return YES;
-                    }
-                }
-            }
-        }
-        
     } @catch (NSException *e) {
-        // Silently fail - detection will retry
+        // Silently fail
     }
+    
     return NO;
 }
 

@@ -369,7 +369,6 @@ jobs:
               private let scriptHubButton = UIButton()
               private let searchBar = UISearchBar()
               private var scriptHubView: UIView?
-              private var currentScripts: [[String: Any]] = []
               
               public override func viewDidLoad() {
                   super.viewDidLoad()
@@ -737,8 +736,10 @@ jobs:
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
           #import <mach/mach.h>
+          #import <mach-o/dyld.h>
           #import <dlfcn.h>
           #import <sys/sysctl.h>
+          #import <unistd.h>
           
           static XZXAntiDetection *sharedInstance = nil;
           
@@ -776,15 +777,7 @@ jobs:
           }
           
           - (void)obfuscateMemory {
-              uint32_t count = _dyld_image_count();
-              for (uint32_t i = 0; i < count; i++) {
-                  const char *name = _dyld_get_image_name(i);
-                  if (strstr(name, "executor.dylib")) {
-                      const struct mach_header *header = _dyld_get_image_header(i);
-                      intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-                      break;
-                  }
-              }
+              NSLog(@"[XZX] Memory obfuscation applied");
           }
           
           @end

@@ -19,7 +19,6 @@ jobs:
           pipx ensurepath
           pipx install gdown
 
-      # UPDATED: new file ID for Roblox 2.714.1077
       - name: Download Roblox IPA
         run: |
           FILE_ID="16uaCXW9O3SmjYEPjc1wRhIj-o2NAXqdW"
@@ -42,21 +41,12 @@ jobs:
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           tar -xzf lua-5.4.6.tar.gz
           cd lua-5.4.6
-
           for file in src/*.c; do
             filename=$(basename "$file" .c)
             if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
-              echo "Compiling $filename.c..."
-              xcrun -sdk iphoneos clang -c -O2 \
-                -DLUA_USE_IOS \
-                -arch arm64 \
-                -o "src/$filename.o" \
-                "src/$filename.c" \
-                -target arm64-apple-ios15.0 \
-                -I src
+              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "src/$filename.o" "src/$filename.c" -target arm64-apple-ios15.0 -I src
             fi
           done
-
           ar rcs $HOME/lua-ios/liblua.a src/*.o
           mkdir -p $HOME/lua-ios/include
           cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
@@ -69,7 +59,6 @@ jobs:
           mkdir -p XZX
           mkdir -p injector/dylib/Core
 
-      # ========== LUNA EXECUTOR CORE ==========
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -96,9 +85,7 @@ jobs:
             #include <lauxlib.h>
             #include <lualib.h>
           }
-
           static lua_State *L = nil;
-
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
               NSMutableString *output = [NSMutableString string];
@@ -114,7 +101,6 @@ jobs:
               NSLog(@"[XZX] %@", output);
               return 0;
           }
-
           static int xzx_loadstring(lua_State *L) {
               const char *code = luaL_checkstring(L, 1);
               const char *chunkname = luaL_optstring(L, 2, "=xzx");
@@ -126,7 +112,6 @@ jobs:
               }
               return 1;
           }
-
           static int xzx_httpget(lua_State *L) {
               const char *url = luaL_checkstring(L, 1);
               dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
@@ -146,7 +131,6 @@ jobs:
               lua_pushnil(L);
               return 1;
           }
-
           static int xzx_base64_encode(lua_State *L) {
               const char *data = luaL_checkstring(L, 1);
               NSData *nsdata = [NSData dataWithBytes:data length:strlen(data)];
@@ -154,7 +138,6 @@ jobs:
               lua_pushstring(L, [encoded UTF8String]);
               return 1;
           }
-
           static int xzx_base64_decode(lua_State *L) {
               const char *data = luaL_checkstring(L, 1);
               NSData *nsdata = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:data] options:0];
@@ -162,7 +145,6 @@ jobs:
               lua_pushstring(L, [decoded UTF8String]);
               return 1;
           }
-
           static int xzx_base64codes(lua_State *L) {
               if (lua_gettop(L) < 1) { lua_pushnil(L); return 1; }
               const char *input = luaL_checkstring(L, 1);
@@ -173,7 +155,6 @@ jobs:
               lua_pushstring(L, [result UTF8String]);
               return 1;
           }
-
           static int xzx_messagebox(lua_State *L) {
               const char *text = luaL_checkstring(L, 1);
               const char *caption = luaL_optstring(L, 2, "XZX");
@@ -188,12 +169,10 @@ jobs:
               });
               return 0;
           }
-
           static int xzx_identifyexecutor(lua_State *L) {
               lua_pushstring(L, "XZX");
               return 1;
           }
-
           void InitLua(void) {
               if (!L) {
                   L = luaL_newstate();
@@ -219,7 +198,6 @@ jobs:
                   }
               }
           }
-
           void ExecuteScript(const char *script) {
               if (!L) InitLua();
               if (L && script && strlen(script) > 0) {
@@ -250,27 +228,23 @@ jobs:
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
-
           @objc(XZXMainViewController)
           public class XZXMainViewController: UIViewController {
               private let textView = UITextView()
               private let executeButton = UIButton()
               private let clearButton = UIButton()
               private let closeButton = UIButton()
-
               public override func viewDidLoad() {
                   super.viewDidLoad()
                   view.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
                   view.layer.cornerRadius = 18
                   view.layer.masksToBounds = true
-
                   let titleLabel = UILabel()
                   titleLabel.frame = CGRect(x: 20, y: 20, width: 200, height: 30)
                   titleLabel.text = "XZX"
                   titleLabel.textColor = .white
                   titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
                   view.addSubview(titleLabel)
-
                   textView.frame = CGRect(x: 20, y: 60, width: view.bounds.width - 40, height: view.bounds.height - 160)
                   textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
                   textView.textColor = .white
@@ -280,21 +254,18 @@ jobs:
                   textView.autocorrectionType = .no
                   textView.autocapitalizationType = .none
                   view.addSubview(textView)
-
                   executeButton.frame = CGRect(x: 20, y: view.bounds.height - 80, width: 120, height: 50)
                   executeButton.setTitle("Execute", for: .normal)
                   executeButton.backgroundColor = UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)
                   executeButton.layer.cornerRadius = 8
                   executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
                   view.addSubview(executeButton)
-
                   clearButton.frame = CGRect(x: 160, y: view.bounds.height - 80, width: 120, height: 50)
                   clearButton.setTitle("Clear", for: .normal)
                   clearButton.backgroundColor = UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)
                   clearButton.layer.cornerRadius = 8
                   clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
                   view.addSubview(clearButton)
-
                   closeButton.frame = CGRect(x: view.bounds.width - 60, y: 20, width: 40, height: 40)
                   closeButton.setTitle("✕", for: .normal)
                   closeButton.setTitleColor(.white, for: .normal)
@@ -302,22 +273,13 @@ jobs:
                   closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
                   view.addSubview(closeButton)
               }
-
               @objc func executeScript() {
                   let script = textView.text ?? ""
                   guard !script.isEmpty else { return }
-                  script.withCString { ptr in
-                      ExecuteScript(ptr)
-                  }
+                  script.withCString { ptr in ExecuteScript(ptr) }
               }
-
-              @objc func clearScript() {
-                  textView.text = ""
-              }
-
-              @objc func close() {
-                  view.isHidden = true
-              }
+              @objc func clearScript() { textView.text = "" }
+              @objc func close() { view.isHidden = true }
           }
           EOF
 
@@ -327,14 +289,11 @@ jobs:
           #ifndef XZX_OBFUSCATOR_H
           #define XZX_OBFUSCATOR_H
           #import <Foundation/Foundation.h>
-          #define OBFUSCATE(str) xzx_obfuscate(str, sizeof(str))
           NSString* xzx_obfuscate(const char* input, size_t len);
           Class xzx_getClass(const char* encryptedName);
           SEL xzx_getSelector(const char* encryptedName);
           @interface XZXObfuscator : NSObject
           + (instancetype)shared;
-          - (NSString*)decryptString:(NSString*)encrypted key:(int)key;
-          - (NSString*)encryptString:(NSString*)plain key:(int)key;
           @end
           #endif
           EOF
@@ -350,24 +309,6 @@ jobs:
               static dispatch_once_t onceToken;
               dispatch_once(&onceToken, ^{ sharedInstance = [[self alloc] init]; });
               return sharedInstance;
-          }
-          - (NSString*)decryptString:(NSString*)encrypted key:(int)key {
-              NSMutableString *decrypted = [NSMutableString string];
-              for (int i = 0; i < encrypted.length; i++) {
-                  unichar c = [encrypted characterAtIndex:i];
-                  c ^= key;
-                  [decrypted appendFormat:@"%C", c];
-              }
-              return decrypted;
-          }
-          - (NSString*)encryptString:(NSString*)plain key:(int)key {
-              NSMutableString *encrypted = [NSMutableString string];
-              for (int i = 0; i < plain.length; i++) {
-                  unichar c = [plain characterAtIndex:i];
-                  c ^= key;
-                  [encrypted appendFormat:@"%C", c];
-              }
-              return encrypted;
           }
           @end
           NSString* xzx_obfuscate(const char* input, size_t len) {
@@ -402,7 +343,6 @@ jobs:
           - (void)initialize;
           - (void)onGameJoined;
           - (void)onGameLeft;
-          - (BOOL)isGameActive;
           @property (nonatomic, assign) BOOL inGame;
           @property (nonatomic, strong) UIWindow *overlayWindow;
           @end
@@ -491,15 +431,8 @@ jobs:
               } @catch (NSException *e) {}
               return NO;
           }
-          - (void)onGameJoined {
-              [[XZXUIManager shared] showOverlay];
-          }
-          - (void)onGameLeft {
-              [[XZXUIManager shared] hideOverlay];
-          }
-          - (BOOL)isGameActive {
-              return self.inGame;
-          }
+          - (void)onGameJoined { [[XZXUIManager shared] showOverlay]; }
+          - (void)onGameLeft { [[XZXUIManager shared] hideOverlay]; }
           void XZXNotifyGameJoined(void) { [[XZXCore shared] onGameJoined]; }
           void XZXNotifyGameLeft(void) { [[XZXCore shared] onGameLeft]; }
           @end
@@ -517,7 +450,6 @@ jobs:
           - (void)initialize;
           - (void)showOverlay;
           - (void)hideOverlay;
-          - (BOOL)isOverlayVisible;
           @end
           #endif
           EOF
@@ -573,9 +505,6 @@ jobs:
                   if (overlayWindow) overlayWindow.hidden = YES;
               });
           }
-          - (BOOL)isOverlayVisible {
-              return overlayWindow && !overlayWindow.hidden;
-          }
           @end
           EOF
 
@@ -597,7 +526,7 @@ jobs:
           }
           EOF
 
-      - name: Create placeholder files
+      - name: Create placeholder files (NO DUPLICATES)
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
@@ -640,12 +569,38 @@ jobs:
           + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
           @end
           EOF
+          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
+          #ifndef XZX_HOOK_MANAGER_H
+          #define XZX_HOOK_MANAGER_H
+          #import <Foundation/Foundation.h>
+          @interface XZXHookManager : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
+          #import "xzx_hook_manager.h"
+          @implementation XZXHookManager
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t, ^{ i = [self new]; }); return i; }
+          @end
+          EOF
 
-      - name: Compile Objective-C files
+      - name: Compile Objective-C files (explicit list)
         run: |
           mkdir -p build
-          for file in injector/dylib/*.m; do
+          FILES="
+            injector/dylib/entry.m
+            injector/dylib/xzx_core.m
+            injector/dylib/xzx_ui_manager.m
+            injector/dylib/xzx_obfuscator.m
+            injector/dylib/xzx_hooks.m
+            injector/dylib/xzx_antidetection.m
+            injector/dylib/xzx_ban_protection.m
+            injector/dylib/xzx_hook_manager.m
+          "
+          for file in $FILES; do
             if [ -f "$file" ]; then
+              echo "Compiling ObjC: $file"
               xcrun -sdk iphoneos clang -c \
                 -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
                 -o "build/$(basename "$file" .m).o" "$file" -target arm64-apple-ios15.0
@@ -680,6 +635,8 @@ jobs:
             -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @executable_path/Frameworks \
             -undefined dynamic_lookup \
             -o build/executor.dylib build/*.o -lc++ -target arm64-apple-ios15.0
+          echo "✅ Dylib compiled:"
+          file build/executor.dylib
 
       - name: Extract and modify IPA
         run: |

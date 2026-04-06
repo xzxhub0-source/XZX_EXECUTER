@@ -64,16 +64,21 @@ jobs:
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
           #ifndef LuaExecutor_h
           #define LuaExecutor_h
-          #include <lua.h>
+
+          struct lua_State;
+
           #ifdef __cplusplus
           extern "C" {
           #endif
+
           void InitLua(void);
           void ExecuteScript(const char *script);
-          void RegisterFunction(const char *name, int (*func)(lua_State*));
+          void RegisterFunction(const char *name, int (*func)(struct lua_State*));
+
           #ifdef __cplusplus
           }
           #endif
+
           #endif
           EOF
 
@@ -353,7 +358,6 @@ jobs:
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
-          import WebKit
 
           @objc(XZXMainViewController)
           public class XZXMainViewController: UIViewController, UITextViewDelegate, UISearchBarDelegate {
@@ -370,6 +374,7 @@ jobs:
               public override func viewDidLoad() {
                   super.viewDidLoad()
                   setupUI()
+                  setupNotifications()
                   loadSavedScripts()
                   InitLua()
               }
@@ -441,6 +446,10 @@ jobs:
                   closeButton.titleLabel?.font = .systemFont(ofSize: 24)
                   closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
                   view.addSubview(closeButton)
+              }
+              
+              private func setupNotifications() {
+                  NotificationCenter.default.addObserver(self, selector: #selector(handleScriptLoad), name: NSNotification.Name("LoadScript"), object: nil)
               }
               
               private func loadSavedScripts() {
@@ -575,6 +584,12 @@ jobs:
               
               @objc private func close() {
                   view.isHidden = true
+              }
+              
+              @objc private func handleScriptLoad(_ notification: Notification) {
+                  if let script = notification.object as? String {
+                      textView.text = script
+                  }
               }
               
               public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
@@ -775,6 +790,88 @@ jobs:
           @end
           EOF
 
+      - name: Create xzx_obfuscator.h
+        run: |
+          cat > injector/dylib/xzx_obfuscator.h << 'EOF'
+          #ifndef XZX_OBFUSCATOR_H
+          #define XZX_OBFUSCATOR_H
+          #import <Foundation/Foundation.h>
+          
+          NSString* xzx_obfuscate(const char* input);
+          Class xzx_getClass(const char* encryptedName);
+          SEL xzx_getSelector(const char* encryptedName);
+          
+          @interface XZXObfuscator : NSObject
+          + (instancetype)shared;
+          - (NSString*)decrypt:(NSString*)encrypted;
+          - (NSString*)encrypt:(NSString*)plain;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_obfuscator.m
+        run: |
+          cat > injector/dylib/xzx_obfuscator.m << 'EOF'
+          #import "xzx_obfuscator.h"
+          #import <objc/runtime.h>
+          
+          static XZXObfuscator *sharedInstance = nil;
+          static int xorKey = 0xAA;
+          
+          @implementation XZXObfuscator
+          
+          + (instancetype)shared {
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  sharedInstance = [[self alloc] init];
+              });
+              return sharedInstance;
+          }
+          
+          - (NSString*)decrypt:(NSString*)encrypted {
+              NSMutableString *decrypted = [NSMutableString string];
+              for (int i = 0; i < encrypted.length; i++) {
+                  unichar c = [encrypted characterAtIndex:i];
+                  c ^= xorKey;
+                  [decrypted appendFormat:@"%C", c];
+              }
+              return decrypted;
+          }
+          
+          - (NSString*)encrypt:(NSString*)plain {
+              NSMutableString *encrypted = [NSMutableString string];
+              for (int i = 0; i < plain.length; i++) {
+                  unichar c = [plain characterAtIndex:i];
+                  c ^= xorKey;
+                  [encrypted appendFormat:@"%C", c];
+              }
+              return encrypted;
+          }
+          
+          @end
+          
+          NSString* xzx_obfuscate(const char* input) {
+              NSMutableString *result = [NSMutableString string];
+              int key = 0xAA;
+              for (size_t i = 0; i < strlen(input); i++) {
+                  char c = input[i] ^ key;
+                  [result appendFormat:@"%c", c];
+                  key = (key * 31) & 0xFF;
+              }
+              return result;
+          }
+          
+          Class xzx_getClass(const char* encryptedName) {
+              NSString *decrypted = xzx_obfuscate(encryptedName);
+              return NSClassFromString(decrypted);
+          }
+          
+          SEL xzx_getSelector(const char* encryptedName) {
+              NSString *decrypted = xzx_obfuscate(encryptedName);
+              return NSSelectorFromString(decrypted);
+          }
+          EOF
+
       - name: Create placeholder files
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
@@ -824,6 +921,7 @@ jobs:
             injector/dylib/entry.m
             injector/dylib/xzx_core.m
             injector/dylib/xzx_antidetection.m
+            injector/dylib/xzx_obfuscator.m
             injector/dylib/xzx_hooks.m
             injector/dylib/xzx_ban_protection.m
             injector/dylib/xzx_hook_manager.m
@@ -865,7 +963,6 @@ jobs:
             -undefined dynamic_lookup \
             -o build/executor.dylib build/*.o -lc++ -target arm64-apple-ios15.0
           echo "✅ Dylib compiled"
-          file build/executor.dylib
 
       - name: Extract and modify IPA
         run: |

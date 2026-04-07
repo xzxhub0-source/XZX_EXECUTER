@@ -354,12 +354,13 @@ jobs:
           #endif
           EOF
 
-      - name: Create MainViewController.swift (with @objc)
+      - name: Create MainViewController.swift
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
 
-          @objc class MainViewController: UIViewController, UITextViewDelegate, UISearchBarDelegate {
+          @objc(XZXMainViewController)
+          public class MainViewController: UIViewController {
               private let textView = UITextView()
               private let executeButton = UIButton()
               private let clearButton = UIButton()
@@ -631,6 +632,8 @@ jobs:
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
           #import "Core/LuaExecutor.h"
+          #import "xzx_renderer_hook.h"
+          #import "xzx_task_hook.h"
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
           #import <objc/message.h>
@@ -638,6 +641,7 @@ jobs:
           static XZXCore *sharedCore = nil;
           static dispatch_queue_t monitorQueue = nil;
           static BOOL gameDetectionActive = NO;
+          static BOOL uiCreated = NO;
 
           @implementation XZXCore
 
@@ -667,6 +671,12 @@ jobs:
               dispatch_async(dispatch_get_main_queue(), ^{
                   InitLua();
                   NSLog(@"[XZX] Lua initialized");
+                  
+                  // Install renderer and task scheduler hooks
+                  install_renderer_hook();
+                  install_task_hook();
+                  NSLog(@"[XZX] Renderer and task hooks installed");
+                  
                   [self startGameMonitoring];
                   NSLog(@"[XZX] Core initialized, waiting for game join...");
               });
@@ -677,7 +687,7 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  [NSThread sleepForTimeInterval:3.0];
+                  [NSThread sleepForTimeInterval:5.0];
 
                   while (YES) {
                       @autoreleasepool {
@@ -686,8 +696,12 @@ jobs:
                           if (currentlyInGame && !self.inGame) {
                               self.inGame = YES;
                               dispatch_async(dispatch_get_main_queue(), ^{
-                                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                                      [self showOverlay];
+                                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                                      if (!uiCreated) {
+                                          [self createOverlay];
+                                      } else {
+                                          [self showOverlay];
+                                      }
                                       NSLog(@"[XZX] Game detected - UI shown");
                                   });
                               });
@@ -706,7 +720,7 @@ jobs:
 
           - (BOOL)isGameEngineActive {
               @try {
-                  // Check for PlayerList in CoreGui (only exists in-game)
+                  // Primary check: PlayerList in CoreGui
                   Class coreGuiClass = NSClassFromString(@"CoreGui");
                   if (coreGuiClass) {
                       SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
@@ -725,7 +739,7 @@ jobs:
                       }
                   }
 
-                  // Fallback: check placeId
+                  // Fallback: placeId
                   Class dataModelClass = NSClassFromString(@"RobloxDataModel");
                   if (dataModelClass) {
                       SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
@@ -743,24 +757,36 @@ jobs:
                           }
                       }
                   }
-
               } @catch (NSException *e) {
-                  // Ignore
+                  NSLog(@"[XZX] Game detection error: %@", e);
               }
               return NO;
           }
 
-          - (void)showOverlay {
-              if (_overlayWindow && !_overlayWindow.hidden) return;
+          - (void)createOverlay {
+              if (uiCreated) return;
+              uiCreated = YES;
 
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if ([UIApplication sharedApplication] == nil) return;
+                  if ([UIApplication sharedApplication] == nil) {
+                      NSLog(@"[XZX] UIApplication not available");
+                      return;
+                  }
 
                   UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                  if (!scene) return;
+                  if (!scene) {
+                      NSLog(@"[XZX] No window scene available, retrying...");
+                      uiCreated = NO;
+                      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                          [self createOverlay];
+                      });
+                      return;
+                  }
 
-                  // FIXED: Use correct class name that matches @objc class in Swift
-                  UIViewController *vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+                  UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+                  if (!vc) {
+                      vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+                  }
                   if (!vc) {
                       vc = [[NSClassFromString(@"MainViewController") alloc] init];
                   }
@@ -775,14 +801,25 @@ jobs:
                   self.overlayWindow.backgroundColor = [UIColor clearColor];
                   self.overlayWindow.hidden = NO;
                   [self.overlayWindow makeKeyAndVisible];
-                  NSLog(@"[XZX] Overlay shown successfully!");
+                  NSLog(@"[XZX] Overlay created and shown successfully!");
               });
+          }
+
+          - (void)showOverlay {
+              if (!uiCreated) {
+                  [self createOverlay];
+              } else if (self.overlayWindow && self.overlayWindow.hidden) {
+                  self.overlayWindow.hidden = NO;
+                  [self.overlayWindow makeKeyAndVisible];
+                  NSLog(@"[XZX] Overlay shown");
+              }
           }
 
           - (void)hideOverlay {
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if (self.overlayWindow) {
+                  if (self.overlayWindow && !self.overlayWindow.hidden) {
                       self.overlayWindow.hidden = YES;
+                      NSLog(@"[XZX] Overlay hidden");
                   }
               });
           }
@@ -796,6 +833,199 @@ jobs:
           }
 
           @end
+          EOF
+
+      - name: Create xzx_renderer_hook.h
+        run: |
+          cat > injector/dylib/xzx_renderer_hook.h << 'EOF'
+          #ifndef XZX_RENDERER_HOOK_H
+          #define XZX_RENDERER_HOOK_H
+
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+
+          void install_renderer_hook(void);
+          void unhook_renderer(void);
+          void xzx_on_render_frame(void);
+
+          @interface XZXRendererHook : NSObject
+          + (instancetype)shared;
+          - (void)setupRenderCallback;
+          @end
+
+          #endif
+          EOF
+
+      - name: Create xzx_renderer_hook.m
+        run: |
+          cat > injector/dylib/xzx_renderer_hook.m << 'EOF'
+          #import "xzx_renderer_hook.h"
+          #import "xzx_core.h"
+          #import <objc/runtime.h>
+          #import <objc/message.h>
+          #import <QuartzCore/QuartzCore.h>
+
+          static IMP original_DisplayLinkCallback = NULL;
+          static BOOL rendererHooked = NO;
+
+          @interface XZXRendererHook ()
+          @property (nonatomic, strong) CADisplayLink *displayLink;
+          @end
+
+          @implementation XZXRendererHook
+
+          + (instancetype)shared {
+              static XZXRendererHook *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  instance = [[self alloc] init];
+              });
+              return instance;
+          }
+
+          - (void)setupRenderCallback {
+              if (rendererHooked) return;
+              rendererHooked = YES;
+              
+              // Hook into CADisplayLink which runs every frame
+              self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(renderCallback)];
+              [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+              
+              // Also try to hook Roblox's render callback via method swizzling
+              Class metalViewClass = NSClassFromString(@"MTKView");
+              if (metalViewClass) {
+                  SEL drawSel = NSSelectorFromString(@"drawRect:");
+                  Method originalMethod = class_getInstanceMethod(metalViewClass, drawSel);
+                  if (originalMethod) {
+                      IMP originalImp = method_getImplementation(originalMethod);
+                      IMP swizzledImp = imp_implementationWithBlock(^(id self, CGRect rect) {
+                          xzx_on_render_frame();
+                          ((void(*)(id, SEL, CGRect))originalImp)(self, drawSel, rect);
+                      });
+                      method_setImplementation(originalMethod, swizzledImp);
+                      NSLog(@"[XZX] Metal renderer hooked");
+                  }
+              }
+          }
+
+          - (void)renderCallback {
+              xzx_on_render_frame();
+          }
+
+          @end
+
+          void install_renderer_hook(void) {
+              [[XZXRendererHook shared] setupRenderCallback];
+          }
+
+          void unhook_renderer(void) {
+              rendererHooked = NO;
+          }
+
+          void xzx_on_render_frame(void) {
+              // Called every frame - use this for overlay updates if needed
+              static int frameCount = 0;
+              frameCount++;
+              // Only log occasionally
+              if (frameCount % 60 == 0) {
+                  NSLog(@"[XZX] Render frame callback active");
+              }
+          }
+          EOF
+
+      - name: Create xzx_task_hook.h
+        run: |
+          cat > injector/dylib/xzx_task_hook.h << 'EOF'
+          #ifndef XZX_TASK_HOOK_H
+          #define XZX_TASK_HOOK_H
+
+          #import <Foundation/Foundation.h>
+
+          void install_task_hook(void);
+          void unhook_task(void);
+          void xzx_on_task_run(void);
+
+          @interface XZXTaskHook : NSObject
+          + (instancetype)shared;
+          - (void)setupTaskCallback;
+          @end
+
+          #endif
+          EOF
+
+      - name: Create xzx_task_hook.m
+        run: |
+          cat > injector/dylib/xzx_task_hook.m << 'EOF'
+          #import "xzx_task_hook.h"
+          #import "xzx_core.h"
+          #import <objc/runtime.h>
+          #import <objc/message.h>
+
+          static BOOL taskHooked = NO;
+
+          @implementation XZXTaskHook
+
+          + (instancetype)shared {
+              static XZXTaskHook *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  instance = [[self alloc] init];
+              });
+              return instance;
+          }
+
+          - (void)setupTaskCallback {
+              if (taskHooked) return;
+              taskHooked = YES;
+              
+              // Hook into NSRunLoop to detect game tasks
+              Class runLoopClass = NSClassFromString(@"NSRunLoop");
+              if (runLoopClass) {
+                  SEL runSel = NSSelectorFromString(@"runMode:beforeDate:");
+                  Method originalMethod = class_getInstanceMethod(runLoopClass, runSel);
+                  if (originalMethod) {
+                      IMP originalImp = method_getImplementation(originalMethod);
+                      IMP swizzledImp = imp_implementationWithBlock(^BOOL(id self, NSRunLoopMode mode, NSDate *date) {
+                          BOOL result = ((BOOL(*)(id, SEL, NSRunLoopMode, NSDate*))originalImp)(self, runSel, mode, date);
+                          // Check if we're in a game when runloop processes
+                          if ([[XZXCore shared] isInGame]) {
+                              xzx_on_task_run();
+                          }
+                          return result;
+                      });
+                      method_setImplementation(originalMethod, swizzledImp);
+                      NSLog(@"[XZX] Task scheduler hooked");
+                  }
+              }
+              
+              // Also monitor for game-specific selectors
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                  while (YES) {
+                      if ([[XZXCore shared] isInGame]) {
+                          xzx_on_task_run();
+                      }
+                      [NSThread sleepForTimeInterval:0.5];
+                  }
+              });
+          }
+
+          @end
+
+          void install_task_hook(void) {
+              [[XZXTaskHook shared] setupTaskCallback];
+          }
+
+          void unhook_task(void) {
+              taskHooked = NO;
+          }
+
+          void xzx_on_task_run(void) {
+              static int callCount = 0;
+              callCount++;
+              if (callCount % 10 == 0) {
+                  NSLog(@"[XZX] Task scheduler callback active");
+              }
+          }
           EOF
 
       - name: Create xzx_obfuscator.h
@@ -1028,6 +1258,8 @@ jobs:
           FILES="
             injector/dylib/entry.m
             injector/dylib/xzx_core.m
+            injector/dylib/xzx_renderer_hook.m
+            injector/dylib/xzx_task_hook.m
             injector/dylib/xzx_antidetection.m
             injector/dylib/xzx_obfuscator.m
             injector/dylib/xzx_hooks.m
@@ -1065,7 +1297,7 @@ jobs:
       - name: Link dylib
         run: |
           xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
+            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit -framework QuartzCore \
             -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
             -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @executable_path/Frameworks \
             -undefined dynamic_lookup \

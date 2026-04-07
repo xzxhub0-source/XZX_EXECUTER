@@ -354,13 +354,13 @@ jobs:
           #endif
           EOF
 
-      - name: Create MainViewController.swift
+      - name: Create MainViewController.swift (FIXED)
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
 
           @objc(XZXMainViewController)
-          public class MainViewController: UIViewController {
+          public class MainViewController: UIViewController, UITextViewDelegate, UISearchBarDelegate {
               private let textView = UITextView()
               private let executeButton = UIButton()
               private let clearButton = UIButton()
@@ -591,13 +591,15 @@ jobs:
                   }
               }
 
-              public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+              // MARK: - UISearchBarDelegate
+              @objc public func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
                   searchBar.resignFirstResponder()
                   guard let query = searchBar.text, !query.isEmpty else { return }
                   loadScripts(query: query)
               }
 
-              public func textViewDidChange(_ textView: UITextView) {
+              // MARK: - UITextViewDelegate
+              @objc public func textViewDidChange(_ textView: UITextView) {
                   UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
               }
           }
@@ -672,7 +674,6 @@ jobs:
                   InitLua();
                   NSLog(@"[XZX] Lua initialized");
                   
-                  // Install renderer and task scheduler hooks
                   install_renderer_hook();
                   install_task_hook();
                   NSLog(@"[XZX] Renderer and task hooks installed");
@@ -720,7 +721,6 @@ jobs:
 
           - (BOOL)isGameEngineActive {
               @try {
-                  // Primary check: PlayerList in CoreGui
                   Class coreGuiClass = NSClassFromString(@"CoreGui");
                   if (coreGuiClass) {
                       SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
@@ -739,7 +739,6 @@ jobs:
                       }
                   }
 
-                  // Fallback: placeId
                   Class dataModelClass = NSClassFromString(@"RobloxDataModel");
                   if (dataModelClass) {
                       SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
@@ -887,11 +886,9 @@ jobs:
               if (rendererHooked) return;
               rendererHooked = YES;
               
-              // Hook into CADisplayLink which runs every frame
               self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(renderCallback)];
               [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
               
-              // Also try to hook Roblox's render callback via method swizzling
               Class metalViewClass = NSClassFromString(@"MTKView");
               if (metalViewClass) {
                   SEL drawSel = NSSelectorFromString(@"drawRect:");
@@ -923,10 +920,8 @@ jobs:
           }
 
           void xzx_on_render_frame(void) {
-              // Called every frame - use this for overlay updates if needed
               static int frameCount = 0;
               frameCount++;
-              // Only log occasionally
               if (frameCount % 60 == 0) {
                   NSLog(@"[XZX] Render frame callback active");
               }
@@ -978,7 +973,6 @@ jobs:
               if (taskHooked) return;
               taskHooked = YES;
               
-              // Hook into NSRunLoop to detect game tasks
               Class runLoopClass = NSClassFromString(@"NSRunLoop");
               if (runLoopClass) {
                   SEL runSel = NSSelectorFromString(@"runMode:beforeDate:");
@@ -987,7 +981,6 @@ jobs:
                       IMP originalImp = method_getImplementation(originalMethod);
                       IMP swizzledImp = imp_implementationWithBlock(^BOOL(id self, NSRunLoopMode mode, NSDate *date) {
                           BOOL result = ((BOOL(*)(id, SEL, NSRunLoopMode, NSDate*))originalImp)(self, runSel, mode, date);
-                          // Check if we're in a game when runloop processes
                           if ([[XZXCore shared] isInGame]) {
                               xzx_on_task_run();
                           }
@@ -998,7 +991,6 @@ jobs:
                   }
               }
               
-              // Also monitor for game-specific selectors
               dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
                   while (YES) {
                       if ([[XZXCore shared] isInGame]) {

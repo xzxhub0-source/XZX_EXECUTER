@@ -629,7 +629,6 @@ jobs:
           #endif
           EOF
 
-      # ========== CORRECTED xzx_core.m – NO ASL, NO SYSCTL ==========
       - name: Create xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
@@ -666,9 +665,17 @@ jobs:
                   _inGame = NO;
                   monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
                   
-                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-                  NSString *docPath = [paths firstObject];
-                  signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
+                  @try {
+                      NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                      NSString *docPath = [paths firstObject];
+                      if (docPath) {
+                          signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
+                      } else {
+                          signalFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"xzx_signal.txt"];
+                      }
+                  } @catch (NSException *e) {
+                      signalFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"xzx_signal.txt"];
+                  }
               }
               return self;
           }
@@ -678,14 +685,24 @@ jobs:
               _isInitialized = YES;
 
               dispatch_async(dispatch_get_main_queue(), ^{
-                  InitLua();
-                  NSLog(@"[XZX] Lua initialized");
+                  @try {
+                      InitLua();
+                      NSLog(@"[XZX] Lua initialized");
+                  } @catch (NSException *e) {
+                      NSLog(@"[XZX] Lua init failed: %@", e);
+                  }
                   
-                  install_renderer_hook();
-                  install_task_hook();
-                  NSLog(@"[XZX] Renderer and task hooks installed");
+                  @try {
+                      install_renderer_hook();
+                      install_task_hook();
+                      NSLog(@"[XZX] Renderer and task hooks installed");
+                  } @catch (NSException *e) {
+                      NSLog(@"[XZX] Hook installation failed: %@", e);
+                  }
                   
-                  [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
+                  @try {
+                      [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
+                  } @catch (NSException *e) {}
                   
                   [self injectGameLoadedSignal];
                   [self startSignalMonitoring];
@@ -695,36 +712,36 @@ jobs:
           }
 
           - (void)injectGameLoadedSignal {
-              NSString *escapedPath = [signalFilePath stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-              escapedPath = [escapedPath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-              
-              NSString *bootstrapScript = [NSString stringWithFormat:
-                  @"local Players = game:GetService('Players')\n"
-                  @"local RunService = game:GetService('RunService')\n"
-                  @"local signalPath = '%@'\n"
-                  @"local function writeSignal()\n"
-                  @"    local file = io.open(signalPath, 'w')\n"
-                  @"    if file then\n"
-                  @"        file:write('LOADED')\n"
-                  @"        file:close()\n"
-                  @"    end\n"
-                  @"end\n"
-                  @"local function checkGameLoaded()\n"
-                  @"    local player = Players.LocalPlayer\n"
-                  @"    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n"
-                  @"        writeSignal()\n"
-                  @"        return true\n"
-                  @"    end\n"
-                  @"    return false\n"
-                  @"end\n"
-                  @"local function waitForGame()\n"
-                  @"    while not checkGameLoaded() do\n"
-                  @"        RunService.Heartbeat:Wait()\n"
-                  @"    end\n"
-                  @"end\n"
-                  @"coroutine.wrap(waitForGame)()\n", escapedPath];
-              
               @try {
+                  NSString *escapedPath = [signalFilePath stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+                  escapedPath = [escapedPath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+                  
+                  NSString *bootstrapScript = [NSString stringWithFormat:
+                      @"local Players = game:GetService('Players')\n"
+                      @"local RunService = game:GetService('RunService')\n"
+                      @"local signalPath = '%@'\n"
+                      @"local function writeSignal()\n"
+                      @"    local file = io.open(signalPath, 'w')\n"
+                      @"    if file then\n"
+                      @"        file:write('LOADED')\n"
+                      @"        file:close()\n"
+                      @"    end\n"
+                      @"end\n"
+                      @"local function checkGameLoaded()\n"
+                      @"    local player = Players.LocalPlayer\n"
+                      @"    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n"
+                      @"        writeSignal()\n"
+                      @"        return true\n"
+                      @"    end\n"
+                      @"    return false\n"
+                      @"end\n"
+                      @"local function waitForGame()\n"
+                      @"    while not checkGameLoaded() do\n"
+                      @"        RunService.Heartbeat:Wait()\n"
+                      @"    end\n"
+                      @"end\n"
+                      @"coroutine.wrap(waitForGame)()\n", escapedPath];
+                  
                   Class luaStateClass = NSClassFromString(@"RobloxLuaState");
                   if (luaStateClass) {
                       SEL getCurrentSel = NSSelectorFromString(@"currentState");
@@ -753,15 +770,19 @@ jobs:
               dispatch_async(monitorQueue, ^{
                   while (YES) {
                       @autoreleasepool {
-                          if (!gameLoadedSignalReceived && [[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
-                              NSString *content = [NSString stringWithContentsOfFile:signalFilePath encoding:NSUTF8StringEncoding error:nil];
-                              if ([content containsString:@"LOADED"]) {
-                                  gameLoadedSignalReceived = YES;
-                                  NSLog(@"[XZX] Game loaded signal detected via file");
-                                  dispatch_async(dispatch_get_main_queue(), ^{
-                                      [self onGameLoaded];
-                                  });
+                          @try {
+                              if (!gameLoadedSignalReceived && [[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
+                                  NSString *content = [NSString stringWithContentsOfFile:signalFilePath encoding:NSUTF8StringEncoding error:nil];
+                                  if (content && [content containsString:@"LOADED"]) {
+                                      gameLoadedSignalReceived = YES;
+                                      NSLog(@"[XZX] Game loaded signal detected via file");
+                                      dispatch_async(dispatch_get_main_queue(), ^{
+                                          [self onGameLoaded];
+                                      });
+                                  }
                               }
+                          } @catch (NSException *e) {
+                              // Ignore file read errors
                           }
                       }
                       [NSThread sleepForTimeInterval:0.5];
@@ -770,12 +791,16 @@ jobs:
           }
 
           - (void)onGameLoaded {
-              if (!uiCreated) {
-                  [self createOverlay];
-              } else {
-                  [self showOverlay];
+              @try {
+                  if (!uiCreated) {
+                      [self createOverlay];
+                  } else {
+                      [self showOverlay];
+                  }
+                  NSLog(@"[XZX] Game loaded - UI shown");
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Failed to show UI: %@", e);
               }
-              NSLog(@"[XZX] Game loaded - UI shown");
           }
 
           - (void)startGameMonitoring {
@@ -787,7 +812,12 @@ jobs:
 
                   while (YES) {
                       @autoreleasepool {
-                          BOOL currentlyInGame = [self isGameEngineActive];
+                          BOOL currentlyInGame = NO;
+                          @try {
+                              currentlyInGame = [self isGameEngineActive];
+                          } @catch (NSException *e) {
+                              // Ignore detection errors
+                          }
 
                           if (currentlyInGame && !self.inGame) {
                               self.inGame = YES;
@@ -797,7 +827,9 @@ jobs:
                           } else if (!currentlyInGame && self.inGame) {
                               self.inGame = NO;
                               gameLoadedSignalReceived = NO;
-                              [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
+                              @try {
+                                  [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
+                              } @catch (NSException *e) {}
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self hideOverlay];
                                   NSLog(@"[XZX] Left game - UI hidden");
@@ -855,33 +887,40 @@ jobs:
               uiCreated = YES;
 
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if ([UIApplication sharedApplication] == nil) return;
+                  @try {
+                      if ([UIApplication sharedApplication] == nil) return;
 
-                  UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-                  if (!scene) {
+                      UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+                      if (!scene) {
+                          uiCreated = NO;
+                          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                              [self createOverlay];
+                          });
+                          return;
+                      }
+
+                      UIViewController *vc = nil;
+                      NSArray *classNames = @[@"XZXMainViewController", @"XZX.MainViewController", @"MainViewController"];
+                      for (NSString *className in classNames) {
+                          vc = [[NSClassFromString(className) alloc] init];
+                          if (vc) break;
+                      }
+                      if (!vc) {
+                          NSLog(@"[XZX] Could not create MainViewController");
+                          return;
+                      }
+
+                      self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+                      self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+                      self.overlayWindow.rootViewController = vc;
+                      self.overlayWindow.backgroundColor = [UIColor clearColor];
+                      self.overlayWindow.hidden = NO;
+                      [self.overlayWindow makeKeyAndVisible];
+                      NSLog(@"[XZX] Overlay created");
+                  } @catch (NSException *e) {
+                      NSLog(@"[XZX] Failed to create overlay: %@", e);
                       uiCreated = NO;
-                      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                          [self createOverlay];
-                      });
-                      return;
                   }
-
-                  UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-                  if (!vc) {
-                      vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
-                  }
-                  if (!vc) {
-                      vc = [[NSClassFromString(@"MainViewController") alloc] init];
-                  }
-                  if (!vc) return;
-
-                  self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-                  self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-                  self.overlayWindow.rootViewController = vc;
-                  self.overlayWindow.backgroundColor = [UIColor clearColor];
-                  self.overlayWindow.hidden = NO;
-                  [self.overlayWindow makeKeyAndVisible];
-                  NSLog(@"[XZX] Overlay created");
               });
           }
 
@@ -889,15 +928,23 @@ jobs:
               if (!uiCreated) {
                   [self createOverlay];
               } else if (self.overlayWindow && self.overlayWindow.hidden) {
-                  self.overlayWindow.hidden = NO;
-                  [self.overlayWindow makeKeyAndVisible];
+                  @try {
+                      self.overlayWindow.hidden = NO;
+                      [self.overlayWindow makeKeyAndVisible];
+                  } @catch (NSException *e) {
+                      NSLog(@"[XZX] Failed to show overlay: %@", e);
+                  }
               }
           }
 
           - (void)hideOverlay {
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if (self.overlayWindow && !self.overlayWindow.hidden) {
-                      self.overlayWindow.hidden = YES;
+                  @try {
+                      if (self.overlayWindow && !self.overlayWindow.hidden) {
+                          self.overlayWindow.hidden = YES;
+                      }
+                  } @catch (NSException *e) {
+                      // Ignore
                   }
               });
           }
@@ -964,21 +1011,29 @@ jobs:
               if (rendererHooked) return;
               rendererHooked = YES;
               
-              self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(renderCallback)];
-              [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+              @try {
+                  self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(renderCallback)];
+                  [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Failed to create display link: %@", e);
+              }
               
-              Class metalViewClass = NSClassFromString(@"MTKView");
-              if (metalViewClass) {
-                  SEL drawSel = NSSelectorFromString(@"drawRect:");
-                  Method originalMethod = class_getInstanceMethod(metalViewClass, drawSel);
-                  if (originalMethod) {
-                      IMP originalImp = method_getImplementation(originalMethod);
-                      IMP swizzledImp = imp_implementationWithBlock(^(id self, CGRect rect) {
-                          xzx_on_render_frame();
-                          ((void(*)(id, SEL, CGRect))originalImp)(self, drawSel, rect);
-                      });
-                      method_setImplementation(originalMethod, swizzledImp);
+              @try {
+                  Class metalViewClass = NSClassFromString(@"MTKView");
+                  if (metalViewClass) {
+                      SEL drawSel = NSSelectorFromString(@"drawRect:");
+                      Method originalMethod = class_getInstanceMethod(metalViewClass, drawSel);
+                      if (originalMethod) {
+                          IMP originalImp = method_getImplementation(originalMethod);
+                          IMP swizzledImp = imp_implementationWithBlock(^(id self, CGRect rect) {
+                              xzx_on_render_frame();
+                              ((void(*)(id, SEL, CGRect))originalImp)(self, drawSel, rect);
+                          });
+                          method_setImplementation(originalMethod, swizzledImp);
+                      }
                   }
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Failed to hook metal view: %@", e);
               }
           }
 
@@ -1044,21 +1099,25 @@ jobs:
               if (taskHooked) return;
               taskHooked = YES;
               
-              Class runLoopClass = NSClassFromString(@"NSRunLoop");
-              if (runLoopClass) {
-                  SEL runSel = NSSelectorFromString(@"runMode:beforeDate:");
-                  Method originalMethod = class_getInstanceMethod(runLoopClass, runSel);
-                  if (originalMethod) {
-                      IMP originalImp = method_getImplementation(originalMethod);
-                      IMP swizzledImp = imp_implementationWithBlock(^BOOL(id self, NSRunLoopMode mode, NSDate *date) {
-                          BOOL result = ((BOOL(*)(id, SEL, NSRunLoopMode, NSDate*))originalImp)(self, runSel, mode, date);
-                          if ([[XZXCore shared] isInGame]) {
-                              xzx_on_task_run();
-                          }
-                          return result;
-                      });
-                      method_setImplementation(originalMethod, swizzledImp);
+              @try {
+                  Class runLoopClass = NSClassFromString(@"NSRunLoop");
+                  if (runLoopClass) {
+                      SEL runSel = NSSelectorFromString(@"runMode:beforeDate:");
+                      Method originalMethod = class_getInstanceMethod(runLoopClass, runSel);
+                      if (originalMethod) {
+                          IMP originalImp = method_getImplementation(originalMethod);
+                          IMP swizzledImp = imp_implementationWithBlock(^BOOL(id self, NSRunLoopMode mode, NSDate *date) {
+                              BOOL result = ((BOOL(*)(id, SEL, NSRunLoopMode, NSDate*))originalImp)(self, runSel, mode, date);
+                              if ([[XZXCore shared] isInGame]) {
+                                  xzx_on_task_run();
+                              }
+                              return result;
+                          });
+                          method_setImplementation(originalMethod, swizzledImp);
+                      }
                   }
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Failed to hook run loop: %@", e);
               }
           }
 
@@ -1203,20 +1262,20 @@ jobs:
           }
 
           - (void)hideFromDebugger {
-              int mib[4];
-              struct kinfo_proc info;
-              size_t size = sizeof(info);
-              info.kp_proc.p_flag = 0;
+              @try {
+                  int mib[4];
+                  struct kinfo_proc info;
+                  size_t size = sizeof(info);
+                  info.kp_proc.p_flag = 0;
 
-              mib[0] = CTL_KERN;
-              mib[1] = KERN_PROC;
-              mib[2] = KERN_PROC_PID;
-              mib[3] = getpid();
+                  mib[0] = CTL_KERN;
+                  mib[1] = KERN_PROC;
+                  mib[2] = KERN_PROC_PID;
+                  mib[3] = getpid();
 
-              if (sysctl(mib, 4, &info, &size, NULL, 0) == 0) {
-                  if ((info.kp_proc.p_flag & P_TRACED) != 0) {
-                      NSLog(@"[XZX] Debugger detected");
-                  }
+                  sysctl(mib, 4, &info, &size, NULL, 0);
+              } @catch (NSException *e) {
+                  // Ignore
               }
           }
 

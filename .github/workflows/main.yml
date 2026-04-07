@@ -629,7 +629,7 @@ jobs:
           #endif
           EOF
 
-      - name: Create xzx_core.m (with console-based game detection)
+      - name: Create xzx_core.m (CLEAN - NO ASL, NO DEPRECATED APIS)
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
@@ -639,14 +639,13 @@ jobs:
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
           #import <objc/message.h>
-          #import <asl.h>
-          #import <sys/sysctl.h>
 
           static XZXCore *sharedCore = nil;
           static dispatch_queue_t monitorQueue = nil;
           static BOOL gameDetectionActive = NO;
           static BOOL uiCreated = NO;
           static BOOL gameLoadedSignalReceived = NO;
+          static NSString *signalFilePath = nil;
 
           @implementation XZXCore
 
@@ -665,6 +664,10 @@ jobs:
                   _isInitialized = NO;
                   _inGame = NO;
                   monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
+                  
+                  NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                  NSString *docPath = [paths firstObject];
+                  signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
               }
               return self;
           }
@@ -681,15 +684,44 @@ jobs:
                   install_task_hook();
                   NSLog(@"[XZX] Renderer and task hooks installed");
                   
+                  [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
+                  
                   [self injectGameLoadedSignal];
-                  [self startConsoleMonitoring];
+                  [self startSignalMonitoring];
                   [self startGameMonitoring];
                   NSLog(@"[XZX] Core initialized, waiting for game join signal...");
               });
           }
 
           - (void)injectGameLoadedSignal {
-              NSString *bootstrapScript = @"local Players = game:GetService('Players')\nlocal RunService = game:GetService('RunService')\n\nlocal function checkGameLoaded()\n    local player = Players.LocalPlayer\n    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n        print('[XZX_GAME_LOADED]')\n        return true\n    end\n    return false\nend\n\nlocal function waitForGame()\n    while not checkGameLoaded() do\n        RunService.Heartbeat:Wait()\n    end\nend\n\ncoroutine.wrap(waitForGame)()\n";
+              NSString *escapedPath = [signalFilePath stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+              escapedPath = [escapedPath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+              
+              NSString *bootstrapScript = [NSString stringWithFormat:
+                  @"local Players = game:GetService('Players')\n"
+                  @"local RunService = game:GetService('RunService')\n"
+                  @"local signalPath = '%@'\n"
+                  @"local function writeSignal()\n"
+                  @"    local file = io.open(signalPath, 'w')\n"
+                  @"    if file then\n"
+                  @"        file:write('LOADED')\n"
+                  @"        file:close()\n"
+                  @"    end\n"
+                  @"end\n"
+                  @"local function checkGameLoaded()\n"
+                  @"    local player = Players.LocalPlayer\n"
+                  @"    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n"
+                  @"        writeSignal()\n"
+                  @"        return true\n"
+                  @"    end\n"
+                  @"    return false\n"
+                  @"end\n"
+                  @"local function waitForGame()\n"
+                  @"    while not checkGameLoaded() do\n"
+                  @"        RunService.Heartbeat:Wait()\n"
+                  @"    end\n"
+                  @"end\n"
+                  @"coroutine.wrap(waitForGame)()\n", escapedPath];
               
               @try {
                   Class luaStateClass = NSClassFromString(@"RobloxLuaState");
@@ -716,70 +748,24 @@ jobs:
               }
           }
 
-          - (void)startConsoleMonitoring {
+          - (void)startSignalMonitoring {
               dispatch_async(monitorQueue, ^{
-                  // Monitor ASL logs
-                  aslmsg q = asl_new(ASL_TYPE_QUERY);
-                  asl_set_query(q, ASL_KEY_MSG, "[XZX_GAME_LOADED]", ASL_QUERY_OP_EQUAL);
-                  aslresponse r = asl_search(NULL, q);
-                  
-                  aslmsg m;
-                  while ((m = aslresponse_next(r)) != NULL) {
-                      const char *msg = asl_get(m, ASL_KEY_MSG);
-                      if (msg && strstr(msg, "[XZX_GAME_LOADED]")) {
-                          if (!gameLoadedSignalReceived) {
-                              gameLoadedSignalReceived = YES;
-                              NSLog(@"[XZX] Game loaded signal detected via ASL");
-                              dispatch_async(dispatch_get_main_queue(), ^{
-                                  [self onGameLoaded];
-                              });
-                          }
-                          break;
-                      }
-                  }
-                  aslresponse_free(r);
-                  asl_free(q);
-                  
-                  // Poll for console output
                   while (YES) {
                       @autoreleasepool {
-                          [self checkConsoleForSignal];
-                      }
-                      [NSThread sleepForTimeInterval:0.5];
-                  }
-              });
-          }
-
-          - (void)checkConsoleForSignal {
-              @try {
-                  int mib[2] = {CTL_KERN, KERN_LOG_NAME};
-                  size_t size;
-                  sysctl(mib, 2, NULL, &size, NULL, 0);
-                  
-                  char *logfile = malloc(size);
-                  sysctl(mib, 2, logfile, &size, NULL, 0);
-                  
-                  FILE *fp = fopen(logfile, "r");
-                  if (fp) {
-                      char buffer[1024];
-                      while (fgets(buffer, sizeof(buffer), fp)) {
-                          if (strstr(buffer, "[XZX_GAME_LOADED]")) {
-                              if (!gameLoadedSignalReceived) {
+                          if (!gameLoadedSignalReceived && [[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
+                              NSString *content = [NSString stringWithContentsOfFile:signalFilePath encoding:NSUTF8StringEncoding error:nil];
+                              if ([content containsString:@"LOADED"]) {
                                   gameLoadedSignalReceived = YES;
-                                  NSLog(@"[XZX] Game loaded signal detected via syslog");
+                                  NSLog(@"[XZX] Game loaded signal detected via file");
                                   dispatch_async(dispatch_get_main_queue(), ^{
                                       [self onGameLoaded];
                                   });
                               }
-                              fclose(fp);
-                              free(logfile);
-                              return;
                           }
                       }
-                      fclose(fp);
+                      [NSThread sleepForTimeInterval:0.5];
                   }
-                  free(logfile);
-              } @catch (NSException *e) {}
+              });
           }
 
           - (void)onGameLoaded {
@@ -810,6 +796,7 @@ jobs:
                           } else if (!currentlyInGame && self.inGame) {
                               self.inGame = NO;
                               gameLoadedSignalReceived = NO;
+                              [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self hideOverlay];
                                   NSLog(@"[XZX] Left game - UI hidden");

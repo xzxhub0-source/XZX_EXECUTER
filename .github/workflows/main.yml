@@ -629,7 +629,8 @@ jobs:
           #endif
           EOF
 
-      - name: Create xzx_core.m (CLEAN - NO ASL, NO DEPRECATED APIS)
+      # ========== CORRECTED xzx_core.m – NO ASL, NO SYSCTL ==========
+      - name: Create xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
@@ -843,7 +844,9 @@ jobs:
                           }
                       }
                   }
-              } @catch (NSException *e) {}
+              } @catch (NSException *e) {
+                  // Ignore
+              }
               return NO;
           }
 

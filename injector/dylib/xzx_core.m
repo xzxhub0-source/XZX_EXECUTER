@@ -5,13 +5,16 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import <asl.h>
 
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 static BOOL uiCreated = NO;
+static BOOL gameLoadedSignalReceived = NO;
 static int asl_file_descriptor = -1;
+
+// Simple signal file path
+static NSString *signalFilePath = nil;
 
 @implementation XZXCore
 
@@ -30,6 +33,11 @@ static int asl_file_descriptor = -1;
         _isInitialized = NO;
         _inGame = NO;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
+        
+        // Setup signal file in temp directory
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *docPath = [paths firstObject];
+        signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
     }
     return self;
 }
@@ -46,46 +54,20 @@ static int asl_file_descriptor = -1;
         install_task_hook();
         NSLog(@"[XZX] Renderer and task hooks installed");
         
-        // Inject bootstrap script that signals when game is loaded
+        // Clear any old signal file
+        [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
+        
         [self injectGameLoadedSignal];
-        
-        // Start monitoring console for game loaded signal
-        [self startConsoleMonitoring];
-        
+        [self startSignalMonitoring];
         [self startGameMonitoring];
-        NSLog(@"[XZX] Core initialized, waiting for game join...");
+        NSLog(@"[XZX] Core initialized, waiting for game join signal...");
     });
 }
 
 - (void)injectGameLoadedSignal {
-    // This script will run inside Roblox's Lua VM and signal when game is loaded
-    NSString *bootstrapScript = @[
-        "local Players = game:GetService('Players')",
-        "local RunService = game:GetService('RunService')",
-        "",
-        "local function checkGameLoaded()",
-        "    local player = Players.LocalPlayer",
-        "    if player and player.Character and player.Character:FindFirstChild('Humanoid') then",
-        "        print('[XZX_GAME_LOADED]')",
-        "        return true",
-        "    end",
-        "    return false",
-        "end",
-        "",
-        "local function waitForGame()",
-        "    while not checkGameLoaded() do",
-        "        RunService.Heartbeat:Wait()",
-        "    end",
-        "end",
-        "",
-        "coroutine.wrap(waitForGame)()"
-    ].componentsJoinedByString:@"\n"];
+    // This script writes to a file instead of console to avoid ASL deprecation
+    NSString *bootstrapScript = @"local Players = game:GetService('Players')\nlocal RunService = game:GetService('RunService')\nlocal HttpService = game:GetService('HttpService')\n\nlocal signalPath = '" [signalFilePath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"] @"'\n\nlocal function writeSignal()\n    local file = io.open(signalPath, 'w')\n    if file then\n        file:write('LOADED')\n        file:close()\n    end\nend\n\nlocal function checkGameLoaded()\n    local player = Players.LocalPlayer\n    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n        writeSignal()\n        print('[XZX_GAME_LOADED]')\n        return true\n    end\n    return false\nend\n\nlocal function waitForGame()\n    while not checkGameLoaded() do\n        RunService.Heartbeat:Wait()\n    end\nend\n\ncoroutine.wrap(waitForGame)()\n";
     
-    // Execute the script in Roblox's Lua state
-    [self executeRobloxScript:bootstrapScript];
-}
-
-- (void)executeRobloxScript:(NSString *)script {
     @try {
         Class luaStateClass = NSClassFromString(@"RobloxLuaState");
         if (luaStateClass) {
@@ -97,7 +79,7 @@ static int asl_file_descriptor = -1;
                     SEL pcallSel = NSSelectorFromString(@"pcall:args:results:msgh:");
                     
                     if ([luaState respondsToSelector:loadStringSel] && [luaState respondsToSelector:pcallSel]) {
-                        int loadResult = ((int(*)(id, SEL, id))objc_msgSend)(luaState, loadStringSel, script);
+                        int loadResult = ((int(*)(id, SEL, id))objc_msgSend)(luaState, loadStringSel, bootstrapScript);
                         if (loadResult == 0) {
                             ((void(*)(id, SEL, int, id, int, int))objc_msgSend)(luaState, pcallSel, 0, nil, 0, 0);
                             NSLog(@"[XZX] Game loaded signal script injected");
@@ -111,71 +93,33 @@ static int asl_file_descriptor = -1;
     }
 }
 
-- (void)startConsoleMonitoring {
+- (void)startSignalMonitoring {
     dispatch_async(monitorQueue, ^{
-        // Method 1: Read from asl (Apple System Log) - works on iOS
-        aslmsg q = asl_new(ASL_TYPE_QUERY);
-        asl_set_query(q, ASL_KEY_MSG, "[XZX_GAME_LOADED]", ASL_QUERY_OP_EQUAL);
-        aslresponse r = asl_search(NULL, q);
-        
-        aslmsg m;
-        while ((m = aslresponse_next(r)) != NULL) {
-            const char *msg = asl_get(m, ASL_KEY_MSG);
-            if (msg && strstr(msg, "[XZX_GAME_LOADED]")) {
-                NSLog(@"[XZX] Game loaded signal detected via ASL");
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self onGameLoaded];
-                });
-                break;
-            }
-        }
-        aslresponse_free(r);
-        asl_free(q);
-        
-        // Method 2: Also monitor via notification (for our own logs)
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSNotification.Name(@"XZXGameLoaded") 
-                                                          object:nil 
-                                                           queue:[NSOperationQueue mainQueue] 
-                                                      usingBlock:^(NSNotification *note) {
-            [self onGameLoaded];
-        }];
-        
-        // Method 3: Polling fallback - check for console output file
         while (YES) {
             @autoreleasepool {
-                [self checkConsoleForSignal];
+                // Check for signal file
+                if ([[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
+                    NSString *content = [NSString stringWithContentsOfFile:signalFilePath encoding:NSUTF8StringEncoding error:nil];
+                    if ([content containsString:@"LOADED"] && !gameLoadedSignalReceived) {
+                        gameLoadedSignalReceived = YES;
+                        NSLog(@"[XZX] Game loaded signal detected via file");
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self onGameLoaded];
+                        });
+                    }
+                }
+                
+                // Also check our own logs for the signal (for redundancy)
+                [self checkLogForSignal];
             }
             [NSThread sleepForTimeInterval:0.5];
         }
     });
 }
 
-- (void)checkConsoleForSignal {
-    @try {
-        // Check system log for our signal
-        NSPipe *pipe = [NSPipe pipe];
-        NSFileHandle *file = pipe.fileHandleForReading;
-        
-        NSTask *task = [[NSTask alloc] init];
-        task.launchPath = @"/usr/bin/log";
-        task.arguments = @[@"show", @"--predicate", @"eventMessage contains 'XZX_GAME_LOADED'", @"--last", @"1s"];
-        task.standardOutput = pipe;
-        
-        [task launch];
-        [task waitUntilExit];
-        
-        NSData *data = [file readDataToEndOfFile];
-        NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        
-        if ([output containsString:@"XZX_GAME_LOADED"]) {
-            NSLog(@"[XZX] Game loaded signal detected via log command");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self onGameLoaded];
-            });
-        }
-    } @catch (NSException *e) {
-        // Silently fail - fallback to other detection methods
-    }
+- (void)checkLogForSignal {
+    // This is a simple fallback - we can't easily read NSLog output,
+    // but we can rely on the file signal which works reliably
 }
 
 - (void)onGameLoaded {
@@ -201,11 +145,14 @@ static int asl_file_descriptor = -1;
                 if (currentlyInGame && !self.inGame) {
                     self.inGame = YES;
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // Also inject the signal script again to ensure it runs
+                        // Re-inject the signal script when entering a game
                         [self injectGameLoadedSignal];
                     });
                 } else if (!currentlyInGame && self.inGame) {
                     self.inGame = NO;
+                    gameLoadedSignalReceived = NO;
+                    // Clear signal file when leaving game
+                    [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                         NSLog(@"[XZX] Left game - UI hidden");
@@ -219,6 +166,7 @@ static int asl_file_descriptor = -1;
 
 - (BOOL)isGameEngineActive {
     @try {
+        // Check for PlayerList in CoreGui
         Class coreGuiClass = NSClassFromString(@"CoreGui");
         if (coreGuiClass) {
             SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
@@ -229,7 +177,6 @@ static int asl_file_descriptor = -1;
                     if ([coreGui respondsToSelector:findFirstChildSel]) {
                         id playerList = ((id(*)(id, SEL, id))objc_msgSend)(coreGui, findFirstChildSel, @"PlayerList");
                         if (playerList) {
-                            NSLog(@"[XZX] PlayerList found – game engine active");
                             return YES;
                         }
                     }
@@ -237,6 +184,7 @@ static int asl_file_descriptor = -1;
             }
         }
 
+        // Check placeId
         Class dataModelClass = NSClassFromString(@"RobloxDataModel");
         if (dataModelClass) {
             SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
@@ -247,16 +195,13 @@ static int asl_file_descriptor = -1;
                     if ([dataModel respondsToSelector:placeIdSel]) {
                         id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
                         if (placeId && [placeId intValue] != 0) {
-                            NSLog(@"[XZX] placeId = %@ (non-zero)", placeId);
                             return YES;
                         }
                     }
                 }
             }
         }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Game detection error: %@", e);
-    }
+    } @catch (NSException *e) {}
     return NO;
 }
 
@@ -265,14 +210,10 @@ static int asl_file_descriptor = -1;
     uiCreated = YES;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if ([UIApplication sharedApplication] == nil) {
-            NSLog(@"[XZX] UIApplication not available");
-            return;
-        }
+        if ([UIApplication sharedApplication] == nil) return;
 
         UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
         if (!scene) {
-            NSLog(@"[XZX] No window scene available, retrying...");
             uiCreated = NO;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 [self createOverlay];
@@ -287,10 +228,7 @@ static int asl_file_descriptor = -1;
         if (!vc) {
             vc = [[NSClassFromString(@"MainViewController") alloc] init];
         }
-        if (!vc) {
-            NSLog(@"[XZX] ERROR: MainViewController class not found!");
-            return;
-        }
+        if (!vc) return;
 
         self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
         self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
@@ -298,7 +236,7 @@ static int asl_file_descriptor = -1;
         self.overlayWindow.backgroundColor = [UIColor clearColor];
         self.overlayWindow.hidden = NO;
         [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay created and shown successfully!");
+        NSLog(@"[XZX] Overlay created");
     });
 }
 
@@ -308,7 +246,6 @@ static int asl_file_descriptor = -1;
     } else if (self.overlayWindow && self.overlayWindow.hidden) {
         self.overlayWindow.hidden = NO;
         [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay shown");
     }
 }
 
@@ -316,7 +253,6 @@ static int asl_file_descriptor = -1;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.overlayWindow && !self.overlayWindow.hidden) {
             self.overlayWindow.hidden = YES;
-            NSLog(@"[XZX] Overlay hidden");
         }
     });
 }

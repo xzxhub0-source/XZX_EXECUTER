@@ -34,13 +34,12 @@ static BOOL uiCreated = NO;
     if (_isInitialized) return;
     _isInitialized = YES;
 
-    // Start Lua but DO NOT show UI yet
-    InitLua();
-    NSLog(@"[XZX] Lua initialized");
-
-    // Start game monitoring in background
-    [self startGameMonitoring];
-    NSLog(@"[XZX] Core initialized, waiting for game join...");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        InitLua();
+        NSLog(@"[XZX] Lua initialized");
+        [self startGameMonitoring];
+        NSLog(@"[XZX] Core initialized, waiting for game join...");
+    });
 }
 
 - (void)startGameMonitoring {
@@ -48,8 +47,8 @@ static BOOL uiCreated = NO;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait for Roblox to fully start before checking
-        [NSThread sleepForTimeInterval:3.0];
+        // Wait for Roblox to fully start
+        [NSThread sleepForTimeInterval:5.0];
 
         while (YES) {
             @autoreleasepool {
@@ -58,8 +57,8 @@ static BOOL uiCreated = NO;
                 if (currentlyInGame && !self.inGame) {
                     self.inGame = YES;
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // Wait a bit more to ensure the game scene is ready
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                        // Small extra delay for game scene to stabilize
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                             if (!uiCreated) {
                                 [self createOverlay];
                             } else {
@@ -83,7 +82,7 @@ static BOOL uiCreated = NO;
 
 - (BOOL)isGameEngineActive {
     @try {
-        // Most reliable: check for PlayerList in CoreGui (only exists in-game)
+        // Most reliable: Check for PlayerList in CoreGui (only exists in-game)
         Class coreGuiClass = NSClassFromString(@"CoreGui");
         if (coreGuiClass) {
             SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
@@ -102,7 +101,7 @@ static BOOL uiCreated = NO;
             }
         }
 
-        // Fallback: check placeId
+        // Fallback: check placeId (RobloxDataModel)
         Class dataModelClass = NSClassFromString(@"RobloxDataModel");
         if (dataModelClass) {
             SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
@@ -121,7 +120,7 @@ static BOOL uiCreated = NO;
             }
         }
     } @catch (NSException *e) {
-        // Ignore
+        NSLog(@"[XZX] Game detection error: %@", e);
     }
     return NO;
 }
@@ -138,17 +137,21 @@ static BOOL uiCreated = NO;
 
         UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
         if (!scene) {
-            NSLog(@"[XZX] No window scene available");
+            NSLog(@"[XZX] No window scene available, retrying...");
+            uiCreated = NO;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                [self createOverlay];
+            });
             return;
         }
 
-        // Try different class name possibilities
-        UIViewController *vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+        // Try multiple class name possibilities (match @objc name)
+        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
         if (!vc) {
-            vc = [[NSClassFromString(@"MainViewController") alloc] init];
+            vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
         }
         if (!vc) {
-            vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+            vc = [[NSClassFromString(@"MainViewController") alloc] init];
         }
         if (!vc) {
             NSLog(@"[XZX] ERROR: MainViewController class not found!");

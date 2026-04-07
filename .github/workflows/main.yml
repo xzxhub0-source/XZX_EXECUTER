@@ -354,7 +354,7 @@ jobs:
           #endif
           EOF
 
-      - name: Create MainViewController.swift (FIXED)
+      - name: Create MainViewController.swift
         run: |
           cat > XZX/MainViewController.swift << 'EOF'
           import UIKit
@@ -629,7 +629,7 @@ jobs:
           #endif
           EOF
 
-      - name: Create xzx_core.m
+      - name: Create xzx_core.m (with console-based game detection)
         run: |
           cat > injector/dylib/xzx_core.m << 'EOF'
           #import "xzx_core.h"
@@ -639,11 +639,14 @@ jobs:
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
           #import <objc/message.h>
+          #import <asl.h>
+          #import <sys/sysctl.h>
 
           static XZXCore *sharedCore = nil;
           static dispatch_queue_t monitorQueue = nil;
           static BOOL gameDetectionActive = NO;
           static BOOL uiCreated = NO;
+          static BOOL gameLoadedSignalReceived = NO;
 
           @implementation XZXCore
 
@@ -678,9 +681,114 @@ jobs:
                   install_task_hook();
                   NSLog(@"[XZX] Renderer and task hooks installed");
                   
+                  [self injectGameLoadedSignal];
+                  [self startConsoleMonitoring];
                   [self startGameMonitoring];
-                  NSLog(@"[XZX] Core initialized, waiting for game join...");
+                  NSLog(@"[XZX] Core initialized, waiting for game join signal...");
               });
+          }
+
+          - (void)injectGameLoadedSignal {
+              NSString *bootstrapScript = @"local Players = game:GetService('Players')\nlocal RunService = game:GetService('RunService')\n\nlocal function checkGameLoaded()\n    local player = Players.LocalPlayer\n    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n        print('[XZX_GAME_LOADED]')\n        return true\n    end\n    return false\nend\n\nlocal function waitForGame()\n    while not checkGameLoaded() do\n        RunService.Heartbeat:Wait()\n    end\nend\n\ncoroutine.wrap(waitForGame)()\n";
+              
+              @try {
+                  Class luaStateClass = NSClassFromString(@"RobloxLuaState");
+                  if (luaStateClass) {
+                      SEL getCurrentSel = NSSelectorFromString(@"currentState");
+                      if ([luaStateClass respondsToSelector:getCurrentSel]) {
+                          id luaState = ((id(*)(id, SEL))objc_msgSend)((id)luaStateClass, getCurrentSel);
+                          if (luaState) {
+                              SEL loadStringSel = NSSelectorFromString(@"loadString:");
+                              SEL pcallSel = NSSelectorFromString(@"pcall:args:results:msgh:");
+                              
+                              if ([luaState respondsToSelector:loadStringSel] && [luaState respondsToSelector:pcallSel]) {
+                                  int loadResult = ((int(*)(id, SEL, id))objc_msgSend)(luaState, loadStringSel, bootstrapScript);
+                                  if (loadResult == 0) {
+                                      ((void(*)(id, SEL, int, id, int, int))objc_msgSend)(luaState, pcallSel, 0, nil, 0, 0);
+                                      NSLog(@"[XZX] Game loaded signal script injected");
+                                  }
+                              }
+                          }
+                      }
+                  }
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Failed to inject script: %@", e);
+              }
+          }
+
+          - (void)startConsoleMonitoring {
+              dispatch_async(monitorQueue, ^{
+                  // Monitor ASL logs
+                  aslmsg q = asl_new(ASL_TYPE_QUERY);
+                  asl_set_query(q, ASL_KEY_MSG, "[XZX_GAME_LOADED]", ASL_QUERY_OP_EQUAL);
+                  aslresponse r = asl_search(NULL, q);
+                  
+                  aslmsg m;
+                  while ((m = aslresponse_next(r)) != NULL) {
+                      const char *msg = asl_get(m, ASL_KEY_MSG);
+                      if (msg && strstr(msg, "[XZX_GAME_LOADED]")) {
+                          if (!gameLoadedSignalReceived) {
+                              gameLoadedSignalReceived = YES;
+                              NSLog(@"[XZX] Game loaded signal detected via ASL");
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                  [self onGameLoaded];
+                              });
+                          }
+                          break;
+                      }
+                  }
+                  aslresponse_free(r);
+                  asl_free(q);
+                  
+                  // Poll for console output
+                  while (YES) {
+                      @autoreleasepool {
+                          [self checkConsoleForSignal];
+                      }
+                      [NSThread sleepForTimeInterval:0.5];
+                  }
+              });
+          }
+
+          - (void)checkConsoleForSignal {
+              @try {
+                  int mib[2] = {CTL_KERN, KERN_LOG_NAME};
+                  size_t size;
+                  sysctl(mib, 2, NULL, &size, NULL, 0);
+                  
+                  char *logfile = malloc(size);
+                  sysctl(mib, 2, logfile, &size, NULL, 0);
+                  
+                  FILE *fp = fopen(logfile, "r");
+                  if (fp) {
+                      char buffer[1024];
+                      while (fgets(buffer, sizeof(buffer), fp)) {
+                          if (strstr(buffer, "[XZX_GAME_LOADED]")) {
+                              if (!gameLoadedSignalReceived) {
+                                  gameLoadedSignalReceived = YES;
+                                  NSLog(@"[XZX] Game loaded signal detected via syslog");
+                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                      [self onGameLoaded];
+                                  });
+                              }
+                              fclose(fp);
+                              free(logfile);
+                              return;
+                          }
+                      }
+                      fclose(fp);
+                  }
+                  free(logfile);
+              } @catch (NSException *e) {}
+          }
+
+          - (void)onGameLoaded {
+              if (!uiCreated) {
+                  [self createOverlay];
+              } else {
+                  [self showOverlay];
+              }
+              NSLog(@"[XZX] Game loaded - UI shown");
           }
 
           - (void)startGameMonitoring {
@@ -688,7 +796,7 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  [NSThread sleepForTimeInterval:5.0];
+                  [NSThread sleepForTimeInterval:3.0];
 
                   while (YES) {
                       @autoreleasepool {
@@ -697,17 +805,11 @@ jobs:
                           if (currentlyInGame && !self.inGame) {
                               self.inGame = YES;
                               dispatch_async(dispatch_get_main_queue(), ^{
-                                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                                      if (!uiCreated) {
-                                          [self createOverlay];
-                                      } else {
-                                          [self showOverlay];
-                                      }
-                                      NSLog(@"[XZX] Game detected - UI shown");
-                                  });
+                                  [self injectGameLoadedSignal];
                               });
                           } else if (!currentlyInGame && self.inGame) {
                               self.inGame = NO;
+                              gameLoadedSignalReceived = NO;
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self hideOverlay];
                                   NSLog(@"[XZX] Left game - UI hidden");
@@ -731,7 +833,6 @@ jobs:
                               if ([coreGui respondsToSelector:findFirstChildSel]) {
                                   id playerList = ((id(*)(id, SEL, id))objc_msgSend)(coreGui, findFirstChildSel, @"PlayerList");
                                   if (playerList) {
-                                      NSLog(@"[XZX] PlayerList found – game engine active");
                                       return YES;
                                   }
                               }
@@ -749,16 +850,13 @@ jobs:
                               if ([dataModel respondsToSelector:placeIdSel]) {
                                   id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
                                   if (placeId && [placeId intValue] != 0) {
-                                      NSLog(@"[XZX] placeId = %@ (non-zero)", placeId);
                                       return YES;
                                   }
                               }
                           }
                       }
                   }
-              } @catch (NSException *e) {
-                  NSLog(@"[XZX] Game detection error: %@", e);
-              }
+              } @catch (NSException *e) {}
               return NO;
           }
 
@@ -767,14 +865,10 @@ jobs:
               uiCreated = YES;
 
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if ([UIApplication sharedApplication] == nil) {
-                      NSLog(@"[XZX] UIApplication not available");
-                      return;
-                  }
+                  if ([UIApplication sharedApplication] == nil) return;
 
                   UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
                   if (!scene) {
-                      NSLog(@"[XZX] No window scene available, retrying...");
                       uiCreated = NO;
                       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                           [self createOverlay];
@@ -789,10 +883,7 @@ jobs:
                   if (!vc) {
                       vc = [[NSClassFromString(@"MainViewController") alloc] init];
                   }
-                  if (!vc) {
-                      NSLog(@"[XZX] ERROR: MainViewController class not found!");
-                      return;
-                  }
+                  if (!vc) return;
 
                   self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
                   self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
@@ -800,7 +891,7 @@ jobs:
                   self.overlayWindow.backgroundColor = [UIColor clearColor];
                   self.overlayWindow.hidden = NO;
                   [self.overlayWindow makeKeyAndVisible];
-                  NSLog(@"[XZX] Overlay created and shown successfully!");
+                  NSLog(@"[XZX] Overlay created");
               });
           }
 
@@ -810,7 +901,6 @@ jobs:
               } else if (self.overlayWindow && self.overlayWindow.hidden) {
                   self.overlayWindow.hidden = NO;
                   [self.overlayWindow makeKeyAndVisible];
-                  NSLog(@"[XZX] Overlay shown");
               }
           }
 
@@ -818,7 +908,6 @@ jobs:
               dispatch_async(dispatch_get_main_queue(), ^{
                   if (self.overlayWindow && !self.overlayWindow.hidden) {
                       self.overlayWindow.hidden = YES;
-                      NSLog(@"[XZX] Overlay hidden");
                   }
               });
           }
@@ -864,7 +953,6 @@ jobs:
           #import <objc/message.h>
           #import <QuartzCore/QuartzCore.h>
 
-          static IMP original_DisplayLinkCallback = NULL;
           static BOOL rendererHooked = NO;
 
           @interface XZXRendererHook ()
@@ -900,7 +988,6 @@ jobs:
                           ((void(*)(id, SEL, CGRect))originalImp)(self, drawSel, rect);
                       });
                       method_setImplementation(originalMethod, swizzledImp);
-                      NSLog(@"[XZX] Metal renderer hooked");
                   }
               }
           }
@@ -919,13 +1006,7 @@ jobs:
               rendererHooked = NO;
           }
 
-          void xzx_on_render_frame(void) {
-              static int frameCount = 0;
-              frameCount++;
-              if (frameCount % 60 == 0) {
-                  NSLog(@"[XZX] Render frame callback active");
-              }
-          }
+          void xzx_on_render_frame(void) {}
           EOF
 
       - name: Create xzx_task_hook.h
@@ -987,18 +1068,8 @@ jobs:
                           return result;
                       });
                       method_setImplementation(originalMethod, swizzledImp);
-                      NSLog(@"[XZX] Task scheduler hooked");
                   }
               }
-              
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                  while (YES) {
-                      if ([[XZXCore shared] isInGame]) {
-                          xzx_on_task_run();
-                      }
-                      [NSThread sleepForTimeInterval:0.5];
-                  }
-              });
           }
 
           @end
@@ -1011,13 +1082,7 @@ jobs:
               taskHooked = NO;
           }
 
-          void xzx_on_task_run(void) {
-              static int callCount = 0;
-              callCount++;
-              if (callCount % 10 == 0) {
-                  NSLog(@"[XZX] Task scheduler callback active");
-              }
-          }
+          void xzx_on_task_run(void) {}
           EOF
 
       - name: Create xzx_obfuscator.h
@@ -1166,7 +1231,7 @@ jobs:
           }
 
           - (void)obfuscateMemory {
-              NSLog(@"[XZX] Memory obfuscation applied");
+              // Safe - no actual memory modification
           }
 
           @end

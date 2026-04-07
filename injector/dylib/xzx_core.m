@@ -11,9 +11,8 @@ static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 static BOOL uiCreated = NO;
 static BOOL gameLoadedSignalReceived = NO;
-static int asl_file_descriptor = -1;
 
-// Simple signal file path
+// Signal file path
 static NSString *signalFilePath = nil;
 
 @implementation XZXCore
@@ -65,8 +64,40 @@ static NSString *signalFilePath = nil;
 }
 
 - (void)injectGameLoadedSignal {
-    // This script writes to a file instead of console to avoid ASL deprecation
-    NSString *bootstrapScript = @"local Players = game:GetService('Players')\nlocal RunService = game:GetService('RunService')\nlocal HttpService = game:GetService('HttpService')\n\nlocal signalPath = '" [signalFilePath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"] @"'\n\nlocal function writeSignal()\n    local file = io.open(signalPath, 'w')\n    if file then\n        file:write('LOADED')\n        file:close()\n    end\nend\n\nlocal function checkGameLoaded()\n    local player = Players.LocalPlayer\n    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n        writeSignal()\n        print('[XZX_GAME_LOADED]')\n        return true\n    end\n    return false\nend\n\nlocal function waitForGame()\n    while not checkGameLoaded() do\n        RunService.Heartbeat:Wait()\n    end\nend\n\ncoroutine.wrap(waitForGame)()\n";
+    // Escape the path for Lua string
+    NSString *escapedPath = [signalFilePath stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escapedPath = [escapedPath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    
+    NSString *bootstrapScript = [NSString stringWithFormat:
+        @"local Players = game:GetService('Players')\n"
+        @"local RunService = game:GetService('RunService')\n"
+        @"\n"
+        @"local signalPath = '%@'\n"
+        @"\n"
+        @"local function writeSignal()\n"
+        @"    local file = io.open(signalPath, 'w')\n"
+        @"    if file then\n"
+        @"        file:write('LOADED')\n"
+        @"        file:close()\n"
+        @"    end\n"
+        @"end\n"
+        @"\n"
+        @"local function checkGameLoaded()\n"
+        @"    local player = Players.LocalPlayer\n"
+        @"    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n"
+        @"        writeSignal()\n"
+        @"        return true\n"
+        @"    end\n"
+        @"    return false\n"
+        @"end\n"
+        @"\n"
+        @"local function waitForGame()\n"
+        @"    while not checkGameLoaded() do\n"
+        @"        RunService.Heartbeat:Wait()\n"
+        @"    end\n"
+        @"end\n"
+        @"\n"
+        @"coroutine.wrap(waitForGame)()\n", escapedPath];
     
     @try {
         Class luaStateClass = NSClassFromString(@"RobloxLuaState");
@@ -97,10 +128,9 @@ static NSString *signalFilePath = nil;
     dispatch_async(monitorQueue, ^{
         while (YES) {
             @autoreleasepool {
-                // Check for signal file
-                if ([[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
+                if (!gameLoadedSignalReceived && [[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
                     NSString *content = [NSString stringWithContentsOfFile:signalFilePath encoding:NSUTF8StringEncoding error:nil];
-                    if ([content containsString:@"LOADED"] && !gameLoadedSignalReceived) {
+                    if ([content containsString:@"LOADED"]) {
                         gameLoadedSignalReceived = YES;
                         NSLog(@"[XZX] Game loaded signal detected via file");
                         dispatch_async(dispatch_get_main_queue(), ^{
@@ -108,18 +138,10 @@ static NSString *signalFilePath = nil;
                         });
                     }
                 }
-                
-                // Also check our own logs for the signal (for redundancy)
-                [self checkLogForSignal];
             }
             [NSThread sleepForTimeInterval:0.5];
         }
     });
-}
-
-- (void)checkLogForSignal {
-    // This is a simple fallback - we can't easily read NSLog output,
-    // but we can rely on the file signal which works reliably
 }
 
 - (void)onGameLoaded {
@@ -145,13 +167,11 @@ static NSString *signalFilePath = nil;
                 if (currentlyInGame && !self.inGame) {
                     self.inGame = YES;
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // Re-inject the signal script when entering a game
                         [self injectGameLoadedSignal];
                     });
                 } else if (!currentlyInGame && self.inGame) {
                     self.inGame = NO;
                     gameLoadedSignalReceived = NO;
-                    // Clear signal file when leaving game
                     [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
@@ -201,7 +221,9 @@ static NSString *signalFilePath = nil;
                 }
             }
         }
-    } @catch (NSException *e) {}
+    } @catch (NSException *e) {
+        // Ignore
+    }
     return NO;
 }
 

@@ -13,9 +13,7 @@ static BOOL uiCreated = NO;
 
 + (instancetype)shared {
     static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        sharedCore = [[self alloc] init];
-    });
+    dispatch_once(&once, ^{ sharedCore = [[self alloc] init]; });
     return sharedCore;
 }
 
@@ -33,12 +31,10 @@ static BOOL uiCreated = NO;
 - (void)initialize {
     if (_isInitialized) return;
     _isInitialized = YES;
-
     dispatch_async(dispatch_get_main_queue(), ^{
         InitLua();
         NSLog(@"[XZX] Lua initialized");
         [self startGameMonitoring];
-        NSLog(@"[XZX] Core initialized, waiting for game...");
     });
 }
 
@@ -48,22 +44,23 @@ static BOOL uiCreated = NO;
 
     dispatch_async(monitorQueue, ^{
         [NSThread sleepForTimeInterval:3.0];
-        
         while (YES) {
             @autoreleasepool {
-                BOOL currentlyInGame = [self isInGameCheck];
-                
-                if (currentlyInGame && !self.inGame) {
+                BOOL inGame = [self isInGameCheck];
+                if (inGame && !self.inGame) {
                     self.inGame = YES;
-                    NSLog(@"[XZX] GAME DETECTED!");
+                    NSLog(@"[XZX] Game detected");
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [self showBlackScreen];
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                                       dispatch_get_main_queue(), ^{
+                            [self showOverlay];
+                        });
                     });
-                } else if (!currentlyInGame && self.inGame) {
+                } else if (!inGame && self.inGame) {
                     self.inGame = NO;
                     NSLog(@"[XZX] Left game");
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [self hideScreen];
+                        [self hideOverlay];
                     });
                 }
             }
@@ -72,100 +69,102 @@ static BOOL uiCreated = NO;
     });
 }
 
-- (BOOL)isInGameCheck {
-    @try {
-        // Try to get placeId - most reliable method
-        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
-        if (dataModelClass) {
-            SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
-            if ([dataModelClass respondsToSelector:sharedSel]) {
-                id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
-                if (dataModel) {
-                    SEL placeIdSel = NSSelectorFromString(@"placeId");
-                    if ([dataModel respondsToSelector:placeIdSel]) {
-                        id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
-                        if (placeId && [placeId intValue] != 0) {
-                            NSLog(@"[XZX] placeId = %@", placeId);
-                            return YES;
-                        }
-                    }
-                }
-            }
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Detection error: %@", e);
+- (BOOL)findRobloxViewInView:(UIView *)view {
+    NSString *cn = NSStringFromClass([view class]);
+    if ([cn containsString:@"Metal"] ||
+        [cn containsString:@"RBX"] ||
+        [cn containsString:@"Roblox"] ||
+        [cn containsString:@"GameView"] ||
+        [cn containsString:@"RBXUI"]) {
+        return YES;
+    }
+    for (UIView *sub in view.subviews) {
+        if ([self findRobloxViewInView:sub]) return YES;
     }
     return NO;
 }
 
-- (void)showBlackScreen {
-    if (uiCreated) {
-        if (self.overlayWindow && self.overlayWindow.hidden) {
-            self.overlayWindow.hidden = NO;
+- (BOOL)isInGameCheck {
+    @try {
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            if ([self findRobloxViewInView:window]) {
+                NSLog(@"[XZX] Roblox render view found");
+                return YES;
+            }
         }
-        return;
-    }
-    
-    uiCreated = YES;
-    NSLog(@"[XZX] Creating black screen overlay");
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-        if (!scene) {
-            NSLog(@"[XZX] No scene available");
-            uiCreated = NO;
-            return;
-        }
-        
-        // Simple black view controller
-        UIViewController *vc = [[UIViewController alloc] init];
-        vc.view.backgroundColor = [UIColor blackColor];
-        vc.view.alpha = 0.95;
-        
-        // Add a label so we know it's working
-        UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 300, 100)];
-        label.text = @"XZX EXECUTOR\nIN-GAME OVERLAY";
-        label.textColor = [UIColor whiteColor];
-        label.textAlignment = NSTextAlignmentCenter;
-        label.numberOfLines = 2;
-        label.font = [UIFont boldSystemFontOfSize:20];
-        label.center = vc.view.center;
-        [vc.view addSubview:label];
-        
-        self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-        self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-        self.overlayWindow.rootViewController = vc;
-        self.overlayWindow.backgroundColor = [UIColor clearColor];
-        self.overlayWindow.hidden = NO;
-        [self.overlayWindow makeKeyAndVisible];
-        
-        NSLog(@"[XZX] Black screen overlay shown!");
-    });
-}
 
-- (void)hideScreen {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.overlayWindow) {
-            self.overlayWindow.hidden = YES;
-            NSLog(@"[XZX] Screen hidden");
+        Class dm = NSClassFromString(@"RobloxDataModel");
+        if (dm) {
+            SEL s = NSSelectorFromString(@"sharedDataModel");
+            if ([dm respondsToSelector:s]) {
+                id model = ((id(*)(id,SEL))objc_msgSend)((id)dm, s);
+                if (model) {
+                    SEL ps = NSSelectorFromString(@"placeId");
+                    if ([model respondsToSelector:ps]) {
+                        id placeId = ((id(*)(id,SEL))objc_msgSend)(model, ps);
+                        if (placeId && [placeId intValue] != 0) return YES;
+                    }
+                }
+            }
         }
-    });
+
+        UIWindowScene *scene = (UIWindowScene *)
+            [UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+        UIViewController *root = scene.keyWindow.rootViewController;
+        while (root.presentedViewController) root = root.presentedViewController;
+        NSString *cn = NSStringFromClass([root class]);
+        if ([cn containsString:@"Gameplay"] ||
+            [cn containsString:@"InGame"] ||
+            [cn containsString:@"PlayView"] ||
+            [cn containsString:@"RBX"]) {
+            return YES;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[XZX] Detection exception: %@", e);
+    }
+    return NO;
 }
 
 - (void)showOverlay {
-    [self showBlackScreen];
+    if (_overlayWindow && !_overlayWindow.hidden) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *scene = (UIWindowScene *)
+            [UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+        if (!scene) {
+            NSLog(@"[XZX] No scene");
+            return;
+        }
+
+        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+        if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+        if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
+        if (!vc) {
+            NSLog(@"[XZX] ERROR: Could not find MainViewController class");
+            return;
+        }
+
+        if (!self.overlayWindow) {
+            self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+            self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+            self.overlayWindow.backgroundColor = [UIColor clearColor];
+            self.overlayWindow.rootViewController = vc;
+        }
+
+        self.overlayWindow.hidden = NO;
+        [self.overlayWindow makeKeyAndVisible];
+        NSLog(@"[XZX] Overlay shown");
+    });
 }
 
 - (void)hideOverlay {
-    [self hideScreen];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.overlayWindow.hidden = YES;
+        NSLog(@"[XZX] Overlay hidden");
+    });
 }
 
-- (BOOL)isOverlayVisible {
-    return self.overlayWindow && !self.overlayWindow.hidden;
-}
-
-- (BOOL)isInGame {
-    return _inGame;
-}
+- (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
+- (BOOL)isInGame { return _inGame; }
 
 @end

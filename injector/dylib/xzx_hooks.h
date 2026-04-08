@@ -5,7 +5,8 @@
 
 void hook_roblox_functions(void);
 void unhook_roblox_functions(void);
-void install_hook(void *target, void *replacement);
+void install_hook(void *target, void *replacement, void **original);
+void notify_game_joined(void);
 bool isPlayerInGame(void);
 
 #endif

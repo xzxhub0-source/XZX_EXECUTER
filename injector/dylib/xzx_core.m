@@ -1,7 +1,5 @@
 #import "xzx_core.h"
 #import "Core/LuaExecutor.h"
-#import "xzx_renderer_hook.h"
-#import "xzx_task_hook.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -10,9 +8,6 @@ static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 static BOOL uiCreated = NO;
-static BOOL gameLoadedSignalReceived = NO;
-static NSString *signalFilePath = nil;
-static NSString *logFilePath = nil;
 
 @implementation XZXCore
 
@@ -31,237 +26,44 @@ static NSString *logFilePath = nil;
         _isInitialized = NO;
         _inGame = NO;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
-        
-        [self setupFilePaths];
-        [self writeLog:@"XZX Executor initialized" level:@"INFO"];
     }
     return self;
 }
 
-- (void)setupFilePaths {
-    @try {
-        // Try multiple locations for file access
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *docPath = [paths firstObject];
-        
-        if (docPath) {
-            signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
-            logFilePath = [docPath stringByAppendingPathComponent:@"xzx_logs.txt"];
-            
-            // Create an initial log file to verify access
-            NSString *testContent = [NSString stringWithFormat:@"[%@] [INFO] Log file created\n", [self getCurrentTimestamp]];
-            [testContent writeToFile:logFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            
-            NSLog(@"[XZX] Log file path: %@", logFilePath);
-        } else {
-            // Fallback to temp directory
-            NSString *tempPath = NSTemporaryDirectory();
-            signalFilePath = [tempPath stringByAppendingPathComponent:@"xzx_signal.txt"];
-            logFilePath = [tempPath stringByAppendingPathComponent:@"xzx_logs.txt"];
-            NSLog(@"[XZX] Using temp directory for logs: %@", tempPath);
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Failed to setup file paths: %@", e);
-    }
-}
-
-- (NSString *)getCurrentTimestamp {
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
-    return [formatter stringFromDate:[NSDate date]];
-}
-
-- (void)writeLog:(NSString *)message level:(NSString *)level {
-    // Always log to console
-    NSLog(@"[XZX] [%@] %@", level, message);
-    
-    // Try to write to file
-    @try {
-        NSString *timestamp = [self getCurrentTimestamp];
-        NSString *logEntry = [NSString stringWithFormat:@"[%@] [%@] %@\n", timestamp, level, message];
-        
-        if (logFilePath) {
-            NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:logFilePath];
-            if (fileHandle) {
-                [fileHandle seekToEndOfFile];
-                [fileHandle writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
-                [fileHandle closeFile];
-            } else {
-                [logEntry writeToFile:logFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            }
-        }
-    } @catch (NSException *e) {
-        // Silent fail - console log already exists
-    }
-}
-
 - (void)initialize {
-    [self writeLog:@"Core initialization started" level:@"INFO"];
-    
     if (_isInitialized) return;
     _isInitialized = YES;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        @try {
-            [self writeLog:@"Lua initialization starting" level:@"DEBUG"];
-            InitLua();
-            [self writeLog:@"Lua initialized successfully" level:@"INFO"];
-        } @catch (NSException *e) {
-            [self writeLog:[NSString stringWithFormat:@"Lua init failed: %@", e] level:@"ERROR"];
-        }
-        
-        @try {
-            install_renderer_hook();
-            install_task_hook();
-            [self writeLog:@"Renderer and task hooks installed" level:@"INFO"];
-        } @catch (NSException *e) {
-            [self writeLog:[NSString stringWithFormat:@"Hook installation failed: %@", e] level:@"ERROR"];
-        }
-        
-        @try {
-            [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
-        } @catch (NSException *e) {}
-        
-        [self injectGameLoadedSignal];
-        [self startSignalMonitoring];
+        InitLua();
+        NSLog(@"[XZX] Lua initialized");
         [self startGameMonitoring];
-        
-        [self writeLog:@"Core initialization completed" level:@"INFO"];
+        NSLog(@"[XZX] Core initialized, waiting for game...");
     });
-}
-
-- (void)injectGameLoadedSignal {
-    [self writeLog:@"Injecting game loaded signal script" level:@"DEBUG"];
-    
-    @try {
-        NSString *escapedPath = [signalFilePath stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-        escapedPath = [escapedPath stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-        
-        NSString *bootstrapScript = [NSString stringWithFormat:
-            @"local Players = game:GetService('Players')\n"
-            @"local RunService = game:GetService('RunService')\n"
-            @"local signalPath = '%@'\n"
-            @"local function writeSignal()\n"
-            @"    local file = io.open(signalPath, 'w')\n"
-            @"    if file then\n"
-            @"        file:write('LOADED')\n"
-            @"        file:close()\n"
-            @"    end\n"
-            @"end\n"
-            @"local function checkGameLoaded()\n"
-            @"    local player = Players.LocalPlayer\n"
-            @"    if player and player.Character and player.Character:FindFirstChild('Humanoid') then\n"
-            @"        writeSignal()\n"
-            @"        return true\n"
-            @"    end\n"
-            @"    return false\n"
-            @"end\n"
-            @"local function waitForGame()\n"
-            @"    while not checkGameLoaded() do\n"
-            @"        RunService.Heartbeat:Wait()\n"
-            @"    end\n"
-            @"end\n"
-            @"coroutine.wrap(waitForGame)()\n", escapedPath];
-        
-        Class luaStateClass = NSClassFromString(@"RobloxLuaState");
-        if (luaStateClass) {
-            SEL getCurrentSel = NSSelectorFromString(@"currentState");
-            if ([luaStateClass respondsToSelector:getCurrentSel]) {
-                id luaState = ((id(*)(id, SEL))objc_msgSend)((id)luaStateClass, getCurrentSel);
-                if (luaState) {
-                    SEL loadStringSel = NSSelectorFromString(@"loadString:");
-                    SEL pcallSel = NSSelectorFromString(@"pcall:args:results:msgh:");
-                    
-                    if ([luaState respondsToSelector:loadStringSel] && [luaState respondsToSelector:pcallSel]) {
-                        int loadResult = ((int(*)(id, SEL, id))objc_msgSend)(luaState, loadStringSel, bootstrapScript);
-                        if (loadResult == 0) {
-                            ((void(*)(id, SEL, int, id, int, int))objc_msgSend)(luaState, pcallSel, 0, nil, 0, 0);
-                            [self writeLog:@"Game loaded signal script injected successfully" level:@"INFO"];
-                        } else {
-                            [self writeLog:@"Failed to load signal script" level:@"ERROR"];
-                        }
-                    }
-                }
-            }
-        }
-    } @catch (NSException *e) {
-        [self writeLog:[NSString stringWithFormat:@"Failed to inject script: %@", e] level:@"ERROR"];
-    }
-}
-
-- (void)startSignalMonitoring {
-    [self writeLog:@"Starting signal monitoring" level:@"DEBUG"];
-    
-    dispatch_async(monitorQueue, ^{
-        while (YES) {
-            @autoreleasepool {
-                @try {
-                    if (!gameLoadedSignalReceived && [[NSFileManager defaultManager] fileExistsAtPath:signalFilePath]) {
-                        NSString *content = [NSString stringWithContentsOfFile:signalFilePath encoding:NSUTF8StringEncoding error:nil];
-                        if (content && [content containsString:@"LOADED"]) {
-                            gameLoadedSignalReceived = YES;
-                            [self writeLog:@"Game loaded signal detected via file" level:@"INFO"];
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self onGameLoaded];
-                            });
-                        }
-                    }
-                } @catch (NSException *e) {
-                    // Ignore file read errors
-                }
-            }
-            [NSThread sleepForTimeInterval:0.5];
-        }
-    });
-}
-
-- (void)onGameLoaded {
-    [self writeLog:@"Game loaded - UI shown" level:@"INFO"];
-    
-    @try {
-        if (!uiCreated) {
-            [self createOverlay];
-        } else {
-            [self showOverlay];
-        }
-    } @catch (NSException *e) {
-        [self writeLog:[NSString stringWithFormat:@"Failed to show UI: %@", e] level:@"ERROR"];
-    }
 }
 
 - (void)startGameMonitoring {
     if (gameDetectionActive) return;
     gameDetectionActive = YES;
-    
-    [self writeLog:@"Starting game monitoring" level:@"DEBUG"];
 
     dispatch_async(monitorQueue, ^{
         [NSThread sleepForTimeInterval:3.0];
-
+        
         while (YES) {
             @autoreleasepool {
-                BOOL currentlyInGame = NO;
-                @try {
-                    currentlyInGame = [self isGameEngineActive];
-                } @catch (NSException *e) {
-                    [self writeLog:[NSString stringWithFormat:@"Game detection error: %@", e] level:@"ERROR"];
-                }
-
+                BOOL currentlyInGame = [self isInGameCheck];
+                
                 if (currentlyInGame && !self.inGame) {
                     self.inGame = YES;
-                    [self writeLog:@"Game engine active - in game" level:@"INFO"];
+                    NSLog(@"[XZX] GAME DETECTED!");
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [self injectGameLoadedSignal];
+                        [self showBlackScreen];
                     });
                 } else if (!currentlyInGame && self.inGame) {
                     self.inGame = NO;
-                    gameLoadedSignalReceived = NO;
-                    [self writeLog:@"Left game - UI hidden" level:@"INFO"];
-                    @try {
-                        [[NSFileManager defaultManager] removeItemAtPath:signalFilePath error:nil];
-                    } @catch (NSException *e) {}
+                    NSLog(@"[XZX] Left game");
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [self hideOverlay];
+                        [self hideScreen];
                     });
                 }
             }
@@ -270,128 +72,92 @@ static NSString *logFilePath = nil;
     });
 }
 
-- (BOOL)isGameEngineActive {
-    BOOL active = NO;
-    
+- (BOOL)isInGameCheck {
     @try {
-        Class coreGuiClass = NSClassFromString(@"CoreGui");
-        if (coreGuiClass) {
-            SEL getCoreGuiSel = NSSelectorFromString(@"coreGui");
-            if ([coreGuiClass respondsToSelector:getCoreGuiSel]) {
-                id coreGui = ((id(*)(id, SEL))objc_msgSend)((id)coreGuiClass, getCoreGuiSel);
-                if (coreGui) {
-                    SEL findFirstChildSel = NSSelectorFromString(@"FindFirstChild:");
-                    if ([coreGui respondsToSelector:findFirstChildSel]) {
-                        id playerList = ((id(*)(id, SEL, id))objc_msgSend)(coreGui, findFirstChildSel, @"PlayerList");
-                        if (playerList) {
-                            [self writeLog:@"PlayerList found - game engine active" level:@"DEBUG"];
-                            active = YES;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!active) {
-            Class dataModelClass = NSClassFromString(@"RobloxDataModel");
-            if (dataModelClass) {
-                SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
-                if ([dataModelClass respondsToSelector:sharedSel]) {
-                    id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
-                    if (dataModel) {
-                        SEL placeIdSel = NSSelectorFromString(@"placeId");
-                        if ([dataModel respondsToSelector:placeIdSel]) {
-                            id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
-                            if (placeId && [placeId intValue] != 0) {
-                                [self writeLog:[NSString stringWithFormat:@"placeId = %@", placeId] level:@"DEBUG"];
-                                active = YES;
-                            }
+        // Try to get placeId - most reliable method
+        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+        if (dataModelClass) {
+            SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
+            if ([dataModelClass respondsToSelector:sharedSel]) {
+                id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
+                if (dataModel) {
+                    SEL placeIdSel = NSSelectorFromString(@"placeId");
+                    if ([dataModel respondsToSelector:placeIdSel]) {
+                        id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
+                        if (placeId && [placeId intValue] != 0) {
+                            NSLog(@"[XZX] placeId = %@", placeId);
+                            return YES;
                         }
                     }
                 }
             }
         }
     } @catch (NSException *e) {
-        [self writeLog:[NSString stringWithFormat:@"isGameEngineActive error: %@", e] level:@"ERROR"];
+        NSLog(@"[XZX] Detection error: %@", e);
     }
-    
-    return active;
+    return NO;
 }
 
-- (void)createOverlay {
-    if (uiCreated) return;
-    uiCreated = YES;
-    
-    [self writeLog:@"Creating overlay UI" level:@"INFO"];
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        @try {
-            if ([UIApplication sharedApplication] == nil) {
-                [self writeLog:@"UIApplication not available" level:@"ERROR"];
-                return;
-            }
-
-            UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-            if (!scene) {
-                [self writeLog:@"No window scene available, retrying..." level:@"WARNING"];
-                uiCreated = NO;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                    [self createOverlay];
-                });
-                return;
-            }
-
-            UIViewController *vc = nil;
-            NSArray *classNames = @[@"XZXMainViewController", @"XZX.MainViewController", @"MainViewController"];
-            for (NSString *className in classNames) {
-                vc = [[NSClassFromString(className) alloc] init];
-                if (vc) break;
-            }
-            if (!vc) {
-                [self writeLog:@"Could not create MainViewController - class not found" level:@"ERROR"];
-                return;
-            }
-
-            self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-            self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-            self.overlayWindow.rootViewController = vc;
-            self.overlayWindow.backgroundColor = [UIColor clearColor];
+- (void)showBlackScreen {
+    if (uiCreated) {
+        if (self.overlayWindow && self.overlayWindow.hidden) {
             self.overlayWindow.hidden = NO;
-            [self.overlayWindow makeKeyAndVisible];
-            
-            [self writeLog:@"Overlay created successfully" level:@"INFO"];
-        } @catch (NSException *e) {
-            [self writeLog:[NSString stringWithFormat:@"Failed to create overlay: %@", e] level:@"ERROR"];
+        }
+        return;
+    }
+    
+    uiCreated = YES;
+    NSLog(@"[XZX] Creating black screen overlay");
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *scene = (UIWindowScene*)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+        if (!scene) {
+            NSLog(@"[XZX] No scene available");
             uiCreated = NO;
+            return;
+        }
+        
+        // Simple black view controller
+        UIViewController *vc = [[UIViewController alloc] init];
+        vc.view.backgroundColor = [UIColor blackColor];
+        vc.view.alpha = 0.95;
+        
+        // Add a label so we know it's working
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 300, 100)];
+        label.text = @"XZX EXECUTOR\nIN-GAME OVERLAY";
+        label.textColor = [UIColor whiteColor];
+        label.textAlignment = NSTextAlignmentCenter;
+        label.numberOfLines = 2;
+        label.font = [UIFont boldSystemFontOfSize:20];
+        label.center = vc.view.center;
+        [vc.view addSubview:label];
+        
+        self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+        self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+        self.overlayWindow.rootViewController = vc;
+        self.overlayWindow.backgroundColor = [UIColor clearColor];
+        self.overlayWindow.hidden = NO;
+        [self.overlayWindow makeKeyAndVisible];
+        
+        NSLog(@"[XZX] Black screen overlay shown!");
+    });
+}
+
+- (void)hideScreen {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.overlayWindow) {
+            self.overlayWindow.hidden = YES;
+            NSLog(@"[XZX] Screen hidden");
         }
     });
 }
 
 - (void)showOverlay {
-    if (!uiCreated) {
-        [self createOverlay];
-    } else if (self.overlayWindow && self.overlayWindow.hidden) {
-        @try {
-            self.overlayWindow.hidden = NO;
-            [self.overlayWindow makeKeyAndVisible];
-            [self writeLog:@"Overlay shown" level:@"INFO"];
-        } @catch (NSException *e) {
-            [self writeLog:[NSString stringWithFormat:@"Failed to show overlay: %@", e] level:@"ERROR"];
-        }
-    }
+    [self showBlackScreen];
 }
 
 - (void)hideOverlay {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        @try {
-            if (self.overlayWindow && !self.overlayWindow.hidden) {
-                self.overlayWindow.hidden = YES;
-                [self writeLog:@"Overlay hidden" level:@"INFO"];
-            }
-        } @catch (NSException *e) {
-            // Ignore
-        }
-    });
+    [self hideScreen];
 }
 
 - (BOOL)isOverlayVisible {

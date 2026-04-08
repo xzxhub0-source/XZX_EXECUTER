@@ -1,13 +1,13 @@
 #import "xzx_core.h"
 #import "Core/LuaExecutor.h"
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
-static BOOL uiCreated = NO;
 
 @implementation XZXCore
 
@@ -31,11 +31,9 @@ static BOOL uiCreated = NO;
 - (void)initialize {
     if (_isInitialized) return;
     _isInitialized = YES;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        InitLua();
-        NSLog(@"[XZX] Lua initialized");
-        [self startGameMonitoring];
-    });
+    InitLua();
+    NSLog(@"[XZX] Initialized, watching for game...");
+    [self startGameMonitoring];
 }
 
 - (void)startGameMonitoring {
@@ -43,22 +41,27 @@ static BOOL uiCreated = NO;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
+        // Wait for Roblox itself to finish launching
         [NSThread sleepForTimeInterval:3.0];
+
         while (YES) {
             @autoreleasepool {
                 BOOL inGame = [self isInGameCheck];
+
                 if (inGame && !self.inGame) {
                     self.inGame = YES;
-                    NSLog(@"[XZX] Game detected");
+                    NSLog(@"[XZX] CAMetalLayer detected — in game");
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                                       dispatch_get_main_queue(), ^{
-                            [self showOverlay];
-                        });
+                        // Small delay so Roblox render target is fully ready
+                        dispatch_after(
+                            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                            dispatch_get_main_queue(), ^{
+                                [self showOverlay];
+                            });
                     });
                 } else if (!inGame && self.inGame) {
                     self.inGame = NO;
-                    NSLog(@"[XZX] Left game");
+                    NSLog(@"[XZX] CAMetalLayer gone — left game");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -69,59 +72,38 @@ static BOOL uiCreated = NO;
     });
 }
 
-- (BOOL)findRobloxViewInView:(UIView *)view {
-    NSString *cn = NSStringFromClass([view class]);
-    if ([cn containsString:@"Metal"] ||
-        [cn containsString:@"RBX"] ||
-        [cn containsString:@"Roblox"] ||
-        [cn containsString:@"GameView"] ||
-        [cn containsString:@"RBXUI"]) {
-        return YES;
-    }
-    for (UIView *sub in view.subviews) {
-        if ([self findRobloxViewInView:sub]) return YES;
+// KEY METHOD — CAMetalLayer only exists when Roblox is rendering a 3D game world.
+// It is never present on the Roblox home screen, lobby, or loading screen.
+// CAMetalLayer is an Apple framework class so it's never obfuscated or renamed.
+- (BOOL)isInGameCheck {
+    @try {
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            if ([self viewHasMetalLayer:window]) return YES;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[XZX] Detection error: %@", e);
     }
     return NO;
 }
 
-- (BOOL)isInGameCheck {
-    @try {
-        for (UIWindow *window in [UIApplication sharedApplication].windows) {
-            if ([self findRobloxViewInView:window]) {
-                NSLog(@"[XZX] Roblox render view found");
-                return YES;
-            }
-        }
+- (BOOL)viewHasMetalLayer:(UIView *)view {
+    // Check the view's own layer
+    if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
 
-        Class dm = NSClassFromString(@"RobloxDataModel");
-        if (dm) {
-            SEL s = NSSelectorFromString(@"sharedDataModel");
-            if ([dm respondsToSelector:s]) {
-                id model = ((id(*)(id,SEL))objc_msgSend)((id)dm, s);
-                if (model) {
-                    SEL ps = NSSelectorFromString(@"placeId");
-                    if ([model respondsToSelector:ps]) {
-                        id placeId = ((id(*)(id,SEL))objc_msgSend)(model, ps);
-                        if (placeId && [placeId intValue] != 0) return YES;
-                    }
-                }
-            }
+    // Check sublayers
+    for (CALayer *sub in view.layer.sublayers ?: @[]) {
+        if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+        // One level deeper on layers
+        for (CALayer *subsub in sub.sublayers ?: @[]) {
+            if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
         }
-
-        UIWindowScene *scene = (UIWindowScene *)
-            [UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-        UIViewController *root = scene.keyWindow.rootViewController;
-        while (root.presentedViewController) root = root.presentedViewController;
-        NSString *cn = NSStringFromClass([root class]);
-        if ([cn containsString:@"Gameplay"] ||
-            [cn containsString:@"InGame"] ||
-            [cn containsString:@"PlayView"] ||
-            [cn containsString:@"RBX"]) {
-            return YES;
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Detection exception: %@", e);
     }
+
+    // Recurse into subviews
+    for (UIView *sub in view.subviews) {
+        if ([self viewHasMetalLayer:sub]) return YES;
+    }
+
     return NO;
 }
 
@@ -132,7 +114,7 @@ static BOOL uiCreated = NO;
         UIWindowScene *scene = (UIWindowScene *)
             [UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
         if (!scene) {
-            NSLog(@"[XZX] No scene");
+            NSLog(@"[XZX] No window scene");
             return;
         }
 
@@ -140,7 +122,7 @@ static BOOL uiCreated = NO;
         if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
         if (!vc) {
-            NSLog(@"[XZX] ERROR: Could not find MainViewController class");
+            NSLog(@"[XZX] ERROR: Could not resolve MainViewController");
             return;
         }
 

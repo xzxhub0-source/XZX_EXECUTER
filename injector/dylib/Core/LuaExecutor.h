@@ -1,15 +1,15 @@
 #ifndef LuaExecutor_h
 #define LuaExecutor_h
 
-#import <Foundation/Foundation.h>
+struct lua_State;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void InitLua(void);
-void ExecuteScript(NSString *script);
-void RegisterXZXFunctions(void);
+void ExecuteScript(const char *script);
+void RegisterFunction(const char *name, int (*func)(struct lua_State*));
 
 #ifdef __cplusplus
 }

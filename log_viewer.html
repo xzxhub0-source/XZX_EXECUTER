@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>XZX Log Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #a855f7, #ec4899);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        button.primary {
+            background: #a855f7;
+            color: white;
+        }
+        
+        button.primary:hover {
+            background: #9333ea;
+        }
+        
+        button.danger {
+            background: #ef4444;
+            color: white;
+        }
+        
+        button.danger:hover {
+            background: #dc2626;
+        }
+        
+        button.secondary {
+            background: #374151;
+            color: white;
+        }
+        
+        button.secondary:hover {
+            background: #4b5563;
+        }
+        
+        /* Search and Filter */
+        .search-bar {
+            margin-bottom: 20px;
+        }
+        
+        .search-bar input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #374151;
+            border-radius: 10px;
+            background: #1f1f1f;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        
+        .search-bar input:focus {
+            outline: none;
+            border-color: #a855f7;
+        }
+        
+        .filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-chip {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid #374151;
+            background: #1f1f1f;
+            color: #9ca3af;
+        }
+        
+        .filter-chip.active {
+            background: #a855f7;
+            color: white;
+            border-color: #a855f7;
+        }
+        
+        .filter-chip.info.active { background: #3b82f6; border-color: #3b82f6; }
+        .filter-chip.warning.active { background: #f59e0b; border-color: #f59e0b; }
+        .filter-chip.error.active { background: #ef4444; border-color: #ef4444; }
+        .filter-chip.debug.active { background: #10b981; border-color: #10b981; }
+        
+        /* Stats */
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding: 12px 16px;
+            background: #1f1f1f;
+            border-radius: 10px;
+            font-size: 13px;
+        }
+        
+        .stat {
+            color: #9ca3af;
+        }
+        
+        .stat span {
+            color: #a855f7;
+            font-weight: 600;
+        }
+        
+        /* Log Table */
+        .log-container {
+            background: #1f1f1f;
+            border-radius: 12px;
+            overflow: auto;
+            max-height: calc(100vh - 280px);
+        }
+        
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        .log-table th {
+            text-align: left;
+            padding: 12px 16px;
+            background: #2a2a2a;
+            position: sticky;
+            top: 0;
+            font-weight: 600;
+            color: #9ca3af;
+            border-bottom: 1px solid #374151;
+        }
+        
+        .log-table td {
+            padding: 10px 16px;
+            border-bottom: 1px solid #2a2a2a;
+            vertical-align: top;
+        }
+        
+        .log-table tr:hover {
+            background: #2a2a2a;
+            cursor: pointer;
+        }
+        
+        .level-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        
+        .level-info { background: #3b82f6; color: white; }
+        .level-warning { background: #f59e0b; color: white; }
+        .level-error { background: #ef4444; color: white; }
+        .level-debug { background: #10b981; color: white; }
+        
+        .message-cell {
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+        
+        .timestamp {
+            color: #6b7280;
+            white-space: nowrap;
+        }
+        
+        .source {
+            color: #a855f7;
+            font-size: 10px;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: #1f1f1f;
+            border-radius: 16px;
+            padding: 20px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80%;
+            overflow: auto;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #374151;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            color: #9ca3af;
+            font-size: 24px;
+            cursor: pointer;
+        }
+        
+        .modal-close:hover {
+            color: white;
+        }
+        
+        .log-detail {
+            font-family: monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        .log-detail p {
+            margin: 8px 0;
+        }
+        
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6b7280;
+        }
+        
+        /* File input */
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .file-input-wrapper input {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        
+        /* Auto-refresh */
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+        
+        .auto-refresh label {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>XZX Log Viewer</h1>
+            <div class="controls">
+                <div class="file-input-wrapper">
+                    <button id="loadBtn" class="primary">📁 Load Log File</button>
+                    <input type="file" id="fileInput" accept=".log,.txt,.json">
+                </div>
+                <button id="refreshBtn" class="secondary">🔄 Refresh</button>
+                <button id="clearBtn" class="danger">🗑️ Clear</button>
+                <button id="exportBtn" class="secondary">💾 Export</button>
+            </div>
+        </div>
+        
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search logs...">
+        </div>
+        
+        <div class="filters" id="filters">
+            <div class="filter-chip info" data-level="INFO">INFO</div>
+            <div class="filter-chip warning" data-level="WARNING">WARNING</div>
+            <div class="filter-chip error" data-level="ERROR">ERROR</div>
+            <div class="filter-chip debug" data-level="DEBUG">DEBUG</div>
+        </div>
+        
+        <div class="stats" id="stats">
+            <div class="stat">Total: <span id="totalCount">0</span></div>
+            <div class="stat">Filtered: <span id="filteredCount">0</span></div>
+            <div class="stat">Errors: <span id="errorCount">0</span></div>
+        </div>
+        
+        <div class="log-container">
+            <table class="log-table" id="logTable">
+                <thead>
+                    <tr><th>Level</th><th>Time</th><th>Source</th><th>Message</th></tr>
+                </thead>
+                <tbody id="logBody">
+                    <tr><td colspan="4" class="empty-state">Load a log file to view logs</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Log Details</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="log-detail" id="modalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        let logs = [];
+        let activeFilters = new Set(['INFO', 'WARNING', 'ERROR', 'DEBUG']);
+        let searchTerm = '';
+        
+        const logTableBody = document.getElementById('logBody');
+        const searchInput = document.getElementById('searchInput');
+        const fileInput = document.getElementById('fileInput');
+        const loadBtn = document.getElementById('loadBtn');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const modal = document.getElementById('modal');
+        const modalBody = document.getElementById('modalBody');
+        const modalClose = document.getElementById('modalClose');
+        
+        function parseLogLine(line) {
+            let level = 'INFO';
+            let timestamp = new Date();
+            let source = 'XZX';
+            let message = line;
+            
+            if (line.includes('[XZX]')) {
+                source = 'XZX';
+                message = line.replace(/.*\[XZX\]/, '').trim();
+            } else if (line.includes('Roblox')) {
+                source = 'Roblox';
+            }
+            
+            if (line.includes('ERROR') || line.includes('Error') || line.includes('error')) {
+                level = 'ERROR';
+            } else if (line.includes('WARN') || line.includes('Warning') || line.includes('warning')) {
+                level = 'WARNING';
+            } else if (line.includes('DEBUG') || line.includes('Debug')) {
+                level = 'DEBUG';
+            }
+            
+            const timeMatch = line.match(/\d{2}:\d{2}:\d{2}/);
+            if (timeMatch) {
+                const now = new Date();
+                const time = timeMatch[0].split(':');
+                timestamp = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parseInt(time[0]), parseInt(time[1]), parseInt(time[2]));
+            }
+            
+            return { timestamp, level, message, source };
+        }
+        
+        function loadLogsFromText(text) {
+            const lines = text.split('\n');
+            logs = [];
+            
+            for (const line of lines) {
+                if (line.trim().length === 0) continue;
+                if (line.includes('[XZX]') || line.includes('Roblox')) {
+                    logs.push(parseLogLine(line));
+                }
+            }
+            
+            renderLogs();
+            updateStats();
+        }
+        
+        function loadLogsFromJSON(data) {
+            if (Array.isArray(data)) {
+                logs = data;
+            } else if (data.logs && Array.isArray(data.logs)) {
+                logs = data.logs;
+            } else {
+                logs = [];
+            }
+            renderLogs();
+            updateStats();
+        }
+        
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                if (file.name.endsWith('.json')) {
+                    try {
+                        const data = JSON.parse(content);
+                        loadLogsFromJSON(data);
+                    } catch (err) {
+                        loadLogsFromText(content);
+                    }
+                } else {
+                    loadLogsFromText(content);
+                }
+            };
+            reader.readAsText(file);
+        }
+        
+        function getFilteredLogs() {
+            return logs.filter(log => {
+                if (!activeFilters.has(log.level)) return false;
+                if (searchTerm && !log.message.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+                return true;
+            });
+        }
+        
+        function formatTime(date) {
+            return date.toLocaleTimeString();
+        }
+        
+        function getLevelClass(level) {
+            switch(level) {
+                case 'INFO': return 'level-info';
+                case 'WARNING': return 'level-warning';
+                case 'ERROR': return 'level-error';
+                case 'DEBUG': return 'level-debug';
+                default: return 'level-info';
+            }
+        }
+        
+        function renderLogs() {
+            const filtered = getFilteredLogs();
+            
+            if (filtered.length === 0) {
+                logTableBody.innerHTML = '<tr><td colspan="4" class="empty-state">No logs match your filters</td></tr>';
+                document.getElementById('filteredCount').innerText = '0';
+                return;
+            }
+            
+            let html = '';
+            for (const log of filtered) {
+                html += `
+                    <tr onclick="showLogDetail(${logs.indexOf(log)})">
+                        <td><span class="level-badge ${getLevelClass(log.level)}">${log.level}</span></td>
+                        <td class="timestamp">${formatTime(log.timestamp)}</td>
+                        <td class="source">${log.source}</td>
+                        <td class="message-cell">${escapeHtml(log.message.substring(0, 150))}${log.message.length > 150 ? '...' : ''}</td>
+                    </tr>
+                `;
+            }
+            logTableBody.innerHTML = html;
+            document.getElementById('filteredCount').innerText = filtered.length;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function updateStats() {
+            document.getElementById('totalCount').innerText = logs.length;
+            const errorCount = logs.filter(l => l.level === 'ERROR').length;
+            document.getElementById('errorCount').innerText = errorCount;
+        }
+        
+        function showLogDetail(index) {
+            const log = logs[index];
+            if (!log) return;
+            
+            modalBody.innerHTML = `
+                <p><strong>Level:</strong> <span class="level-badge ${getLevelClass(log.level)}">${log.level}</span></p>
+                <p><strong>Time:</strong> ${log.timestamp.toLocaleString()}</p>
+                <p><strong>Source:</strong> ${log.source}</p>
+                <p><strong>Message:</strong></p>
+                <pre style="background:#2a2a2a; padding:12px; border-radius:8px; overflow-x:auto; white-space:pre-wrap;">${escapeHtml(log.message)}</pre>
+            `;
+            modal.classList.add('active');
+        }
+        
+        function exportLogs() {
+            const filtered = getFilteredLogs();
+            const data = JSON.stringify(filtered, null, 2);
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `xzx_logs_${new Date().toISOString().slice(0,19)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        searchInput.addEventListener('input', (e) => {
+            searchTerm = e.target.value;
+            renderLogs();
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        loadBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        refreshBtn.addEventListener('click', () => {
+            if (fileInput.files.length > 0) {
+                handleFile(fileInput.files[0]);
+            }
+        });
+        
+        clearBtn.addEventListener('click', () => {
+            logs = [];
+            renderLogs();
+            updateStats();
+            fileInput.value = '';
+        });
+        
+        exportBtn.addEventListener('click', exportLogs);
+        
+        modalClose.addEventListener('click', () => {
+            modal.classList.remove('active');
+        });
+        
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.remove('active');
+        });
+        
+        document.querySelectorAll('.filter-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const level = chip.dataset.level;
+                if (activeFilters.has(level)) {
+                    activeFilters.delete(level);
+                    chip.classList.remove('active');
+                } else {
+                    activeFilters.add(level);
+                    chip.classList.add('active');
+                }
+                renderLogs();
+            });
+            chip.classList.add('active');
+        });
+    </script>
+</body>
+</html>

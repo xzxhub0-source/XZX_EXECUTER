@@ -12,6 +12,7 @@ static BOOL gameDetectionActive = NO;
 static BOOL uiCreated = NO;
 static BOOL gameLoadedSignalReceived = NO;
 static NSString *signalFilePath = nil;
+static NSString *logFilePath = nil;
 
 @implementation XZXCore
 
@@ -31,47 +32,66 @@ static NSString *signalFilePath = nil;
         _inGame = NO;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
         
-        @try {
-            NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-            NSString *docPath = [paths firstObject];
-            if (docPath) {
-                signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
-            } else {
-                signalFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"xzx_signal.txt"];
-            }
-        } @catch (NSException *e) {
-            signalFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"xzx_signal.txt"];
-        }
+        [self setupFilePaths];
+        [self writeLog:@"XZX Executor initialized" level:@"INFO"];
     }
     return self;
 }
 
-- (void)writeLog:(NSString *)message level:(NSString *)level {
+- (void)setupFilePaths {
     @try {
+        // Try multiple locations for file access
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *docPath = [paths firstObject];
-        if (!docPath) return;
         
-        NSString *logPath = [docPath stringByAppendingPathComponent:@"xzx_logs.txt"];
-        
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
-        NSString *timestamp = [formatter stringFromDate:[NSDate date]];
-        
+        if (docPath) {
+            signalFilePath = [docPath stringByAppendingPathComponent:@"xzx_signal.txt"];
+            logFilePath = [docPath stringByAppendingPathComponent:@"xzx_logs.txt"];
+            
+            // Create an initial log file to verify access
+            NSString *testContent = [NSString stringWithFormat:@"[%@] [INFO] Log file created\n", [self getCurrentTimestamp]];
+            [testContent writeToFile:logFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            
+            NSLog(@"[XZX] Log file path: %@", logFilePath);
+        } else {
+            // Fallback to temp directory
+            NSString *tempPath = NSTemporaryDirectory();
+            signalFilePath = [tempPath stringByAppendingPathComponent:@"xzx_signal.txt"];
+            logFilePath = [tempPath stringByAppendingPathComponent:@"xzx_logs.txt"];
+            NSLog(@"[XZX] Using temp directory for logs: %@", tempPath);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[XZX] Failed to setup file paths: %@", e);
+    }
+}
+
+- (NSString *)getCurrentTimestamp {
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+    return [formatter stringFromDate:[NSDate date]];
+}
+
+- (void)writeLog:(NSString *)message level:(NSString *)level {
+    // Always log to console
+    NSLog(@"[XZX] [%@] %@", level, message);
+    
+    // Try to write to file
+    @try {
+        NSString *timestamp = [self getCurrentTimestamp];
         NSString *logEntry = [NSString stringWithFormat:@"[%@] [%@] %@\n", timestamp, level, message];
         
-        NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
-        if (fileHandle) {
-            [fileHandle seekToEndOfFile];
-            [fileHandle writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
-            [fileHandle closeFile];
-        } else {
-            [logEntry writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        if (logFilePath) {
+            NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:logFilePath];
+            if (fileHandle) {
+                [fileHandle seekToEndOfFile];
+                [fileHandle writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
+                [fileHandle closeFile];
+            } else {
+                [logEntry writeToFile:logFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            }
         }
-        
-        NSLog(@"[XZX] %@", message);
     } @catch (NSException *e) {
-        NSLog(@"[XZX] Failed to write log: %@", e);
+        // Silent fail - console log already exists
     }
 }
 
@@ -106,7 +126,7 @@ static NSString *signalFilePath = nil;
         [self startSignalMonitoring];
         [self startGameMonitoring];
         
-        [self writeLog:@"Core initialized, waiting for game join signal..." level:@"INFO"];
+        [self writeLog:@"Core initialization completed" level:@"INFO"];
     });
 }
 

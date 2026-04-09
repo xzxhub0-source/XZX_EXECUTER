@@ -558,6 +558,10 @@ jobs:
           @interface XZXCore ()
           @property (nonatomic, assign) NSInteger positiveCount;
           @property (nonatomic, assign) NSInteger negativeCount;
+          // Gate: must see Roblox home screen WebView before in-game detection is trusted.
+          // Prevents the launch loading screen (Metal=YES, WebView=NO) from
+          // falsely triggering in-game detection on first open.
+          @property (nonatomic, assign) BOOL hasSeenHomeScreen;
           @end
 
           @implementation XZXCore
@@ -576,6 +580,7 @@ jobs:
                   _inGame = NO;
                   _positiveCount = 0;
                   _negativeCount = 0;
+                  _hasSeenHomeScreen = NO;
                   monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
               }
               return self;
@@ -596,14 +601,38 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
+                  // Wait for Roblox to finish its initial launch
                   [NSThread sleepForTimeInterval:5.0];
 
                   while (YES) {
                       @autoreleasepool {
-                          __block BOOL raw = NO;
+                          __block BOOL hasMetalLayer = NO;
+                          __block BOOL hasWebView = NO;
+
+                          // UIKit must be accessed on main thread
                           dispatch_sync(dispatch_get_main_queue(), ^{
-                              raw = [self isGameEngineActive];
+                              for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                                  if ([scene isKindOfClass:[UIWindowScene class]]) {
+                                      UIWindowScene *ws = (UIWindowScene *)scene;
+                                      for (UIWindow *window in ws.windows) {
+                                          if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                                          if ([self viewHasWebView:window]) hasWebView = YES;
+                                      }
+                                  }
+                              }
                           });
+
+                          // Step 1: wait until we see the home screen WebView at least once.
+                          // This prevents the Roblox loading/splash screen (Metal=YES, WebView=NO)
+                          // from triggering in-game detection on first launch.
+                          if (!self.hasSeenHomeScreen && hasWebView) {
+                              self.hasSeenHomeScreen = YES;
+                              NSLog(@"[XZX] Home screen confirmed - detection active");
+                          }
+
+                          // Step 2: only allow detection after home screen was seen once.
+                          // In-game = Metal present AND WebView gone AND we saw home screen first.
+                          BOOL raw = self.hasSeenHomeScreen && hasMetalLayer && !hasWebView;
 
                           if (raw) {
                               self.positiveCount++;
@@ -613,6 +642,7 @@ jobs:
                               self.positiveCount = 0;
                           }
 
+                          // Show UI after 3 consecutive positive detections (debounce)
                           if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                               self.inGame = YES;
                               self.positiveCount = 0;
@@ -620,9 +650,13 @@ jobs:
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self showOverlay];
                               });
-                          } else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
+                          }
+                          // Hide UI after 3 consecutive negative detections (debounce)
+                          else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                               self.inGame = NO;
                               self.negativeCount = 0;
+                              // Reset gate so detection works correctly next game join
+                              self.hasSeenHomeScreen = NO;
                               NSLog(@"[XZX] Left game - hiding UI");
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self hideOverlay];
@@ -634,6 +668,7 @@ jobs:
               });
           }
 
+          // Recursively checks for CAMetalLayer. Must be called on main thread.
           - (BOOL)viewHasMetalLayer:(UIView *)view {
               @try {
                   if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
@@ -650,6 +685,7 @@ jobs:
               return NO;
           }
 
+          // Recursively checks for WKWebView. Must be called on main thread.
           - (BOOL)viewHasWebView:(UIView *)view {
               @try {
                   NSString *cn = NSStringFromClass([view class]);
@@ -662,39 +698,13 @@ jobs:
               return NO;
           }
 
-          // FIX: Roblox home screen has CAMetalLayer + WKWebView
-          // In-game has CAMetalLayer but NO WKWebView
           - (BOOL)isGameEngineActive {
-              @try {
-                  BOOL hasMetalLayer = NO;
-                  BOOL hasWebView = NO;
-
-                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                      if ([scene isKindOfClass:[UIWindowScene class]]) {
-                          UIWindowScene *windowScene = (UIWindowScene *)scene;
-                          for (UIWindow *window in windowScene.windows) {
-                              if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
-                              if ([self viewHasWebView:window]) hasWebView = YES;
-                          }
-                      }
-                  }
-
-                  if (hasMetalLayer && !hasWebView) {
-                      NSLog(@"[XZX] Metal found, no WebView = in game");
-                      return YES;
-                  } else if (hasMetalLayer && hasWebView) {
-                      NSLog(@"[XZX] Metal + WebView = home screen/menu");
-                  } else {
-                      NSLog(@"[XZX] No Metal found = not in Roblox");
-                  }
-              } @catch (NSException *e) {
-                  NSLog(@"[XZX] Detection error: %@", e);
-              }
-              return NO;
+              // This method is now unused — logic moved into startGameMonitoring
+              // for efficiency. Kept to satisfy header declaration.
+              return self.inGame;
           }
 
           - (void)showOverlay {
-              if (!self.inGame) return;
               if (_overlayWindow && !_overlayWindow.hidden) return;
 
               dispatch_async(dispatch_get_main_queue(), ^{
@@ -727,22 +737,7 @@ jobs:
 
           - (void)hideOverlay {
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if (self.overlayWindow) {
-                      self.overlayWindow.hidden = YES;
-                      UIWindow *robloxWindow = nil;
-                      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                          if ([scene isKindOfClass:[UIWindowScene class]]) {
-                              UIWindowScene *ws = (UIWindowScene *)scene;
-                              for (UIWindow *win in ws.windows) {
-                                  if (win != self.overlayWindow) {
-                                      robloxWindow = win;
-                                      break;
-                                  }
-                              }
-                          }
-                      }
-                      [robloxWindow makeKeyWindow];
-                  }
+                  self.overlayWindow.hidden = YES;
                   NSLog(@"[XZX] Overlay hidden");
               });
           }

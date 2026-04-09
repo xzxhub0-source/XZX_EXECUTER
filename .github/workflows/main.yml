@@ -553,6 +553,12 @@ jobs:
           static XZXCore *sharedCore = nil;
           static dispatch_queue_t monitorQueue = nil;
           static BOOL gameDetectionActive = NO;
+          static const NSInteger kDebounceThreshold = 3;
+
+          @interface XZXCore ()
+          @property (nonatomic, assign) NSInteger positiveCount;
+          @property (nonatomic, assign) NSInteger negativeCount;
+          @end
 
           @implementation XZXCore
 
@@ -568,6 +574,8 @@ jobs:
                   _overlayWindow = nil;
                   _isInitialized = NO;
                   _inGame = NO;
+                  _positiveCount = 0;
+                  _negativeCount = 0;
                   monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
               }
               return self;
@@ -588,23 +596,33 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  [NSThread sleepForTimeInterval:3.0];
+                  [NSThread sleepForTimeInterval:5.0];
 
                   while (YES) {
                       @autoreleasepool {
-                          __block BOOL inGame = NO;
+                          __block BOOL raw = NO;
                           dispatch_sync(dispatch_get_main_queue(), ^{
-                              inGame = [self isGameEngineActive];
+                              raw = [self isGameEngineActive];
                           });
 
-                          if (inGame && !self.inGame) {
+                          if (raw) {
+                              self.positiveCount++;
+                              self.negativeCount = 0;
+                          } else {
+                              self.negativeCount++;
+                              self.positiveCount = 0;
+                          }
+
+                          if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                               self.inGame = YES;
+                              self.positiveCount = 0;
                               NSLog(@"[XZX] Game detected - showing UI");
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self showOverlay];
                               });
-                          } else if (!inGame && self.inGame) {
+                          } else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                               self.inGame = NO;
+                              self.negativeCount = 0;
                               NSLog(@"[XZX] Left game - hiding UI");
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   [self hideOverlay];
@@ -644,24 +662,30 @@ jobs:
               return NO;
           }
 
-          // Roblox home screen: CAMetalLayer present AND WKWebView present
-          // Roblox in-game:     CAMetalLayer present AND WKWebView absent
+          // FIX: Roblox home screen has CAMetalLayer + WKWebView
+          // In-game has CAMetalLayer but NO WKWebView
           - (BOOL)isGameEngineActive {
               @try {
                   BOOL hasMetalLayer = NO;
                   BOOL hasWebView = NO;
 
                   for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                      UIWindowScene *windowScene = (UIWindowScene *)scene;
-                      for (UIWindow *window in windowScene.windows) {
-                          if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
-                          if ([self viewHasWebView:window]) hasWebView = YES;
+                      if ([scene isKindOfClass:[UIWindowScene class]]) {
+                          UIWindowScene *windowScene = (UIWindowScene *)scene;
+                          for (UIWindow *window in windowScene.windows) {
+                              if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                              if ([self viewHasWebView:window]) hasWebView = YES;
+                          }
                       }
                   }
 
                   if (hasMetalLayer && !hasWebView) {
                       NSLog(@"[XZX] Metal found, no WebView = in game");
                       return YES;
+                  } else if (hasMetalLayer && hasWebView) {
+                      NSLog(@"[XZX] Metal + WebView = home screen/menu");
+                  } else {
+                      NSLog(@"[XZX] No Metal found = not in Roblox");
                   }
               } @catch (NSException *e) {
                   NSLog(@"[XZX] Detection error: %@", e);
@@ -670,6 +694,7 @@ jobs:
           }
 
           - (void)showOverlay {
+              if (!self.inGame) return;
               if (_overlayWindow && !_overlayWindow.hidden) return;
 
               dispatch_async(dispatch_get_main_queue(), ^{
@@ -702,7 +727,22 @@ jobs:
 
           - (void)hideOverlay {
               dispatch_async(dispatch_get_main_queue(), ^{
-                  self.overlayWindow.hidden = YES;
+                  if (self.overlayWindow) {
+                      self.overlayWindow.hidden = YES;
+                      UIWindow *robloxWindow = nil;
+                      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                          if ([scene isKindOfClass:[UIWindowScene class]]) {
+                              UIWindowScene *ws = (UIWindowScene *)scene;
+                              for (UIWindow *win in ws.windows) {
+                                  if (win != self.overlayWindow) {
+                                      robloxWindow = win;
+                                      break;
+                                  }
+                              }
+                          }
+                      }
+                      [robloxWindow makeKeyWindow];
+                  }
                   NSLog(@"[XZX] Overlay hidden");
               });
           }

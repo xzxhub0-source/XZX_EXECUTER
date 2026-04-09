@@ -24,7 +24,7 @@ jobs:
         git clone https://github.com/lua/lua.git lua_src
         cd lua_src
         make clean
-        for filename in lapi lauxlib lbaselib lcode lcorolib lctype ldblib ldebug ldo ldump lfunc lgc linit liolib llex lmathlib lmem lloadlib lobject lopcodes loslib lparser lstate lstring lstrlib ltable ltablib ltm lundump lutf8 lvm lzio; do
+        for filename in lapi lauxlib lbaselib lcode lcorolib lctype ldblib ldebug ldo ldump lfunc lgc linit liolib llex lmathlib lmem loadlib lobject lopcodes loslib lparser lstate lstring lstrlib ltable ltablib ltm lundump lutf8lib lvm lzio; do
           xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "$filename.o" "$filename.c" -target arm64-apple-ios15.0 -I .
         done
         ar rcs $HOME/lua-ios/liblua.a *.o
@@ -351,9 +351,9 @@ jobs:
             });
         }
         
-        - (BOOL)isInGameCheck {
-            @try {
-                return (BOOL)isPlayerInGame();
+        - ()BOOL)isInGameCheck {
+            @istry {
+                return (BOOLPlayerInGame();
             } @catch (NSException *e) {
                 return NO;
             }

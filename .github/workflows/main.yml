@@ -15,51 +15,25 @@ jobs:
     
     - name: Setup iOS SDK
       run: |
-        # Use the default Xcode
-        sudo xcode-select -switch /Applications/Xcode_15.4.app || true
-        sudo xcode-select -switch /Applications/Xcode_15.3.app || true
-        sudo xcode-select -switch /Applications/Xcode_15.2.app || true
-        sudo xcode-select -switch /Applications/Xcode_15.1.app || true
-        sudo xcode-select -switch /Applications/Xcode_15.0.app || true
-        echo "Using Xcode at: $(xcode-select -p)"
+        xcrun --sdk iphoneos --show-sdk-path
         echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
     
     - name: Build Lua for iOS
       run: |
         mkdir -p $HOME/lua-ios
-        mkdir -p injector/dylib/lua_src
-        
-        # Download Lua source
         cd injector/dylib
-        if [ ! -d "lua_src/src" ]; then
-          curl -L https://www.lua.org/ftp/lua-5.4.6.tar.gz | tar xz
-          mv lua-5.4.6/* lua_src/
-        fi
+        git clone https://github.com/lua/lua.git lua_src
         cd lua_src
-        
-        # Clean and compile each Lua source file
+        make clean
         for filename in lapi lauxlib lbaselib lcode lcorolib lctype ldblib ldebug ldo ldump lfunc lgc linit liolib llex lmathlib lmem lloadlib lobject lopcodes loslib lparser lstate lstring lstrlib ltable ltablib ltm lundump lutf8 lvm lzio; do
-          echo "Compiling src/$filename.c"
-          xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 \
-            -o "$filename.o" "src/$filename.c" \
-            -target arm64-apple-ios15.0 -I src
+          xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "src/$filename.o" "src/$filename.c" -target arm64-apple-ios15.0 -I src
         done
-        
-        # Create static library
-        ar rcs liblua.a *.o
-        cp liblua.a $HOME/lua-ios/
-        
-        # Copy headers
+        ar rcs $HOME/lua-ios/liblua.a src/*.o
         mkdir -p $HOME/lua-ios/include
         cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
-        
         cd ../..
         echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
         echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
-        
-        # Verify files exist
-        ls -la $HOME/lua-ios/include/
-        ls -la $HOME/lua-ios/
     
     - name: Create directory structure
       run: |
@@ -95,9 +69,9 @@ jobs:
         #import <Foundation/Foundation.h>
         #import <UIKit/UIKit.h>
         extern "C" {
-        #include "lua.h"
-        #include "lauxlib.h"
-        #include "lualib.h"
+        #include <lua.h>
+        #include <lauxlib.h>
+        #include <lualib.h>
         }
         #include "LuaExecutor.h"
         
@@ -568,7 +542,7 @@ jobs:
         
         #import <Foundation/Foundation.h>
         #import <UIKit/UIKit.h>
-        #include "LuaExecutor.h"
+        #include "injector/dylib/Core/LuaExecutor.h"
         
         #endif
         EOF
@@ -805,7 +779,6 @@ jobs:
         for file in $FILES; do
           if [ -f "$file" ]; then
             basename=$(basename "$file" .m)
-            echo "Compiling $file -> build/${basename}.o"
             xcrun -sdk iphoneos clang -c -arch arm64 -target arm64-apple-ios15.0 \
               -I./injector/dylib -I./injector/dylib/Core -I${LUA_INCLUDE_DIR} \
               -o "build/${basename}.o" "$file"
@@ -817,7 +790,6 @@ jobs:
         for file in injector/dylib/Core/*.mm; do
           if [ -f "$file" ]; then
             basename=$(basename "$file" .mm)
-            echo "Compiling $file -> build/${basename}.o"
             xcrun -sdk iphoneos clang++ -c -std=c++17 -arch arm64 -target arm64-apple-ios15.0 \
               -I./injector/dylib -I./injector/dylib/Core -I${LUA_INCLUDE_DIR} \
               -o "build/${basename}.o" "$file"
@@ -826,7 +798,6 @@ jobs:
     
     - name: Compile Swift file
       run: |
-        echo "Compiling Swift file"
         xcrun -sdk iphoneos swiftc -c -module-name XZX \
           -import-objc-header XZX/XZX-Bridging-Header.h \
           -I. -I./injector/dylib -I./injector/dylib/Core -I${LUA_INCLUDE_DIR} \
@@ -836,9 +807,6 @@ jobs:
     
     - name: Link dylib
       run: |
-        echo "Linking dylib"
-        ls -la build/
-        ls -la ${LUA_LIB_DIR}/
         xcrun -sdk iphoneos clang++ -shared -arch arm64 -target arm64-apple-ios15.0 \
           -framework UIKit -framework Foundation -framework CoreGraphics \
           -framework WebKit -framework QuartzCore -framework Metal \
@@ -847,11 +815,28 @@ jobs:
           -undefined dynamic_lookup \
           -o build/executor.dylib build/*.o -lc++
         echo "✅ Dylib compiled"
-        ls -la build/executor.dylib
     
-    - name: Upload dylib artifact
+    - name: Extract and modify IPA
+      run: |
+        unzip -q Roblox.ipa -d extracted/
+        cp build/executor.dylib extracted/Payload/Roblox.app/
+        rm -rf extracted/Payload/Roblox.app/_CodeSignature
+        rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
+        ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
+          extracted/Payload/Roblox.app/Roblox \
+          extracted/Payload/Roblox.app/Roblox_patched
+        mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
+        INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
+        plutil -convert xml1 "$INFO_PLIST"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$INFO_PLIST" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
+        plutil -convert binary1 "$INFO_PLIST"
+        cd extracted && zip -qr ../XZX.ipa Payload && cd ..
+    
+    - name: Upload IPA
       uses: actions/upload-artifact@v4
       with:
-        name: executor.dylib
-        path: build/executor.dylib
+        name: XZX-Executor
+        path: XZX.ipa
+        if-no-files-found: error
         retention-days: 90

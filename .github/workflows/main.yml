@@ -15,7 +15,6 @@ jobs:
     
     - name: Setup iOS SDK
       run: |
-        xcrun --sdk iphoneos --show-sdk-path
         echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
     
     - name: Build Lua for iOS
@@ -26,11 +25,11 @@ jobs:
         cd lua_src
         make clean
         for filename in lapi lauxlib lbaselib lcode lcorolib lctype ldblib ldebug ldo ldump lfunc lgc linit liolib llex lmathlib lmem lloadlib lobject lopcodes loslib lparser lstate lstring lstrlib ltable ltablib ltm lundump lutf8 lvm lzio; do
-          xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "src/$filename.o" "src/$filename.c" -target arm64-apple-ios15.0 -I src
+          xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "$filename.o" "$filename.c" -target arm64-apple-ios15.0 -I .
         done
-        ar rcs $HOME/lua-ios/liblua.a src/*.o
+        ar rcs $HOME/lua-ios/liblua.a *.o
         mkdir -p $HOME/lua-ios/include
-        cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
+        cp lua.h luaconf.h lauxlib.h lualib.h $HOME/lua-ios/include/
         cd ../..
         echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
         echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV

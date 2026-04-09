@@ -19,7 +19,8 @@ public class MainViewController: UIViewController, UITextViewDelegate {
         setupSubviews()
         setupNotifications()
         loadSavedScripts()
-        InitLua()
+        // FIX: InitLua() removed — xzx_core.m already calls it once before
+        // this VC is ever created. Calling it again caused a double-init crash.
     }
 
     public override func viewDidLayoutSubviews() {
@@ -86,8 +87,12 @@ public class MainViewController: UIViewController, UITextViewDelegate {
     }
 
     private func setupNotifications() {
-        NotificationCenter.default.addObserver(self, selector: #selector(handleScriptLoad(_:)),
-                                               name: NSNotification.Name("LoadScript"), object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleScriptLoad(_:)),
+            name: NSNotification.Name("LoadScript"), object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleHideOverlay),
+            name: NSNotification.Name("XZXHideOverlay"), object: nil)
     }
 
     private func loadSavedScripts() {
@@ -113,8 +118,9 @@ public class MainViewController: UIViewController, UITextViewDelegate {
     }
 
     private func fetchScripts(query: String) {
-        guard let url = URL(string: "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else { return }
+        guard let encoded = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
+                .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: encoded) else { return }
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -165,7 +171,7 @@ public class MainViewController: UIViewController, UITextViewDelegate {
         s.withCString { ExecuteScript($0) }
     }
 
-    @objc func clearScript()  { textView.text = "" }
+    @objc func clearScript() { textView.text = "" }
 
     @objc func saveScript() {
         UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
@@ -174,7 +180,20 @@ public class MainViewController: UIViewController, UITextViewDelegate {
         present(a, animated: true)
     }
 
-    @objc func close() { view.isHidden = true }
+    // FIX: old close() did view.isHidden = true — the UIWindow stayed alive
+    // and key, so Roblox UI behind it was completely touch-dead.
+    // Now we hide the window itself and give key status back to Roblox.
+    @objc func close() {
+        NotificationCenter.default.post(
+            name: NSNotification.Name("XZXHideOverlay"), object: nil)
+    }
+
+    @objc private func handleHideOverlay() {
+        view.window?.isHidden = true
+        if let robloxWindow = UIApplication.shared.windows.first(where: { $0 !== view.window }) {
+            robloxWindow.makeKey()
+        }
+    }
 
     @objc private func handleScriptLoad(_ n: Notification) {
         if let s = n.object as? String { textView.text = s }

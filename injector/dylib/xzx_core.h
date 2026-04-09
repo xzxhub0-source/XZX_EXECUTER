@@ -13,12 +13,11 @@
 - (BOOL)isOverlayVisible;
 - (void)startGameMonitoring;
 - (BOOL)isInGame;
+- (BOOL)isInGameCheck;
 
 @property (nonatomic, strong) UIWindow *overlayWindow;
 @property (nonatomic, assign) BOOL isInitialized;
 @property (nonatomic, assign) BOOL inGame;
-@property (nonatomic, assign) NSInteger positiveCount;
-@property (nonatomic, assign) NSInteger negativeCount;
 
 @end
 

@@ -10,10 +10,12 @@ static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 static const NSInteger kDebounceThreshold = 3;
+static const NSInteger kRequiredConfirmations = 2;
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
 @property (nonatomic, assign) NSInteger negativeCount;
+@property (nonatomic, assign) NSInteger gameConfirmedCount;
 @end
 
 @implementation XZXCore
@@ -30,8 +32,10 @@ static const NSInteger kDebounceThreshold = 3;
         _overlayWindow = nil;
         _isInitialized = NO;
         _inGame = NO;
+        _overlayAllowed = NO;
         _positiveCount = 0;
         _negativeCount = 0;
+        _gameConfirmedCount = 0;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -42,10 +46,11 @@ static const NSInteger kDebounceThreshold = 3;
     _isInitialized = YES;
     InitLua();
     
-    // Ensure overlay is hidden before monitoring starts
+    // Ensure nothing is visible
     if (_overlayWindow) _overlayWindow.hidden = YES;
+    _overlayAllowed = NO;
     
-    NSLog(@"[XZX] Initialized, watching for game...");
+    NSLog(@"[XZX] Initialized, overlay locked. Will unlock only after confirmed in-game.");
     [self startGameMonitoring];
 }
 
@@ -54,8 +59,8 @@ static const NSInteger kDebounceThreshold = 3;
     gameDetectionActive = YES;
     
     dispatch_async(monitorQueue, ^{
-        // Wait 8 seconds for Roblox to fully bootstrap (login/menu)
-        [NSThread sleepForTimeInterval:8.0];
+        // Wait a full 15 seconds for Roblox to settle (login, menu, etc.)
+        [NSThread sleepForTimeInterval:15.0];
         
         while (YES) {
             @autoreleasepool {
@@ -69,19 +74,30 @@ static const NSInteger kDebounceThreshold = 3;
                     self.positiveCount = 0;
                 }
                 
+                // Transition to in-game
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
+                    self.gameConfirmedCount++;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected (placeId > 0)");
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [self showOverlay];
-                    });
+                    NSLog(@"[XZX] Game detected (placeId > 0) - confirmation %ld of %ld",
+                          (long)self.gameConfirmedCount, (long)kRequiredConfirmations);
+                    
+                    if (self.gameConfirmedCount >= kRequiredConfirmations && !self.overlayAllowed) {
+                        self.overlayAllowed = YES;
+                        NSLog(@"[XZX] Overlay now allowed - showing UI");
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self showOverlay];
+                        });
+                    }
                 }
                 
+                // Transition out of game
                 if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game (placeId = 0)");
+                    self.gameConfirmedCount = 0;
+                    self.overlayAllowed = NO;  // revoke permission immediately
+                    NSLog(@"[XZX] Left game (placeId = 0) - overlay locked again");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -94,7 +110,6 @@ static const NSInteger kDebounceThreshold = 3;
 
 - (BOOL)isInGameCheck {
     @try {
-        // Try all known Roblox DataModel class names
         NSArray *classNames = @[
             @"RobloxDataModel",
             @"RBXDataModel",
@@ -112,7 +127,6 @@ static const NSInteger kDebounceThreshold = 3;
         if (dmClass) {
             return (BOOL)isPlayerInGame();
         }
-        
         return NO;
     } @catch (NSException *e) {
         NSLog(@"[XZX] isInGameCheck error: %@", e);
@@ -120,9 +134,22 @@ static const NSInteger kDebounceThreshold = 3;
     return NO;
 }
 
+- (BOOL)isRobloxForeground {
+    return [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
+}
+
 - (void)showOverlay {
+    // Absolute gates
+    if (!self.overlayAllowed) {
+        NSLog(@"[XZX] showOverlay blocked - overlay not allowed");
+        return;
+    }
     if (!self.inGame) {
-        NSLog(@"[XZX] showOverlay called while not in game — ignored");
+        NSLog(@"[XZX] showOverlay blocked - not in game");
+        return;
+    }
+    if (![self isRobloxForeground]) {
+        NSLog(@"[XZX] showOverlay blocked - Roblox not in foreground");
         return;
     }
     if (_overlayWindow && !_overlayWindow.hidden) return;
@@ -136,7 +163,7 @@ static const NSInteger kDebounceThreshold = 3;
             }
         }
         if (!scene) {
-            NSLog(@"[XZX] No window scene found");
+            NSLog(@"[XZX] No window scene");
             return;
         }
         
@@ -145,7 +172,7 @@ static const NSInteger kDebounceThreshold = 3;
         if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
         if (!vc) {
-            NSLog(@"[XZX] ERROR: Could not resolve MainViewController");
+            NSLog(@"[XZX] ERROR: MainViewController not found");
             return;
         }
         
@@ -159,7 +186,7 @@ static const NSInteger kDebounceThreshold = 3;
         
         self.overlayWindow.hidden = NO;
         [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay shown");
+        NSLog(@"[XZX] Overlay shown (finally allowed)");
     });
 }
 
@@ -167,7 +194,7 @@ static const NSInteger kDebounceThreshold = 3;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.overlayWindow) {
             self.overlayWindow.hidden = YES;
-            // Return key focus to Roblox's window
+            // Return focus to Roblox
             UIWindow *robloxWindow = nil;
             for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
                 if ([scene isKindOfClass:[UIWindowScene class]]) {

@@ -13,7 +13,8 @@ static BOOL hooks_active = NO;
 void notify_game_joined(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         XZXCore *core = [XZXCore shared];
-        if (!core.inGame) {
+        // Only act if overlay is allowed; otherwise ignore
+        if (core.overlayAllowed && !core.inGame) {
             core.inGame = YES;
             [core showOverlay];
         }
@@ -24,16 +25,16 @@ void install_hook(void *target, void *replacement, void **original) {
     if (!target || !replacement) return;
     if (original) *original = target;
     original_methods[method_count++] = target;
-    
+
     vm_address_t address = (vm_address_t)target;
     vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
                VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-    
+
     uint32_t branch = 0x14000000 |
         (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
     memcpy(target, &branch, 4);
     __builtin___clear_cache((char *)target, (char *)target + 4);
-    
+
     vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
                VM_PROT_READ | VM_PROT_EXECUTE);
 }
@@ -41,7 +42,7 @@ void install_hook(void *target, void *replacement, void **original) {
 void hook_roblox_functions(void) {
     if (hooks_active) return;
     hooks_active = YES;
-    
+
     uint32_t count = _dyld_image_count();
     for (uint32_t i = 0; i < count; i++) {
         const char *name = _dyld_get_image_name(i);
@@ -56,7 +57,6 @@ void unhook_roblox_functions(void) { hooks_active = NO; }
 
 bool isPlayerInGame(void) {
     @try {
-        // Try all known Roblox DataModel class names
         NSArray *classNames = @[
             @"RobloxDataModel",
             @"RBXDataModel",
@@ -64,15 +64,14 @@ bool isPlayerInGame(void) {
             @"RBXGame",
             @"RobloxGame"
         ];
-        
+
         Class dataModelClass = nil;
         for (NSString *name in classNames) {
             dataModelClass = NSClassFromString(name);
             if (dataModelClass) break;
         }
         if (!dataModelClass) return false;
-        
-        // Try all possible shared instance selectors
+
         NSArray *sharedSelNames = @[@"sharedDataModel", @"shared", @"singleton", @"instance"];
         id dataModel = nil;
         for (NSString *selName in sharedSelNames) {
@@ -83,8 +82,7 @@ bool isPlayerInGame(void) {
             }
         }
         if (!dataModel) return false;
-        
-        // Try all possible placeId selectors
+
         NSArray *placeSelNames = @[@"placeId", @"PlaceId", @"currentPlaceId", @"gameId"];
         for (NSString *selName in placeSelNames) {
             SEL sel = NSSelectorFromString(selName);
@@ -93,7 +91,7 @@ bool isPlayerInGame(void) {
                 if (placeId && [placeId intValue] != 0) return true;
             }
         }
-        
+
         return false;
     } @catch (NSException *e) {
         NSLog(@"[XZX] isPlayerInGame error: %@", e);

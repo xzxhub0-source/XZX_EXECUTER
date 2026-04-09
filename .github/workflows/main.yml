@@ -349,7 +349,6 @@ jobs:
                   InitLua()
               }
 
-              // FIX: frames set here so bounds are real, not zero
               public override func viewDidLayoutSubviews() {
                   super.viewDidLayoutSubviews()
                   let w = view.bounds.width
@@ -396,7 +395,6 @@ jobs:
                   textView.delegate = self
                   view.addSubview(textView)
 
-                  // FIX: explicit type annotation so swiftc can infer the tuple array
                   let buttons: [(UIButton, String, UIColor)] = [
                       (executeButton, "Execute", UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)),
                       (clearButton,   "Clear",   UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)),
@@ -533,6 +531,7 @@ jobs:
           - (BOOL)isInGame;
           - (BOOL)isGameEngineActive;
           - (BOOL)viewHasMetalLayer:(UIView *)view;
+          - (BOOL)viewHasWebView:(UIView *)view;
           @property (nonatomic, strong) UIWindow *overlayWindow;
           @property (nonatomic, assign) BOOL isInitialized;
           @property (nonatomic, assign) BOOL inGame;
@@ -589,13 +588,10 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  // Wait for Roblox to finish launching
                   [NSThread sleepForTimeInterval:3.0];
 
                   while (YES) {
                       @autoreleasepool {
-                          // FIX: UIKit must be called on main thread
-                          // dispatch_sync blocks the monitor thread until main thread check completes
                           __block BOOL inGame = NO;
                           dispatch_sync(dispatch_get_main_queue(), ^{
                               inGame = [self isGameEngineActive];
@@ -620,10 +616,6 @@ jobs:
               });
           }
 
-          // Recursively checks if any view or its layers contain a CAMetalLayer.
-          // CAMetalLayer only exists when Roblox is rendering a 3D game world.
-          // It is never present on the home screen or menu.
-          // MUST be called on main thread.
           - (BOOL)viewHasMetalLayer:(UIView *)view {
               @try {
                   if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
@@ -640,18 +632,36 @@ jobs:
               return NO;
           }
 
-          // MUST be called on main thread.
+          - (BOOL)viewHasWebView:(UIView *)view {
+              @try {
+                  NSString *cn = NSStringFromClass([view class]);
+                  if ([cn containsString:@"WKWebView"] ||
+                      [cn containsString:@"WebView"]) return YES;
+                  for (UIView *sub in view.subviews) {
+                      if ([self viewHasWebView:sub]) return YES;
+                  }
+              } @catch (NSException *e) {}
+              return NO;
+          }
+
+          // Roblox home screen: CAMetalLayer present AND WKWebView present
+          // Roblox in-game:     CAMetalLayer present AND WKWebView absent
           - (BOOL)isGameEngineActive {
               @try {
-                  // FIX: use connectedScenes instead of deprecated .windows
+                  BOOL hasMetalLayer = NO;
+                  BOOL hasWebView = NO;
+
                   for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
                       UIWindowScene *windowScene = (UIWindowScene *)scene;
                       for (UIWindow *window in windowScene.windows) {
-                          if ([self viewHasMetalLayer:window]) {
-                              NSLog(@"[XZX] CAMetalLayer found - in game");
-                              return YES;
-                          }
+                          if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                          if ([self viewHasWebView:window]) hasWebView = YES;
                       }
+                  }
+
+                  if (hasMetalLayer && !hasWebView) {
+                      NSLog(@"[XZX] Metal found, no WebView = in game");
+                      return YES;
                   }
               } @catch (NSException *e) {
                   NSLog(@"[XZX] Detection error: %@", e);
@@ -773,13 +783,9 @@ jobs:
               hooks_active = YES;
           }
 
-          void unhook_roblox_functions(void) {
-              hooks_active = NO;
-          }
+          void unhook_roblox_functions(void) { hooks_active = NO; }
 
-          bool isPlayerInGame(void) {
-              return [[XZXCore shared] isInGame];
-          }
+          bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
           EOF
 
       - name: Create xzx_injection_randomizer.h
@@ -888,8 +894,6 @@ jobs:
         run: |
           cat > injector/dylib/xzx_antidetection.m << 'EOF'
           #import "xzx_antidetection.h"
-          #import <sys/sysctl.h>
-          #import <unistd.h>
           @implementation XZXAntiDetection
           + (instancetype)shared {
               static XZXAntiDetection *instance = nil;

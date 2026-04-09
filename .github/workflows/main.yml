@@ -1,853 +1,1144 @@
 name: Build XZX Executor
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Setup iOS SDK
-      run: |
-        sudo xcode-select -switch /Applications/Xcode_15.2.app
-        echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
-    
-    - name: Build Lua for iOS
-      run: |
-        mkdir -p $HOME/lua-ios
-        cd injector/dylib
-        git clone https://github.com/lua/lua.git lua_src
-        cd lua_src
-        make clean
-        for filename in lapi lauxlib lbaselib lcode lcorolib lctype ldblib ldebug ldo ldump lfunc lgc linit liolib llex lmathlib lmem lloadlib lobject lopcodes loslib lparser lstate lstring lstrlib ltable ltablib ltm lundump lutf8 lvm lzio; do
-          xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "src/$filename.o" "src/$filename.c" -target arm64-apple-ios15.0 -I src
-        done
-        ar rcs $HOME/lua-ios/liblua.a src/*.o
-        mkdir -p $HOME/lua-ios/include
-        cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
-        cd ../..
-        echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-        echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
-    
-    - name: Create directory structure
-      run: |
-        mkdir -p XZX
-        mkdir -p injector/dylib/Core
-    
-    - name: Create LuaExecutor.h
-      run: |
-        cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
-        #ifndef LuaExecutor_h
-        #define LuaExecutor_h
-        
-        struct lua_State;
-        
-        #ifdef __cplusplus
-        extern "C" {
-        #endif
-        
-        void InitLua(void);
-        void ExecuteScript(const char *script);
-        void RegisterFunction(const char *name, int (*func)(struct lua_State*));
-        
-        #ifdef __cplusplus
-        }
-        #endif
-        
-        #endif
-        EOF
-    
-    - name: Create LuaExecutor.mm
-      run: |
-        cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
-        #import <Foundation/Foundation.h>
-        #import <UIKit/UIKit.h>
-        extern "C" {
-        #include <lua.h>
-        #include <lauxlib.h>
-        #include <lualib.h>
-        }
-        #include "LuaExecutor.h"
-        
-        static lua_State *L = nil;
-        static NSMutableDictionary *registeredFunctions = nil;
-        
-        static int xzx_print(lua_State *L) {
-          int n = lua_gettop(L);
-          NSMutableString *output = [NSMutableString string];
-          for (int i = 1; i <= n; i++) {
-            if (i > 1) [output appendString:@" "];
-            if (lua_isstring(L, i)) [output appendFormat:@"%s", lua_tostring(L, i)];
-            else if (lua_isnumber(L, i)) [output appendFormat:@"%g", lua_tonumber(L, i)];
-            else if (lua_isboolean(L, i)) [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
-            else if (lua_istable(L, i)) [output appendString:@"table"];
-            else if (lua_isfunction(L, i)) [output appendString:@"function"];
-            else [output appendString:@"nil"];
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install pipx
+          pipx ensurepath
+          pipx install gdown
+
+      - name: Download Roblox IPA
+        run: |
+          FILE_ID="16uaCXW9O3SmjYEPjc1wRhIj-o2NAXqdW"
+          pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
+
+      - name: Download and compile insert_dylib
+        run: |
+          git clone https://github.com/tyilo/insert_dylib.git
+          cd insert_dylib
+          mkdir -p ../tools
+          xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib \
+            -configuration Release \
+            CONFIGURATION_BUILD_DIR=$(pwd)/../tools
+          chmod +x ../tools/insert_dylib
+          cd ..
+
+      - name: Download and compile Lua for iOS
+        run: |
+          mkdir -p $HOME/lua-ios
+          curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
+          tar -xzf lua-5.4.6.tar.gz
+          cd lua-5.4.6
+          for file in src/*.c; do
+            filename=$(basename "$file" .c)
+            if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
+              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -o "src/$filename.o" "src/$filename.c" -target arm64-apple-ios15.0 -I src
+            fi
+          done
+          ar rcs $HOME/lua-ios/liblua.a src/*.o
+          mkdir -p $HOME/lua-ios/include
+          cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
+          cd ..
+          echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
+          echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
+
+      - name: Create directory structure
+        run: |
+          mkdir -p XZX
+          mkdir -p injector/dylib/Core
+
+      - name: Create LuaExecutor.h
+        run: |
+          cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
+          #ifndef LuaExecutor_h
+          #define LuaExecutor_h
+
+          struct lua_State;
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void InitLua(void);
+          void ExecuteScript(const char *script);
+          void RegisterFunction(const char *name, int (*func)(struct lua_State*));
+
+          #ifdef __cplusplus
           }
-          NSLog(@"[XZX] %@", output);
-          return 0;
-        }
-        
-        static int xzx_loadstring(lua_State *L) {
-          const char *code = luaL_checkstring(L, 1);
-          const char *chunkname = luaL_optstring(L, 2, "*xxz");
-          int status = luaL_loadbuffer(L, code, strlen(code), chunkname);
-          if (status != 0) {
-            lua_pushnil(L);
-            lua_pushstring(L, lua_tostring(L, -1));
-            return 2;
+          #endif
+
+          #endif
+          EOF
+
+      - name: Create LuaExecutor.mm
+        run: |
+          cat > injector/dylib/Core/LuaExecutor.mm << 'EOF'
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+          extern "C" {
+            #include <lua.h>
+            #include <lauxlib.h>
+            #include <lualib.h>
           }
-          return 1;
-        }
-        
-        static int xzx_httpget(lua_State *L) {
-          const char *url = luaL_checkstring(L, 1);
-          dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-          __block NSString *result = nil;
-          __block int statusCode = 0;
-          NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
-          [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15" forHTTPHeaderField:@"User-Agent"];
-          NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            if (data) {
-              result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-              if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-                statusCode = (int)((NSHTTPURLResponse *)response).statusCode;
+          #include "LuaExecutor.h"
+
+          static lua_State *L = nil;
+          static NSMutableDictionary *registeredFunctions = nil;
+
+          static int xzx_print(lua_State *L) {
+              int n = lua_gettop(L);
+              NSMutableString *output = [NSMutableString string];
+              for (int i = 1; i <= n; i++) {
+                  if (i > 1) [output appendString:@" "];
+                  if (lua_isstring(L, i)) [output appendFormat:@"%s", lua_tostring(L, i)];
+                  else if (lua_isnumber(L, i)) [output appendFormat:@"%g", lua_tonumber(L, i)];
+                  else if (lua_isboolean(L, i)) [output appendString:(lua_toboolean(L, i) ? @"true" : @"false")];
+                  else if (lua_istable(L, i)) [output appendString:@"table"];
+                  else if (lua_isfunction(L, i)) [output appendString:@"function"];
+                  else [output appendString:@"nil"];
               }
-              dispatch_semaphore_signal(semaphore);
-            }
-          }];
-          [task resume];
-          dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
-          if (result) {
-            lua_pushstring(L, [result UTF8String]);
-            lua_pushinteger(L, statusCode);
-            return 2;
-          } else {
-            lua_pushnil(L);
-            lua_pushstring(L, "Request failed");
-            return 2;
+              NSLog(@"[XZX] %@", output);
+              return 0;
           }
-        }
-        
-        static int xzx_base64_encode(lua_State *L) {
-          const char *data = luaL_checkstring(L, 1);
-          NSData *nsdata = [NSData dataWithBytes:data length:strlen(data)];
-          NSString *encoded = [nsdata base64EncodedStringWithOptions:0];
-          lua_pushstring(L, [encoded UTF8String]);
-          return 1;
-        }
-        
-        static int xzx_base64_decode(lua_State *L) {
-          const char *data = luaL_checkstring(L, 1);
-          NSData *nsdata = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:data] options:0];
-          NSString *decoded = [[NSString alloc] initWithData:nsdata encoding:NSUTF8StringEncoding];
-          lua_pushstring(L, [decoded UTF8String]);
-          return 1;
-        }
-        
-        static int xzx_messagebox(lua_State *L) {
-          const char *text = luaL_checkstring(L, 1);
-          const char *caption = luaL_optstring(L, 2, "XZX");
-          dispatch_async(dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
-                                           message:[NSString stringWithUTF8String:text]
-                                           preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-            UIViewController *rootVC = windowScene.keyWindow.rootViewController;
-            [rootVC presentViewController:alert animated:YES completion:nil];
-          });
-          return 0;
-        }
-        
-        static int xzx_identifyexecutor(lua_State *L) {
-          lua_pushstring(L, "XZX");
-          return 1;
-        }
-        
-        static int xzx_wait(lua_State *L) {
-          double seconds = luaL_optnumber(L, 1, 0);
-          usleep(seconds * 1000000);
-          return 0;
-        }
-        
-        void InitLua(void) {
-          if (!L) {
-            L = luaL_newstate();
-            if (L) {
-              luaL_openlibs(L);
-              registeredFunctions = [NSMutableDictionary dictionary];
-              lua_register(L, "print", xzx_print);
-              lua_register(L, "loadstring", xzx_loadstring);
-              lua_register(L, "HttpGet", xzx_httpget);
-              lua_register(L, "game_HttpGet", xzx_httpget);
-              lua_register(L, "base64encode", xzx_base64_encode);
-              lua_register(L, "base64decode", xzx_base64_decode);
-              lua_register(L, "messagebox", xzx_messagebox);
-              lua_register(L, "identifyexecutor", xzx_identifyexecutor);
-              lua_register(L, "getexecutorname", xzx_identifyexecutor);
-              lua_register(L, "wait", xzx_wait);
-              lua_newtable(L);
+
+          static int xzx_loadstring(lua_State *L) {
+              const char *code = luaL_checkstring(L, 1);
+              const char *chunkname = luaL_optstring(L, 2, "=xzx");
+              int status = luaL_loadbuffer(L, code, strlen(code), chunkname);
+              if (status != 0) {
+                  lua_pushnil(L);
+                  lua_pushstring(L, lua_tostring(L, -1));
+                  return 2;
+              }
+              return 1;
+          }
+
+          static int xzx_httpget(lua_State *L) {
+              const char *url = luaL_checkstring(L, 1);
+              dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+              __block NSString *result = nil;
+              __block int statusCode = 0;
+              NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
+              [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15" forHTTPHeaderField:@"User-Agent"];
+              NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                  if (data) {
+                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                      if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                          statusCode = (int)((NSHTTPURLResponse *)response).statusCode;
+                      }
+                  }
+                  dispatch_semaphore_signal(semaphore);
+              }];
+              [task resume];
+              dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+              if (result) {
+                  lua_pushstring(L, [result UTF8String]);
+                  lua_pushinteger(L, statusCode);
+                  return 2;
+              }
+              lua_pushnil(L);
+              lua_pushstring(L, "Request failed");
+              return 2;
+          }
+
+          static int xzx_base64_encode(lua_State *L) {
+              const char *data = luaL_checkstring(L, 1);
+              NSData *nsdata = [NSData dataWithBytes:data length:strlen(data)];
+              NSString *encoded = [nsdata base64EncodedStringWithOptions:0];
+              lua_pushstring(L, [encoded UTF8String]);
+              return 1;
+          }
+
+          static int xzx_base64_decode(lua_State *L) {
+              const char *data = luaL_checkstring(L, 1);
+              NSData *nsdata = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:data] options:0];
+              NSString *decoded = [[NSString alloc] initWithData:nsdata encoding:NSUTF8StringEncoding];
+              lua_pushstring(L, [decoded UTF8String]);
+              return 1;
+          }
+
+          static int xzx_messagebox(lua_State *L) {
+              const char *text = luaL_checkstring(L, 1);
+              const char *caption = luaL_optstring(L, 2, "XZX");
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithUTF8String:caption]
+                                                                                 message:[NSString stringWithUTF8String:text]
+                                                                          preferredStyle:UIAlertControllerStyleAlert];
+                  [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                  UIWindowScene *windowScene = (UIWindowScene *)[UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
+                  UIViewController *rootVC = windowScene.keyWindow.rootViewController;
+                  [rootVC presentViewController:alert animated:YES completion:nil];
+              });
+              return 0;
+          }
+
+          static int xzx_identifyexecutor(lua_State *L) {
               lua_pushstring(L, "XZX");
-              lua_setfield(L, -2, "name");
-              lua_pushstring(L, "3.0.0");
-              lua_setfield(L, -2, "version");
-              lua_setglobal(L, "xzx");
-              NSLog(@"[XZX] Lua initialized");
-            }
+              return 1;
           }
-        }
-        
-        void ExecuteScript(const char *script) {
-          if (!L) InitLua();
-          if (L && script && strlen(script) > 0) {
-            int status = luaL_loadstring(L, script);
-            if (status == 0) {
-              lua_pcall(L, 0, 0, 0);
-            } else {
-              const char *error = lua_tostring(L, -1);
-              NSLog(@"[XZX] Lua Error: %s", error);
-              lua_pop(L, 1);
-            }
+
+          static int xzx_wait(lua_State *L) {
+              double seconds = luaL_optnumber(L, 1, 0);
+              usleep(seconds * 1000000);
+              return 0;
           }
-        }
-        
-        void RegisterFunction(const char *name, int (*func)(lua_State*)) {
-          if (!L) InitLua();
-          lua_register(L, name, func);
-          [registeredFunctions setObject:[NSString stringWithUTF8String:name] forKey:[NSString stringWithUTF8String:name]];
-        }
-        EOF
-    
-    - name: Create ScriptEngine.mm
-      run: |
-        cat > injector/dylib/Core/ScriptEngine.mm << 'EOF'
-        #import <Foundation/Foundation.h>
-        extern "C" {
-        #include <lua.h>
-        #include <lauxlib.h>
-        #include <lualib.h>
-        }
-        #include "LuaExecutor.h"
-        
-        static NSMutableDictionary *scriptCache = nil;
-        static NSMutableArray *scriptHistory = nil;
-        static NSString *SCRIPT_CACHE_KEY = @"XZXScriptCache";
-        static NSString *SCRIPT_HISTORY_KEY = @"XZXScriptHistory";
-        
-        @interface ScriptEngine : NSObject
-        + (instancetype)shared;
-        - (void)cacheScript:(NSString *)script withId:(NSString *)scriptId;
-        - (NSString *)getCacheScript:(NSString *)scriptId;
-        - (void)clearCache;
-        @end
-        
-        @implementation ScriptEngine
-        
-        + (instancetype)shared {
-          static ScriptEngine *instance = nil;
-          static dispatch_once_t onceToken;
-          dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
-          return instance;
-        }
-        
-        - (instancetype)init {
-          self = [super init];
-          if (self) {
-            scriptCache = [NSMutableDictionary dictionary];
-            scriptHistory = [NSMutableArray array];
+
+          void InitLua(void) {
+              if (!L) {
+                  L = luaL_newstate();
+                  if (L) {
+                      luaL_openlibs(L);
+                      registeredFunctions = [NSMutableDictionary dictionary];
+                      lua_register(L, "print", xzx_print);
+                      lua_register(L, "loadstring", xzx_loadstring);
+                      lua_register(L, "HttpGet", xzx_httpget);
+                      lua_register(L, "game_HttpGet", xzx_httpget);
+                      lua_register(L, "base64encode", xzx_base64_encode);
+                      lua_register(L, "base64decode", xzx_base64_decode);
+                      lua_register(L, "messagebox", xzx_messagebox);
+                      lua_register(L, "identifyexecutor", xzx_identifyexecutor);
+                      lua_register(L, "getexecutorname", xzx_identifyexecutor);
+                      lua_register(L, "wait", xzx_wait);
+                      lua_newtable(L);
+                      lua_pushstring(L, "XZX");
+                      lua_setfield(L, -2, "name");
+                      lua_pushstring(L, "3.0.0");
+                      lua_setfield(L, -2, "version");
+                      lua_setglobal(L, "xzx");
+                      NSLog(@"[XZX] Lua initialized");
+                  }
+              }
           }
-          return self;
-        }
-        
-        - (void)cacheScript:(NSString *)script withId:(NSString *)scriptId {
-          if (script && scriptId) {
-            scriptCache[scriptId] = script;
-            [scriptHistory addObject:@{@"id": scriptId, @"timestamp": [NSDate date]}];
-            if (scriptHistory.count > 50)
-              [scriptHistory removeObjectsInRange:NSMakeRange(0, scriptHistory.count - 50)];
-            NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-            [d setObject:scriptCache forKey:SCRIPT_CACHE_KEY];
-            [d setObject:scriptHistory forKey:SCRIPT_HISTORY_KEY];
-            [d synchronize];
+
+          void ExecuteScript(const char *script) {
+              if (!L) InitLua();
+              if (L && script && strlen(script) > 0) {
+                  int status = luaL_loadstring(L, script);
+                  if (status == 0) {
+                      lua_pcall(L, 0, 0, 0);
+                  } else {
+                      const char *error = lua_tostring(L, -1);
+                      NSLog(@"[XZX] Lua Error: %s", error);
+                      lua_pop(L, 1);
+                  }
+              }
           }
-        }
-        
-        - (NSString *)getCacheScript:(NSString *)scriptId { return scriptCache[scriptId]; }
-        
-        - (void)clearCache {
-          [scriptCache removeAllObjects];
-          [scriptHistory removeAllObjects];
-          NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-          [d removeObjectForKey:SCRIPT_CACHE_KEY];
-          [d removeObjectForKey:SCRIPT_HISTORY_KEY];
-          [d synchronize];
-        }
-        
-        @end
-        EOF
-    
-    - name: Create bridging header
-      run: |
-        cat > XZX/XZX-Bridging-Header.h << 'EOF'
-        #ifndef XZX_Bridging_Header_h
-        #define XZX_Bridging_Header_h
-        
-        #import <Foundation/Foundation.h>
-        #import <UIKit/UIKit.h>
-        #include "injector/dylib/Core/LuaExecutor.h"
-        
-        #endif
-        EOF
-    
-    - name: Create MainViewController.swift
-      run: |
-        cat > XZX/MainViewController.swift << 'EOF'
-        import UIKit
-        
-        @objc(XZXMainViewController)
-        public class MainViewController: UIViewController, UITextViewDelegate {
-          
-          private let textView = UITextView()
-          private let executeButton = UIButton()
-          private let clearButton = UIButton()
-          private let saveButton = UIButton()
-          private let closeButton = UIButton()
-          private let scriptHubButton = UIButton()
-          private var scriptHubView: UIView?
-          
-          public override func viewDidLoad() {
-            super.viewDidLoad()
-            view.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
-            view.layer.cornerRadius = 18
-            view.clipsToBounds = true
-            setupSubviews()
-            setupNotifications()
-            loadSavedScripts()
-            InitLua()
+
+          void RegisterFunction(const char *name, int (*func)(lua_State*)) {
+              if (!L) InitLua();
+              lua_register(L, name, func);
+              [registeredFunctions setObject:[NSString stringWithUTF8String:name] forKey:[NSString stringWithUTF8String:name]];
           }
-          
-          public override func viewDidLayoutSubviews() {
-            super.viewDidLayoutSubviews()
-            let w = view.bounds.width
-            let h = view.bounds.height
-            
-            closeButton.frame = CGRect(x: w - 50, y: 12, width: 38, height: 38)
-            scriptHubButton.frame = CGRect(x: w - 100, y: 16, width: 80, height: 30)
-            textView.frame = CGRect(x: 16, y: 60, width: w - 32, height: h - 160)
-            executeButton.frame = CGRect(x: 16, y: h - 80, width: 90, height: 50)
-            clearButton.frame = CGRect(x: 116, y: h - 80, width: 90, height: 50)
-            saveButton.frame = CGRect(x: 216, y: h - 80, width: 90, height: 50)
-            
-            if let hub = scriptHubView {
-              hub.frame = CGRect(x: 16, y: 110, width: w - 32, height: h - 210)
-            }
+          EOF
+
+      - name: Create ScriptEngine.mm
+        run: |
+          cat > injector/dylib/Core/ScriptEngine.mm << 'EOF'
+          #import <Foundation/Foundation.h>
+          extern "C" {
+            #include <lua.h>
+            #include <lauxlib.h>
+            #include <lualib.h>
           }
-          
-          private func setupSubviews() {
-            let titleLabel = UILabel()
-            titleLabel.frame = CGRect(x: 16, y: 16, width: 150, height: 28)
-            titleLabel.text = "XZX"
-            titleLabel.textColor = .white
-            titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
-            view.addSubview(titleLabel)
-            
-            closeButton.setTitle("✕", for: .normal)
-            closeButton.setTitleColor(.white, for: .normal)
-            closeButton.titleLabel?.font = .systemFont(ofSize: 20)
-            closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
-            view.addSubview(closeButton)
-            
-            scriptHubButton.setTitle("Script Hub", for: .normal)
-            scriptHubButton.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8)
-            scriptHubButton.layer.cornerRadius = 8
-            scriptHubButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
-            scriptHubButton.addTarget(self, action: #selector(toggleScriptHub), for: .touchUpInside)
-            view.addSubview(scriptHubButton)
-            
-            textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
-            textView.textColor = .white
-            textView.font = UIFont(name: "Menlo", size: 13)
-            textView.layer.cornerRadius = 8
-            textView.text = "-- XZX Executor\nprint('Hello World!')"
-            textView.autocorrectionType = .no
-            textView.autocapitalizationType = .none
-            textView.delegate = self
-            view.addSubview(textView)
-            
-            let buttons: [(UIButton, String, UIColor)] = [
-              (executeButton, "Execute", UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)),
-              (clearButton, "Clear", UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)),
-              (saveButton, "Save", UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1))
-            ]
-            
-            for (btn, title, color) in buttons {
-              btn.setTitle(title, for: .normal)
-              btn.backgroundColor = color
-              btn.layer.cornerRadius = 8
-              view.addSubview(btn)
-            }
-            
-            executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
-            clearButton.addTarget(self, action: #selector(clearScript), for: .touchUpInside)
-            saveButton.addTarget(self, action: #selector(saveScript), for: .touchUpInside)
+          #include "LuaExecutor.h"
+
+          static NSMutableDictionary *scriptCache = nil;
+          static NSMutableArray *scriptHistory = nil;
+          static NSString *SCRIPT_CACHE_KEY = @"XZXScriptCache";
+          static NSString *SCRIPT_HISTORY_KEY = @"XZXScriptHistory";
+
+          @interface ScriptEngine : NSObject
+          + (instancetype)shared;
+          - (void)cacheScript:(NSString *)script withId:(NSString *)scriptId;
+          - (NSString *)getCachedScript:(NSString *)scriptId;
+          - (void)clearCache;
+          @end
+
+          @implementation ScriptEngine
+
+          + (instancetype)shared {
+              static ScriptEngine *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
           }
-          
-          private func setupNotifications() {
-            NotificationCenter.default.addObserver(self, selector: #selector(handleScriptLoad(_:)), name: NSNotification.Name("LoadScript"), object: nil)
+
+          - (instancetype)init {
+              self = [super init];
+              if (self) {
+                  scriptCache = [NSMutableDictionary dictionary];
+                  scriptHistory = [NSMutableArray array];
+              }
+              return self;
           }
-          
-          private func loadSavedScripts() {
-            if let s = UserDefaults.standard.string(forKey: "XZXSavedScript") {
-              textView.text = s
-            }
+
+          - (void)cacheScript:(NSString *)script withId:(NSString *)scriptId {
+              if (script && scriptId) {
+                  scriptCache[scriptId] = script;
+                  [scriptHistory addObject:@{@"id": scriptId, @"timestamp": [NSDate date]}];
+                  if (scriptHistory.count > 50)
+                      [scriptHistory removeObjectsInRange:NSMakeRange(0, scriptHistory.count - 50)];
+                  NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+                  [d setObject:scriptCache forKey:SCRIPT_CACHE_KEY];
+                  [d setObject:scriptHistory forKey:SCRIPT_HISTORY_KEY];
+                  [d synchronize];
+              }
           }
-          
-          @objc private func toggleScriptHub() {
-            if scriptHubView == nil {
-              let hub = UIView()
-              hub.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
-              hub.layer.cornerRadius = 8
-              scriptHubView = hub
-              view.addSubview(hub)
-              view.setNeedsLayout()
-              fetchScripts(query: "blox fruits")
-            } else {
-              scriptHubView?.removeFromSuperview()
-              scriptHubView = nil
-              view.setNeedsLayout()
-            }
+
+          - (NSString *)getCachedScript:(NSString *)scriptId { return scriptCache[scriptId]; }
+
+          - (void)clearCache {
+              [scriptCache removeAllObjects];
+              [scriptHistory removeAllObjects];
+              NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+              [d removeObjectForKey:SCRIPT_CACHE_KEY];
+              [d removeObjectForKey:SCRIPT_HISTORY_KEY];
+              [d synchronize];
           }
-          
-          private func fetchScripts(query: String) {
-            let urlStr = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
-            guard let encoded = urlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                  let url = URL(string: encoded) else { return }
-            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-              guard let data = data,
-                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let result = json["result"] as? [String: Any],
-                    let scripts = result["scripts"] as? [[String: Any]] else { return }
-              DispatchQueue.main.async { self?.displayScripts(scripts) }
-            }.resume()
+
+          @end
+          EOF
+
+      - name: Create bridging header
+        run: |
+          cat > XZX/XZX-Bridging-Header.h << 'EOF'
+          #ifndef XZX_Bridging_Header_h
+          #define XZX_Bridging_Header_h
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+          #include "injector/dylib/Core/LuaExecutor.h"
+          #endif
+          EOF
+
+      - name: Create MainViewController.swift
+        run: |
+          cat > XZX/MainViewController.swift << 'EOF'
+          import UIKit
+
+          @objc(XZXMainViewController)
+          public class MainViewController: UIViewController, UITextViewDelegate {
+
+              private let textView        = UITextView()
+              private let executeButton   = UIButton()
+              private let clearButton     = UIButton()
+              private let saveButton      = UIButton()
+              private let closeButton     = UIButton()
+              private let scriptHubButton = UIButton()
+              private var scriptHubView: UIView?
+
+              public override func viewDidLoad() {
+                  super.viewDidLoad()
+                  view.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 0.95)
+                  view.layer.cornerRadius = 18
+                  view.clipsToBounds = true
+                  setupSubviews()
+                  setupNotifications()
+                  loadSavedScripts()
+                  InitLua()
+              }
+
+              public override func viewDidLayoutSubviews() {
+                  super.viewDidLayoutSubviews()
+                  let w = view.bounds.width
+                  let h = view.bounds.height
+                  closeButton.frame     = CGRect(x: w - 50, y: 12, width: 38, height: 38)
+                  scriptHubButton.frame = CGRect(x: w - 140, y: 16, width: 90, height: 30)
+                  textView.frame        = CGRect(x: 16, y: 60, width: w - 32, height: h - 160)
+                  executeButton.frame   = CGRect(x: 16,  y: h - 80, width: 90, height: 50)
+                  clearButton.frame     = CGRect(x: 116, y: h - 80, width: 90, height: 50)
+                  saveButton.frame      = CGRect(x: 216, y: h - 80, width: 90, height: 50)
+                  if let hub = scriptHubView {
+                      hub.frame = CGRect(x: 16, y: 110, width: w - 32, height: h - 210)
+                  }
+              }
+
+              private func setupSubviews() {
+                  let titleLabel = UILabel()
+                  titleLabel.frame = CGRect(x: 16, y: 16, width: 150, height: 28)
+                  titleLabel.text = "XZX"
+                  titleLabel.textColor = .white
+                  titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
+                  view.addSubview(titleLabel)
+
+                  closeButton.setTitle("✕", for: .normal)
+                  closeButton.setTitleColor(.white, for: .normal)
+                  closeButton.titleLabel?.font = .systemFont(ofSize: 20)
+                  closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
+                  view.addSubview(closeButton)
+
+                  scriptHubButton.setTitle("Script Hub", for: .normal)
+                  scriptHubButton.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8)
+                  scriptHubButton.layer.cornerRadius = 8
+                  scriptHubButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+                  scriptHubButton.addTarget(self, action: #selector(toggleScriptHub), for: .touchUpInside)
+                  view.addSubview(scriptHubButton)
+
+                  textView.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
+                  textView.textColor = .white
+                  textView.font = UIFont(name: "Menlo", size: 13)
+                  textView.layer.cornerRadius = 8
+                  textView.text = "-- XZX Executor\nprint('Hello World!')"
+                  textView.autocorrectionType = .no
+                  textView.autocapitalizationType = .none
+                  textView.delegate = self
+                  view.addSubview(textView)
+
+                  let buttons: [(UIButton, String, UIColor)] = [
+                      (executeButton, "Execute", UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1)),
+                      (clearButton,   "Clear",   UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1)),
+                      (saveButton,    "Save",    UIColor(red: 0.3, green: 0.3, blue: 0.8, alpha: 1))
+                  ]
+                  for (btn, title, color) in buttons {
+                      btn.setTitle(title, for: .normal)
+                      btn.backgroundColor = color
+                      btn.layer.cornerRadius = 8
+                      view.addSubview(btn)
+                  }
+                  executeButton.addTarget(self, action: #selector(executeScript), for: .touchUpInside)
+                  clearButton.addTarget(self,   action: #selector(clearScript),   for: .touchUpInside)
+                  saveButton.addTarget(self,    action: #selector(saveScript),    for: .touchUpInside)
+              }
+
+              private func setupNotifications() {
+                  NotificationCenter.default.addObserver(
+                      self, selector: #selector(handleScriptLoad(_:)),
+                      name: NSNotification.Name("LoadScript"), object: nil)
+              }
+
+              private func loadSavedScripts() {
+                  if let s = UserDefaults.standard.string(forKey: "XZXSavedScript") {
+                      textView.text = s
+                  }
+              }
+
+              @objc private func toggleScriptHub() {
+                  if scriptHubView == nil {
+                      let hub = UIView()
+                      hub.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 0.9)
+                      hub.layer.cornerRadius = 8
+                      scriptHubView = hub
+                      view.addSubview(hub)
+                      view.setNeedsLayout()
+                      fetchScripts(query: "blox fruits")
+                  } else {
+                      scriptHubView?.removeFromSuperview()
+                      scriptHubView = nil
+                      view.setNeedsLayout()
+                  }
+              }
+
+              private func fetchScripts(query: String) {
+                  let urlStr = "https://scriptblox.com/api/script/search?q=\(query)&mode=free"
+                  guard let encoded = urlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                        let url = URL(string: encoded) else { return }
+                  URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+                      guard let data = data,
+                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                            let result = json["result"] as? [String: Any],
+                            let scripts = result["scripts"] as? [[String: Any]] else { return }
+                      DispatchQueue.main.async { self?.displayScripts(scripts) }
+                  }.resume()
+              }
+
+              private func displayScripts(_ scripts: [[String: Any]]) {
+                  guard let hub = scriptHubView else { return }
+                  hub.subviews.forEach { $0.removeFromSuperview() }
+                  let scroll = UIScrollView(frame: hub.bounds)
+                  hub.addSubview(scroll)
+                  var y: CGFloat = 8
+                  for s in scripts {
+                      let title = s["title"] as? String ?? "Untitled"
+                      let game  = s["game"]  as? String ?? "Unknown"
+                      let code  = s["script"] as? String ?? ""
+                      let card  = UIView(frame: CGRect(x: 8, y: y, width: scroll.bounds.width - 16, height: 64))
+                      card.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 1)
+                      card.layer.cornerRadius = 8
+                      let tl = UILabel(frame: CGRect(x: 10, y: 8,  width: card.bounds.width - 80, height: 20))
+                      tl.text = title; tl.textColor = .white; tl.font = .boldSystemFont(ofSize: 13)
+                      let gl = UILabel(frame: CGRect(x: 10, y: 30, width: card.bounds.width - 80, height: 18))
+                      gl.text = game; gl.textColor = .lightGray; gl.font = .systemFont(ofSize: 11)
+                      let lb = UIButton(frame: CGRect(x: card.bounds.width - 66, y: 16, width: 58, height: 30))
+                      lb.setTitle("Load", for: .normal)
+                      lb.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8)
+                      lb.layer.cornerRadius = 6
+                      lb.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+                      objc_setAssociatedObject(lb, "code", code, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                      lb.addTarget(self, action: #selector(loadScript(_:)), for: .touchUpInside)
+                      [tl, gl, lb].forEach { card.addSubview($0) }
+                      scroll.addSubview(card)
+                      y += 72
+                  }
+                  scroll.contentSize = CGSize(width: scroll.bounds.width, height: y + 8)
+              }
+
+              @objc private func loadScript(_ sender: UIButton) {
+                  textView.text = objc_getAssociatedObject(sender, "code") as? String ?? ""
+                  toggleScriptHub()
+              }
+
+              @objc func executeScript() {
+                  guard let s = textView.text, !s.isEmpty else { return }
+                  s.withCString { ExecuteScript($0) }
+              }
+
+              @objc func clearScript() { textView.text = "" }
+
+              @objc func saveScript() {
+                  UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
+                  let a = UIAlertController(title: "Saved", message: nil, preferredStyle: .alert)
+                  a.addAction(UIAlertAction(title: "OK", style: .default))
+                  present(a, animated: true)
+              }
+
+              @objc func close() { view.isHidden = true }
+
+              @objc private func handleScriptLoad(_ n: Notification) {
+                  if let s = n.object as? String { textView.text = s }
+              }
+
+              public func textViewDidChange(_ textView: UITextView) {
+                  UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
+              }
           }
-          
-          private func displayScripts(_ scripts: [[String: Any]]) {
-            guard let hub = scriptHubView else { return }
-            hub.subviews.forEach { $0.removeFromSuperview() }
-            let scroll = UIScrollView(frame: hub.bounds)
-            hub.addSubview(scroll)
-            var y: CGFloat = 8
-            for s in scripts {
-              let title = s["title"] as? String ?? "Untitled"
-              let game = s["game"] as? String ?? "Unknown"
-              let code = s["script"] as? String ?? ""
-              let card = UIView(frame: CGRect(x: 8, y: y, width: scroll.bounds.width - 16, height: 64))
-              card.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 1)
-              card.layer.cornerRadius = 8
-              let tl = UILabel(frame: CGRect(x: 10, y: 8, width: card.bounds.width - 80, height: 20))
-              tl.text = title; tl.textColor = .white; tl.font = .boldSystemFont(ofSize: 13)
-              let gl = UILabel(frame: CGRect(x: 10, y: 30, width: card.bounds.width - 80, height: 18))
-              gl.text = game; gl.textColor = .lightGray; gl.font = .systemFont(ofSize: 11)
-              let lb = UIButton(frame: CGRect(x: card.bounds.width - 66, y: 16, width: 58, height: 30))
-              lb.setTitle("Load", for: .normal)
-              lb.backgroundColor = UIColor(red: 0.65, green: 0.35, blue: 1, alpha: 0.8)
-              lb.layer.cornerRadius = 6
-              lb.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
-              objc_setAssociatedObject(lb, "code", code, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-              lb.addTarget(self, action: #selector(loadScript(_:)), for: .touchUpInside)
-              [tl, gl, lb].forEach { card.addSubview($0) }
-              scroll.addSubview(card)
-              y += 72
-            }
-            scroll.contentSize = CGSize(width: scroll.bounds.width, height: y + 8)
+          EOF
+
+      - name: Create xzx_core.h
+        run: |
+          cat > injector/dylib/xzx_core.h << 'EOF'
+          #ifndef XZX_CORE_H
+          #define XZX_CORE_H
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+
+          @interface XZXCore : NSObject
+          + (instancetype)shared;
+          - (void)initialize;
+          - (void)showOverlay;
+          - (void)hideOverlay;
+          - (BOOL)isOverlayVisible;
+          - (BOOL)isInGame;
+          - (BOOL)isGameEngineActive;
+          - (BOOL)viewHasMetalLayer:(UIView *)view;
+          - (BOOL)viewHasWebView:(UIView *)view;
+          @property (nonatomic, strong) UIWindow *overlayWindow;
+          @property (nonatomic, assign) BOOL isInitialized;
+          @property (nonatomic, assign) BOOL inGame;
+          @end
+
+          #endif
+          EOF
+
+      - name: Create xzx_core.m
+        run: |
+          cat > injector/dylib/xzx_core.m << 'EOF'
+          #import "xzx_core.h"
+          #import "Core/LuaExecutor.h"
+          #import <UIKit/UIKit.h>
+          #import <QuartzCore/QuartzCore.h>
+          #import <objc/runtime.h>
+          #import <objc/message.h>
+
+          static XZXCore *sharedCore = nil;
+          static dispatch_queue_t monitorQueue = nil;
+          static BOOL gameDetectionActive = NO;
+
+          @implementation XZXCore
+
+          + (instancetype)shared {
+              static dispatch_once_t once;
+              dispatch_once(&once, ^{ sharedCore = [[self alloc] init]; });
+              return sharedCore;
           }
-          
-          @objc private func loadScript(_ sender: UIButton) {
-            textView.text = objc_getAssociatedObject(sender, "code") as? String ?? ""
-            toggleScriptHub()
+
+          - (instancetype)init {
+              self = [super init];
+              if (self) {
+                  _overlayWindow = nil;
+                  _isInitialized = NO;
+                  _inGame = NO;
+                  monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
+              }
+              return self;
           }
-          
-          @objc func executeScript() {
-            guard let s = textView.text, !s.isEmpty else { return }
-            s.withCString { ExecuteScript($0) }
+
+          - (void)initialize {
+              if (_isInitialized) return;
+              _isInitialized = YES;
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  InitLua();
+                  NSLog(@"[XZX] Lua initialized");
+                  [self startGameMonitoring];
+              });
           }
-          
-          @objc func clearScript() { textView.text = "" }
-          
-          @objc func saveScript() {
-            UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
-            let a = UIAlertController(title: "Saved", message: nil, preferredStyle: .alert)
-            a.addAction(UIAlertAction(title: "OK", style: .default))
-            present(a, animated: true)
+
+          - (void)startGameMonitoring {
+              if (gameDetectionActive) return;
+              gameDetectionActive = YES;
+
+              dispatch_async(monitorQueue, ^{
+                  [NSThread sleepForTimeInterval:3.0];
+
+                  while (YES) {
+                      @autoreleasepool {
+                          __block BOOL inGame = NO;
+                          dispatch_sync(dispatch_get_main_queue(), ^{
+                              inGame = [self isGameEngineActive];
+                          });
+
+                          if (inGame && !self.inGame) {
+                              self.inGame = YES;
+                              NSLog(@"[XZX] Game detected - showing UI");
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                  [self showOverlay];
+                              });
+                          } else if (!inGame && self.inGame) {
+                              self.inGame = NO;
+                              NSLog(@"[XZX] Left game - hiding UI");
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                  [self hideOverlay];
+                              });
+                          }
+                      }
+                      [NSThread sleepForTimeInterval:1.0];
+                  }
+              });
           }
-          
-          @objc func close() { view.isHidden = true }
-          
-          @objc private func handleScriptLoad(_ n: Notification) {
-            if let s = n.object as? String { textView.text = s }
+
+          - (BOOL)viewHasMetalLayer:(UIView *)view {
+              @try {
+                  if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+                  for (CALayer *sub in view.layer.sublayers ?: @[]) {
+                      if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+                      for (CALayer *subsub in sub.sublayers ?: @[]) {
+                          if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+                      }
+                  }
+                  for (UIView *sub in view.subviews) {
+                      if ([self viewHasMetalLayer:sub]) return YES;
+                  }
+              } @catch (NSException *e) {}
+              return NO;
           }
-          
-          public func textViewDidChange(_ textView: UITextView) {
-            UserDefaults.standard.set(textView.text, forKey: "XZXSavedScript")
+
+          - (BOOL)viewHasWebView:(UIView *)view {
+              @try {
+                  NSString *cn = NSStringFromClass([view class]);
+                  if ([cn containsString:@"WKWebView"] ||
+                      [cn containsString:@"WebView"]) return YES;
+                  for (UIView *sub in view.subviews) {
+                      if ([self viewHasWebView:sub]) return YES;
+                  }
+              } @catch (NSException *e) {}
+              return NO;
           }
-        }
-        EOF
-    
-    - name: Create xzx_core.h
-      run: |
-        cat > injector/dylib/xzx_core.h << 'EOF'
-        #ifndef XZX_CORE_H
-        #define XZX_CORE_H
-        
-        #import <Foundation/Foundation.h>
-        #import <UIKit/UIKit.h>
-        
-        @interface XZXCore : NSObject
-        
-        + (instancetype)shared;
-        - (void)initialize;
-        - (void)showOverlay;
-        - (void)hideOverlay;
-        - (BOOL)isOverlayVisible;
-        - (void)startGameMonitoring;
-        - (BOOL)isInGame;
-        
-        @property (nonatomic, strong) UIWindow *overlayWindow;
-        @property (nonatomic, assign) BOOL isInitialized;
-        @property (nonatomic, assign) BOOL inGame;
-        
-        @end
-        
-        #endif
-        EOF
-    
-    - name: Create xzx_core.m
-      run: |
-        cat > injector/dylib/xzx_core.m << 'EOF'
-        #import "xzx_core.h"
-        #import "xzx_hooks.h"
-        #import "Core/LuaExecutor.h"
-        #import <UIKit/UIKit.h>
-        #import <QuartzCore/QuartzCore.h>
-        #import <objc/runtime.h>
-        #import <objc/message.h>
-        
-        static XZXCore *sharedCore = nil;
-        static dispatch_queue_t monitorQueue = nil;
-        static BOOL gameDetectionActive = NO;
-        
-        @implementation XZXCore
-        
-        + (instancetype)shared {
-            static dispatch_once_t once;
-            dispatch_once(&once, ^{ sharedCore = [[self alloc] init]; });
-            return sharedCore;
-        }
-        
-        - (instancetype)init {
-            self = [super init];
-            if (self) {
-                _overlayWindow = nil;
-                _isInitialized = NO;
-                _inGame = NO;
-                monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
-            }
-            return self;
-        }
-        
-        - (void)initialize {
-            if (_isInitialized) return;
-            _isInitialized = YES;
-            InitLua();
-            NSLog(@"[XZX] Initialized, watching for game...");
-            [self startGameMonitoring];
-        }
-        
-        - (void)startGameMonitoring {
-            if (gameDetectionActive) return;
-            gameDetectionActive = YES;
-            
-            dispatch_async(monitorQueue, ^{
-                [NSThread sleepForTimeInterval:3.0];
-                
-                while (YES) {
-                    @autoreleasepool {
-                        BOOL inGame = [self isGameEngineActive];
-                        
-                        if (inGame && !self.inGame) {
-                            self.inGame = YES;
-                            NSLog(@"[XZX] Game detected - showing UI");
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self showOverlay];
-                            });
-                        } else if (!inGame && self.inGame) {
-                            self.inGame = NO;
-                            NSLog(@"[XZX] Left game - hiding UI");
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self hideOverlay];
-                            });
-                        }
-                    }
-                    [NSThread sleepForTimeInterval:1.0];
-                }
-            });
-        }
-        
-        - (BOOL)viewHasMetalLayer:(UIView *)view {
-            @try {
-                if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-                for (CALayer *sub in view.layer.sublayers ?: @[]) {
-                    if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-                    for (CALayer *subsub in sub.sublayers ?: @[]) {
-                        if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-                    }
-                }
-                for (UIView *sub in view.subviews) {
-                    if ([self viewHasMetalLayer:sub]) return YES;
-                }
-            } @catch (NSException *e) {
-                return NO;
-            }
-            return NO;
-        }
-        
-        - (BOOL)isGameEngineActive {
-            @try {
-                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                    UIWindowScene *windowScene = (UIWindowScene *)scene;
-                    for (UIWindow *window in windowScene.windows) {
-                        if ([self viewHasMetalLayer:window]) {
-                            NSLog(@"[XZX] CAMetalLayer found - in game");
-                            return YES;
-                        }
-                    }
-                }
-            } @catch (NSException *e) {
-                NSLog(@"[XZX] Detection error: %@", e);
-            }
-            return NO;
-        }
-        
-        - (void)showOverlay {
-            if (_overlayWindow && !_overlayWindow.hidden) return;
-            
-            dispatch_async(dispatch_get_main_queue(), ^{
-                UIWindowScene *scene = nil;
-                for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-                    if ([s isKindOfClass:[UIWindowScene class]]) {
-                        scene = (UIWindowScene *)s;
-                        break;
-                    }
-                }
-                if (!scene) { NSLog(@"[XZX] No scene found"); return; }
-                
-                UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-                if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
-                if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-                if (!vc) { NSLog(@"[XZX] ERROR: MainViewController not found"); return; }
-                
-                if (!self.overlayWindow) {
-                    self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-                    self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-                    self.overlayWindow.backgroundColor = [UIColor clearColor];
-                    self.overlayWindow.rootViewController = vc;
-                }
-                
-                self.overlayWindow.hidden = NO;
-                [self.overlayWindow makeKeyAndVisible];
-                NSLog(@"[XZX] Overlay shown");
-            });
-        }
-        
-        - (void)hideOverlay {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                self.overlayWindow.hidden = YES;
-                NSLog(@"[XZX] Overlay hidden");
-            });
-        }
-        
-        - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
-        - (BOOL)isInGame { return _inGame; }
-        
-        @end
-        EOF
-    
-    - name: Create xzx_hooks.h
-      run: |
-        cat > injector/dylib/xzx_hooks.h << 'EOF'
-        #ifndef XZX_HOOKS_H
-        #define XZX_HOOKS_H
-        
-        #import <Foundation/Foundation.h>
-        
-        void hook_roblox_functions(void);
-        void unhook_roblox_functions(void);
-        void install_hook(void *target, void *replacement, void **original);
-        void notify_game_joined(void);
-        bool isPlayerInGame(void);
-        
-        #endif
-        EOF
-    
-    - name: Create xzx_hooks.m
-      run: |
-        cat > injector/dylib/xzx_hooks.m << 'EOF'
-        #import "xzx_hooks.h"
-        #import "xzx_core.h"
-        #import <mach/mach.h>
-        #import <mach-o/dyld.h>
-        #import <objc/runtime.h>
-        #import <objc/message.h>
-        
-        static void *original_methods[128];
-        static int method_count = 0;
-        static BOOL hooks_active = NO;
-        
-        void notify_game_joined(void) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if ([[XZXCore shared] isInGame]) {
-                    [[XZXCore shared] showOverlay];
-                }
-            });
-        }
-        
-        void install_hook(void *target, void *replacement, void **original) {
-            if (!target || !replacement) return;
-            if (original) *original = target;
-            original_methods[method_count++] = target;
-            
-            vm_address_t address = (vm_address_t)target;
-            vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-            
-            uint32_t branch = 0x14000000 |
-                (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
-            memcpy(target, &branch, 4);
-            __builtin___clear_cache((char *)target, (char *)target + 4);
-            
-            vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                       VM_PROT_READ | VM_PROT_EXECUTE);
-        }
-        
-        void hook_roblox_functions(void) {
-            if (hooks_active) return;
-            hooks_active = YES;
-        }
-        
-        void unhook_roblox_functions(void) { hooks_active = NO; }
-        
-        bool isPlayerInGame(void) {
-            return [[XZXCore shared] isInGame];
-        }
-        EOF
-    
-    - name: Create entry.m
-      run: |
-        cat > injector/dylib/entry.m << 'EOF'
-        #import <UIKit/UIKit.h>
-        #import "xzx_core.h"
-        
-        __attribute__((constructor))
-        static void entry() {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [[XZXCore shared] initialize];
-            });
-        }
-        EOF
-    
-    - name: Create xzx_antidetection.h (empty stub)
-      run: |
-        cat > injector/dylib/xzx_antidetection.h << 'EOF'
-        #ifndef XZX_ANTIDETECTION_H
-        #define XZX_ANTIDETECTION_H
-        #import <Foundation/Foundation.h>
-        @interface XZXAntiDetection : NSObject
-        + (instancetype)shared;
-        @end
-        #endif
-        EOF
-    
-    - name: Create xzx_antidetection.m (empty stub)
-      run: |
-        cat > injector/dylib/xzx_antidetection.m << 'EOF'
-        #import "xzx_antidetection.h"
-        @implementation XZXAntiDetection
-        + (instancetype)shared { return nil; }
-        @end
-        EOF
-    
-    - name: Compile Objective-C files
-      run: |
-        mkdir -p build
-        FILES="injector/dylib/entry.m injector/dylib/xzx_core.m injector/dylib/xzx_hooks.m injector/dylib/xzx_antidetection.m"
-        for file in $FILES; do
-          if [ -f "$file" ]; then
-            basename=$(basename "$file" .m)
-            xcrun -sdk iphoneos clang -c -arch arm64 -target arm64-apple-ios15.0 \
-              -I./injector/dylib -I./injector/dylib/Core -I${LUA_INCLUDE_DIR} \
-              -o "build/${basename}.o" "$file"
-          fi
-        done
-    
-    - name: Compile C++ files
-      run: |
-        for file in injector/dylib/Core/*.mm; do
-          if [ -f "$file" ]; then
-            basename=$(basename "$file" .mm)
-            xcrun -sdk iphoneos clang++ -c -std=c++17 -arch arm64 -target arm64-apple-ios15.0 \
-              -I./injector/dylib -I./injector/dylib/Core -I${LUA_INCLUDE_DIR} \
-              -o "build/${basename}.o" "$file"
-          fi
-        done
-    
-    - name: Compile Swift file
-      run: |
-        xcrun -sdk iphoneos swiftc -c -module-name XZX \
-          -import-objc-header XZX/XZX-Bridging-Header.h \
-          -I. -I./injector/dylib -I./injector/dylib/Core -I${LUA_INCLUDE_DIR} \
-          -target arm64-apple-ios15.0 \
-          -o build/XZXSwift.o \
-          XZX/MainViewController.swift
-    
-    - name: Link dylib
-      run: |
-        xcrun -sdk iphoneos clang++ -shared -arch arm64 -target arm64-apple-ios15.0 \
-          -framework UIKit -framework Foundation -framework CoreGraphics \
-          -framework WebKit -framework QuartzCore -framework Metal \
-          -L${LUA_LIB_DIR} -Wl,-force_load,${LUA_LIB_DIR}/liblua.a \
-          -Wl,-rpath,/usr/lib/swift -Wl,-rpath,@executable_path/Frameworks \
-          -undefined dynamic_lookup \
-          -o build/executor.dylib build/*.o -lc++
-        echo "✅ Dylib compiled"
-    
-    - name: Extract and modify IPA
-      run: |
-        unzip -q Roblox.ipa -d extracted/
-        cp build/executor.dylib extracted/Payload/Roblox.app/
-        rm -rf extracted/Payload/Roblox.app/_CodeSignature
-        rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
-        ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
-          extracted/Payload/Roblox.app/Roblox \
-          extracted/Payload/Roblox.app/Roblox_patched
-        mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
-        INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
-        plutil -convert xml1 "$INFO_PLIST"
-        /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$INFO_PLIST" 2>/dev/null || \
-        /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
-        plutil -convert binary1 "$INFO_PLIST"
-        cd extracted && zip -qr ../XZX.ipa Payload && cd ..
-    
-    - name: Upload IPA
-      uses: actions/upload-artifact@v4
-      with:
-        name: XZX-Executor
-        path: XZX.ipa
-        if-no-files-found: error
-        retention-days: 90
+
+          // Roblox home screen: CAMetalLayer present AND WKWebView present
+          // Roblox in-game:     CAMetalLayer present AND WKWebView absent
+          - (BOOL)isGameEngineActive {
+              @try {
+                  BOOL hasMetalLayer = NO;
+                  BOOL hasWebView = NO;
+
+                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                      UIWindowScene *windowScene = (UIWindowScene *)scene;
+                      for (UIWindow *window in windowScene.windows) {
+                          if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                          if ([self viewHasWebView:window]) hasWebView = YES;
+                      }
+                  }
+
+                  if (hasMetalLayer && !hasWebView) {
+                      NSLog(@"[XZX] Metal found, no WebView = in game");
+                      return YES;
+                  }
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Detection error: %@", e);
+              }
+              return NO;
+          }
+
+          - (void)showOverlay {
+              if (_overlayWindow && !_overlayWindow.hidden) return;
+
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  UIWindowScene *scene = nil;
+                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                      if ([s isKindOfClass:[UIWindowScene class]]) {
+                          scene = (UIWindowScene *)s;
+                          break;
+                      }
+                  }
+                  if (!scene) { NSLog(@"[XZX] No scene found"); return; }
+
+                  UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+                  if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
+                  if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
+                  if (!vc) { NSLog(@"[XZX] ERROR: MainViewController not found"); return; }
+
+                  if (!self.overlayWindow) {
+                      self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+                      self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+                      self.overlayWindow.backgroundColor = [UIColor clearColor];
+                      self.overlayWindow.rootViewController = vc;
+                  }
+
+                  self.overlayWindow.hidden = NO;
+                  [self.overlayWindow makeKeyAndVisible];
+                  NSLog(@"[XZX] Overlay shown");
+              });
+          }
+
+          - (void)hideOverlay {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  self.overlayWindow.hidden = YES;
+                  NSLog(@"[XZX] Overlay hidden");
+              });
+          }
+
+          - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
+          - (BOOL)isInGame { return _inGame; }
+
+          @end
+          EOF
+
+      - name: Create entry.m
+        run: |
+          cat > injector/dylib/entry.m << 'EOF'
+          #import <UIKit/UIKit.h>
+          #import "xzx_core.h"
+
+          __attribute__((constructor))
+          static void entry() {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [[XZXCore shared] initialize];
+              });
+          }
+          EOF
+
+      - name: Create xzx_hooks.h
+        run: |
+          cat > injector/dylib/xzx_hooks.h << 'EOF'
+          #ifndef XZX_HOOKS_H
+          #define XZX_HOOKS_H
+          #include <stdbool.h>
+          void hook_roblox_functions(void);
+          void unhook_roblox_functions(void);
+          void install_hook(void *target, void *replacement, void **original);
+          void notify_game_joined(void);
+          bool isPlayerInGame(void);
+          #endif
+          EOF
+
+      - name: Create xzx_hooks.m
+        run: |
+          cat > injector/dylib/xzx_hooks.m << 'EOF'
+          #import "xzx_hooks.h"
+          #import "xzx_core.h"
+          #import <mach/mach.h>
+          #import <mach-o/dyld.h>
+          #import <objc/runtime.h>
+          #import <objc/message.h>
+
+          static void *original_methods[128];
+          static int method_count = 0;
+          static BOOL hooks_active = NO;
+
+          void notify_game_joined(void) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  if (![[XZXCore shared] isInGame]) {
+                      [[XZXCore shared] showOverlay];
+                  }
+              });
+          }
+
+          void install_hook(void *target, void *replacement, void **original) {
+              if (!target || !replacement) return;
+              if (original) *original = target;
+              original_methods[method_count++] = target;
+              vm_address_t address = (vm_address_t)target;
+              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
+                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+              uint32_t branch = 0x14000000 |
+                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
+              memcpy(target, &branch, 4);
+              __builtin___clear_cache((char *)target, (char *)target + 4);
+              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
+                         VM_PROT_READ | VM_PROT_EXECUTE);
+          }
+
+          void hook_roblox_functions(void) {
+              if (hooks_active) return;
+              hooks_active = YES;
+          }
+
+          void unhook_roblox_functions(void) { hooks_active = NO; }
+
+          bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
+          EOF
+
+      - name: Create xzx_injection_randomizer.h
+        run: |
+          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
+          #ifndef XZX_INJECTION_RANDOMIZER_H
+          #define XZX_INJECTION_RANDOMIZER_H
+          #import <Foundation/Foundation.h>
+          @interface XZXInjectionRandomizer : NSObject
+          + (instancetype)shared;
+          - (void)randomizeNextInjection;
+          - (void)randomizeInjectionTiming;
+          - (double)randomnessScore;
+          - (BOOL)isPatternDetectable;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_injection_randomizer.m
+        run: |
+          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
+          #import "xzx_injection_randomizer.h"
+          @implementation XZXInjectionRandomizer
+          + (instancetype)shared {
+              static XZXInjectionRandomizer *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          - (void)randomizeNextInjection {}
+          - (void)randomizeInjectionTiming {}
+          - (double)randomnessScore { return 1.0; }
+          - (BOOL)isPatternDetectable { return NO; }
+          @end
+          EOF
+
+      - name: Create xzx_obfuscator.h
+        run: |
+          cat > injector/dylib/xzx_obfuscator.h << 'EOF'
+          #ifndef XZX_OBFUSCATOR_H
+          #define XZX_OBFUSCATOR_H
+          #import <Foundation/Foundation.h>
+          NSString* xzx_obfuscate(const char* input);
+          @interface XZXObfuscator : NSObject
+          + (instancetype)shared;
+          - (NSString*)decrypt:(NSString*)encrypted;
+          - (NSString*)encrypt:(NSString*)plain;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_obfuscator.m
+        run: |
+          cat > injector/dylib/xzx_obfuscator.m << 'EOF'
+          #import "xzx_obfuscator.h"
+          @implementation XZXObfuscator
+          + (instancetype)shared {
+              static XZXObfuscator *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          - (NSString*)decrypt:(NSString*)e {
+              NSMutableString *d = [NSMutableString string];
+              for (int i = 0; i < (int)e.length; i++) {
+                  unichar c = [e characterAtIndex:i] ^ 0xAA;
+                  [d appendFormat:@"%C", c];
+              }
+              return d;
+          }
+          - (NSString*)encrypt:(NSString*)p {
+              NSMutableString *r = [NSMutableString string];
+              for (int i = 0; i < (int)p.length; i++) {
+                  unichar c = [p characterAtIndex:i] ^ 0xAA;
+                  [r appendFormat:@"%C", c];
+              }
+              return r;
+          }
+          @end
+          NSString* xzx_obfuscate(const char* input) {
+              NSMutableString *result = [NSMutableString string];
+              int key = 0xAA;
+              for (size_t i = 0; i < strlen(input); i++) {
+                  char c = input[i] ^ key;
+                  [result appendFormat:@"%c", c];
+                  key = (key * 31) & 0xFF;
+              }
+              return result;
+          }
+          EOF
+
+      - name: Create xzx_antidetection.h
+        run: |
+          cat > injector/dylib/xzx_antidetection.h << 'EOF'
+          #ifndef XZX_ANTIDETECTION_H
+          #define XZX_ANTIDETECTION_H
+          #import <Foundation/Foundation.h>
+          @interface XZXAntiDetection : NSObject
+          + (instancetype)shared;
+          - (void)applyBypasses;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_antidetection.m
+        run: |
+          cat > injector/dylib/xzx_antidetection.m << 'EOF'
+          #import "xzx_antidetection.h"
+          @implementation XZXAntiDetection
+          + (instancetype)shared {
+              static XZXAntiDetection *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          - (void)applyBypasses {}
+          @end
+          EOF
+
+      - name: Create xzx_ban_protection.h
+        run: |
+          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
+          #ifndef XZX_BAN_PROTECTION_H
+          #define XZX_BAN_PROTECTION_H
+          #import <Foundation/Foundation.h>
+          @interface XZXBanProtection : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_ban_protection.m
+        run: |
+          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
+          #import "xzx_ban_protection.h"
+          @implementation XZXBanProtection
+          + (instancetype)shared {
+              static XZXBanProtection *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          @end
+          EOF
+
+      - name: Create xzx_hook_manager.h
+        run: |
+          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
+          #ifndef XZX_HOOK_MANAGER_H
+          #define XZX_HOOK_MANAGER_H
+          #import <Foundation/Foundation.h>
+          @interface XZXHookManager : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_hook_manager.m
+        run: |
+          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
+          #import "xzx_hook_manager.h"
+          @implementation XZXHookManager
+          + (instancetype)shared {
+              static XZXHookManager *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          @end
+          EOF
+
+      - name: Create xzx_physics_bypass.h
+        run: |
+          cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
+          #ifndef XZX_PHYSICS_BYPASS_H
+          #define XZX_PHYSICS_BYPASS_H
+          #import <Foundation/Foundation.h>
+          @interface XZXPhysicsBypass : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_physics_bypass.m
+        run: |
+          cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
+          #import "xzx_physics_bypass.h"
+          @implementation XZXPhysicsBypass
+          + (instancetype)shared {
+              static XZXPhysicsBypass *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          @end
+          EOF
+
+      - name: Create xzx_memory_obfuscator.h
+        run: |
+          cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
+          #ifndef XZX_MEMORY_OBFUSCATOR_H
+          #define XZX_MEMORY_OBFUSCATOR_H
+          #import <Foundation/Foundation.h>
+          @interface XZXMemoryObfuscator : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_memory_obfuscator.m
+        run: |
+          cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
+          #import "xzx_memory_obfuscator.h"
+          @implementation XZXMemoryObfuscator
+          + (instancetype)shared {
+              static XZXMemoryObfuscator *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          @end
+          EOF
+
+      - name: Create xzx_security.h
+        run: |
+          cat > injector/dylib/xzx_security.h << 'EOF'
+          #ifndef XZX_SECURITY_H
+          #define XZX_SECURITY_H
+          #import <Foundation/Foundation.h>
+          @interface XZXSecurity : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_security.m
+        run: |
+          cat > injector/dylib/xzx_security.m << 'EOF'
+          #import "xzx_security.h"
+          @implementation XZXSecurity
+          + (instancetype)shared {
+              static XZXSecurity *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          @end
+          EOF
+
+      - name: Create xzx_functions.h
+        run: |
+          cat > injector/dylib/xzx_functions.h << 'EOF'
+          #ifndef XZX_FUNCTIONS_H
+          #define XZX_FUNCTIONS_H
+          #import <Foundation/Foundation.h>
+          @interface XZXFunctions : NSObject
+          + (instancetype)shared;
+          @end
+          #endif
+          EOF
+
+      - name: Create xzx_functions.m
+        run: |
+          cat > injector/dylib/xzx_functions.m << 'EOF'
+          #import "xzx_functions.h"
+          @implementation XZXFunctions
+          + (instancetype)shared {
+              static XZXFunctions *instance = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+              return instance;
+          }
+          @end
+          EOF
+
+      - name: Compile Objective-C files
+        run: |
+          mkdir -p build
+          FILES="
+            injector/dylib/entry.m
+            injector/dylib/xzx_core.m
+            injector/dylib/xzx_antidetection.m
+            injector/dylib/xzx_obfuscator.m
+            injector/dylib/xzx_hooks.m
+            injector/dylib/xzx_ban_protection.m
+            injector/dylib/xzx_hook_manager.m
+            injector/dylib/xzx_injection_randomizer.m
+            injector/dylib/xzx_physics_bypass.m
+            injector/dylib/xzx_memory_obfuscator.m
+            injector/dylib/xzx_security.m
+            injector/dylib/xzx_functions.m
+          "
+          for file in $FILES; do
+            if [ -f "$file" ]; then
+              xcrun -sdk iphoneos clang -c \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/$(basename "$file" .m).o" "$file" -target arm64-apple-ios15.0
+            fi
+          done
+
+      - name: Compile C++ files
+        run: |
+          for file in injector/dylib/Core/*.mm; do
+            if [ -f "$file" ]; then
+              xcrun -sdk iphoneos clang++ -c -std=c++11 \
+                -I./injector/dylib -I./injector/dylib/Core -I${{ env.LUA_INCLUDE_DIR }} \
+                -o "build/$(basename "$file" .mm).o" "$file" -target arm64-apple-ios15.0
+            fi
+          done
+
+      - name: Compile Swift file
+        run: |
+          xcrun -sdk iphoneos swiftc -c \
+            -module-name XZX \
+            -import-objc-header XZX/XZX-Bridging-Header.h \
+            -I . -I ./injector/dylib -I ./injector/dylib/Core -I ${{ env.LUA_INCLUDE_DIR }} \
+            -target arm64-apple-ios15.0 \
+            -o build/XZXSwift.o \
+            XZX/MainViewController.swift
+
+      - name: Link dylib
+        run: |
+          xcrun -sdk iphoneos clang++ -shared \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
+            -framework WebKit -framework QuartzCore -framework Metal \
+            -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
+            -Xlinker -rpath -Xlinker /usr/lib/swift \
+            -Xlinker -rpath -Xlinker @executable_path/Frameworks \
+            -undefined dynamic_lookup \
+            -o build/executor.dylib build/*.o -lc++ -target arm64-apple-ios15.0
+          echo "✅ Dylib compiled"
+
+      - name: Extract and modify IPA
+        run: |
+          unzip -q Roblox.ipa -d extracted/
+          cp build/executor.dylib extracted/Payload/Roblox.app/
+          rm -rf extracted/Payload/Roblox.app/_CodeSignature
+          rm -f extracted/Payload/Roblox.app/embedded.mobileprovision
+          ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
+            extracted/Payload/Roblox.app/Roblox \
+            extracted/Payload/Roblox.app/Roblox_patched
+          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
+          INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
+          plutil -convert xml1 "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$INFO_PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
+          plutil -convert binary1 "$INFO_PLIST"
+          cd extracted && zip -qr ../XZX.ipa Payload/ && cd ..
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XZX-Executor
+          path: XZX.ipa
+          if-no-files-found: error
+          retention-days: 90

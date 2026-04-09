@@ -5,6 +5,7 @@
 #import <UIKit/UIKit.h>
 
 @interface XZXCore : NSObject
+
 + (instancetype)shared;
 - (void)initialize;
 - (void)showOverlay;
@@ -12,9 +13,13 @@
 - (BOOL)isOverlayVisible;
 - (void)startGameMonitoring;
 - (BOOL)isInGame;
+
 @property (nonatomic, strong) UIWindow *overlayWindow;
 @property (nonatomic, assign) BOOL isInitialized;
 @property (nonatomic, assign) BOOL inGame;
+@property (nonatomic, assign) NSInteger positiveCount;
+@property (nonatomic, assign) NSInteger negativeCount;
+
 @end
 
 #endif

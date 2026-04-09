@@ -41,6 +41,7 @@ static const NSInteger kDebounceThreshold = 3;
     if (_isInitialized) return;
     _isInitialized = YES;
     InitLua();
+    if (_overlayWindow) _overlayWindow.hidden = YES;
     NSLog(@"[XZX] Initialized, watching for game...");
     [self startGameMonitoring];
 }
@@ -67,7 +68,7 @@ static const NSInteger kDebounceThreshold = 3;
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] In-game confirmed — placeId > 0");
+                    NSLog(@"[XZX] In-game confirmed");
                     dispatch_after(
                         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
                         dispatch_get_main_queue(), ^{
@@ -78,7 +79,7 @@ static const NSInteger kDebounceThreshold = 3;
                 if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game — placeId = 0");
+                    NSLog(@"[XZX] Left game");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -89,19 +90,26 @@ static const NSInteger kDebounceThreshold = 3;
     });
 }
 
-// FIX: old code scanned for CAMetalLayer which is ALSO present on the Roblox
-// home screen (Metal renders avatars/backgrounds there too) — so the overlay
-// fired immediately on launch. Now we read RobloxDataModel.placeId instead:
-// 0 on the home screen, non-zero only inside an actual game session.
 - (BOOL)isInGameCheck {
     @try {
-        Class dmClass = NSClassFromString(@"RBXDataModel");
-        if (!dmClass) dmClass = NSClassFromString(@"RobloxDataModel");
+        NSArray *classNames = @[
+            @"RBXDataModel",
+            @"RobloxDataModel",
+            @"DataModel",
+            @"RBXGame",
+            @"RobloxGame"
+        ];
+
+        Class dmClass = nil;
+        for (NSString *name in classNames) {
+            dmClass = NSClassFromString(name);
+            if (dmClass) break;
+        }
 
         if (dmClass) {
             return (BOOL)isPlayerInGame();
         }
-        // DataModel not loaded yet — Roblox still bootstrapping, return NO safely.
+
         return NO;
     } @catch (NSException *e) {
         NSLog(@"[XZX] isInGameCheck error: %@", e);

@@ -29,7 +29,7 @@ static const NSInteger kDebounceThreshold = 3;
     if (self) {
         _overlayWindow = nil;
         _isInitialized = NO;
-        _inGame        = NO;
+        _inGame = NO;
         _positiveCount = 0;
         _negativeCount = 0;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
@@ -41,7 +41,10 @@ static const NSInteger kDebounceThreshold = 3;
     if (_isInitialized) return;
     _isInitialized = YES;
     InitLua();
+    
+    // Ensure overlay is hidden before monitoring starts
     if (_overlayWindow) _overlayWindow.hidden = YES;
+    
     NSLog(@"[XZX] Initialized, watching for game...");
     [self startGameMonitoring];
 }
@@ -49,14 +52,15 @@ static const NSInteger kDebounceThreshold = 3;
 - (void)startGameMonitoring {
     if (gameDetectionActive) return;
     gameDetectionActive = YES;
-
+    
     dispatch_async(monitorQueue, ^{
-        [NSThread sleepForTimeInterval:5.0];
-
+        // Wait 8 seconds for Roblox to fully bootstrap (login/menu)
+        [NSThread sleepForTimeInterval:8.0];
+        
         while (YES) {
             @autoreleasepool {
                 BOOL raw = [self isInGameCheck];
-
+                
                 if (raw) {
                     self.positiveCount++;
                     self.negativeCount = 0;
@@ -64,22 +68,20 @@ static const NSInteger kDebounceThreshold = 3;
                     self.negativeCount++;
                     self.positiveCount = 0;
                 }
-
+                
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] In-game confirmed");
-                    dispatch_after(
-                        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
-                        dispatch_get_main_queue(), ^{
-                            [self showOverlay];
-                        });
+                    NSLog(@"[XZX] Game detected (placeId > 0)");
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self showOverlay];
+                    });
                 }
-
+                
                 if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game");
+                    NSLog(@"[XZX] Left game (placeId = 0)");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -92,24 +94,25 @@ static const NSInteger kDebounceThreshold = 3;
 
 - (BOOL)isInGameCheck {
     @try {
+        // Try all known Roblox DataModel class names
         NSArray *classNames = @[
-            @"RBXDataModel",
             @"RobloxDataModel",
+            @"RBXDataModel",
             @"DataModel",
             @"RBXGame",
             @"RobloxGame"
         ];
-
+        
         Class dmClass = nil;
         for (NSString *name in classNames) {
             dmClass = NSClassFromString(name);
             if (dmClass) break;
         }
-
+        
         if (dmClass) {
             return (BOOL)isPlayerInGame();
         }
-
+        
         return NO;
     } @catch (NSException *e) {
         NSLog(@"[XZX] isInGameCheck error: %@", e);
@@ -123,38 +126,67 @@ static const NSInteger kDebounceThreshold = 3;
         return;
     }
     if (_overlayWindow && !_overlayWindow.hidden) return;
-
-    UIWindowScene *scene = (UIWindowScene *)
-        [UIApplication sharedApplication].connectedScenes.allObjects.firstObject;
-    if (!scene) { NSLog(@"[XZX] No scene"); return; }
-
-    if (!self.overlayWindow) {
-        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *scene = nil;
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) {
+                scene = (UIWindowScene *)s;
+                break;
+            }
+        }
+        if (!scene) {
+            NSLog(@"[XZX] No window scene found");
+            return;
+        }
+        
+        UIViewController *vc = nil;
+        vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-        if (!vc) { NSLog(@"[XZX] ERROR: Could not resolve MainViewController"); return; }
-
-        self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-        self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-        self.overlayWindow.backgroundColor = [UIColor clearColor];
-        self.overlayWindow.hidden = YES;
-        self.overlayWindow.rootViewController = vc;
-    }
-
-    self.overlayWindow.hidden = NO;
-    [self.overlayWindow makeKeyAndVisible];
-    NSLog(@"[XZX] Overlay shown");
+        if (!vc) {
+            NSLog(@"[XZX] ERROR: Could not resolve MainViewController");
+            return;
+        }
+        
+        if (!self.overlayWindow) {
+            self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+            self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+            self.overlayWindow.backgroundColor = [UIColor clearColor];
+            self.overlayWindow.rootViewController = vc;
+            self.overlayWindow.hidden = YES;
+        }
+        
+        self.overlayWindow.hidden = NO;
+        [self.overlayWindow makeKeyAndVisible];
+        NSLog(@"[XZX] Overlay shown");
+    });
 }
 
 - (void)hideOverlay {
-    if (!_overlayWindow) return;
-    _overlayWindow.hidden = YES;
-    UIWindow *robloxWin = [UIApplication sharedApplication].windows.firstObject;
-    if (robloxWin) [robloxWin makeKeyWindow];
-    NSLog(@"[XZX] Overlay hidden");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.overlayWindow) {
+            self.overlayWindow.hidden = YES;
+            // Return key focus to Roblox's window
+            UIWindow *robloxWindow = nil;
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    UIWindowScene *ws = (UIWindowScene *)scene;
+                    for (UIWindow *win in ws.windows) {
+                        if (win != self.overlayWindow) {
+                            robloxWindow = win;
+                            break;
+                        }
+                    }
+                }
+            }
+            [robloxWindow makeKeyWindow];
+        }
+        NSLog(@"[XZX] Overlay hidden");
+    });
 }
 
 - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
-- (BOOL)isInGame         { return _inGame; }
+- (BOOL)isInGame { return _inGame; }
 
 @end

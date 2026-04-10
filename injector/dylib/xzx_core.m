@@ -1,13 +1,15 @@
 #import "xzx_core.h"
-#import "xzx_hooks.h"
-#import "xzx_uibridge.h"
 #import "Core/LuaExecutor.h"
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
-static const NSInteger kDebounceThreshold = 3;
+static const NSInteger kDebounceShow = 2;   // 2 seconds to show (fast)
+static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids flicker)
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
@@ -25,8 +27,9 @@ static const NSInteger kDebounceThreshold = 3;
 - (instancetype)init {
     self = [super init];
     if (self) {
+        _overlayWindow = nil;
         _isInitialized = NO;
-        _inGame        = NO;
+        _inGame = NO;
         _positiveCount = 0;
         _negativeCount = 0;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
@@ -37,9 +40,11 @@ static const NSInteger kDebounceThreshold = 3;
 - (void)initialize {
     if (_isInitialized) return;
     _isInitialized = YES;
-    InitLua();
-    NSLog(@"[XZX] Lua initialized");
-    [self startGameMonitoring];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        InitLua();
+        NSLog(@"[XZX] Lua initialized");
+        [self startGameMonitoring];
+    });
 }
 
 - (void)startGameMonitoring {
@@ -47,20 +52,18 @@ static const NSInteger kDebounceThreshold = 3;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait for Roblox's runtime + DataModel to finish loading.
-        // Without this, isPlayerInGame() always returns false for the first
-        // few seconds, positiveCount never increments, BUT if the undefined
-        // symbol bug existed it would fire immediately. With the correct
-        // isPlayerInGame() now in place, this delay ensures we don't query
-        // DataModel before it exists.
-        [NSThread sleepForTimeInterval:5.0];
-        NSLog(@"[XZX] Monitoring placeId...");
+        [NSThread sleepForTimeInterval:4.0];
+        NSLog(@"[XZX] Detection started");
 
         while (YES) {
             @autoreleasepool {
-                BOOL inGameNow = isPlayerInGame();
+                __block BOOL inGame = NO;
 
-                if (inGameNow) {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    inGame = [self isGameEngineActive];
+                });
+
+                if (inGame) {
                     self.positiveCount++;
                     self.negativeCount = 0;
                 } else {
@@ -68,22 +71,20 @@ static const NSInteger kDebounceThreshold = 3;
                     self.positiveCount = 0;
                 }
 
-                // Need 3 consecutive positives before showing UI.
-                // Prevents false triggers during loading screen transitions.
-                if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
+                // Show UI after 2 consecutive positives
+                if (!self.inGame && self.positiveCount >= kDebounceShow) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected — creating in-game UI");
+                    NSLog(@"[XZX] Game detected - showing UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self showOverlay];
                     });
                 }
-                // Need 3 consecutive negatives before hiding UI.
-                // Prevents flickering on brief disconnects or teleports.
-                else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
+                // Hide UI only after 5 consecutive negatives (prevents flicker during loading/teleport)
+                else if (self.inGame && self.negativeCount >= kDebounceHide) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game — removing UI");
+                    NSLog(@"[XZX] Left game - hiding UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -94,30 +95,103 @@ static const NSInteger kDebounceThreshold = 3;
     });
 }
 
-- (void)showOverlay {
-    if (!self.inGame) {
-        NSLog(@"[XZX] showOverlay called while not in game — ignored");
-        return;
+- (BOOL)isGameEngineActive {
+    @try {
+        BOOL statusBarHidden = NO;
+        NSInteger buttonCount = 0;
+        BOOL hasMetalLayer = NO;
+
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+
+            if (ws.statusBarManager.statusBarHidden) {
+                statusBarHidden = YES;
+            }
+
+            for (UIWindow *window in ws.windows) {
+                buttonCount += [self countButtonsInView:window];
+                if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+            }
+        }
+
+        // In-game = Metal + status bar hidden + few buttons
+        if (hasMetalLayer && statusBarHidden && buttonCount < 6) {
+            return YES;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[XZX] Detection error: %@", e);
     }
-    [[XZXUIBridge shared] createInGameUI];
-    [[XZXUIBridge shared] showUI];
-    static dispatch_once_t onceBridge;
-    dispatch_once(&onceBridge, ^{
-        setupRemoteEventBridge();
+    return NO;
+}
+
+- (BOOL)viewHasMetalLayer:(UIView *)view {
+    @try {
+        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+        for (CALayer *sub in view.layer.sublayers ?: @[]) {
+            if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+            for (CALayer *subsub in sub.sublayers ?: @[]) {
+                if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+            }
+        }
+        for (UIView *sub in view.subviews) {
+            if ([self viewHasMetalLayer:sub]) return YES;
+        }
+    } @catch (NSException *e) {}
+    return NO;
+}
+
+- (NSInteger)countButtonsInView:(UIView *)view {
+    NSInteger count = 0;
+    @try {
+        if ([view isKindOfClass:[UIButton class]]) count++;
+        if (count > 10) return count; // early exit
+        for (UIView *sub in view.subviews) {
+            count += [self countButtonsInView:sub];
+            if (count > 10) return count;
+        }
+    } @catch (NSException *e) {}
+    return count;
+}
+
+- (void)showOverlay {
+    if (_overlayWindow && !_overlayWindow.hidden) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *scene = nil;
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) {
+                scene = (UIWindowScene *)s;
+                break;
+            }
+        }
+        if (!scene) { NSLog(@"[XZX] No scene"); return; }
+
+        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+        if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
+        if (!vc) { NSLog(@"[XZX] VC not found"); return; }
+
+        if (!self.overlayWindow) {
+            self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+            self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+            self.overlayWindow.backgroundColor = [UIColor clearColor];
+            self.overlayWindow.rootViewController = vc;
+        }
+
+        self.overlayWindow.hidden = NO;
+        [self.overlayWindow makeKeyAndVisible];
+        NSLog(@"[XZX] Overlay shown");
     });
 }
 
 - (void)hideOverlay {
-    [[XZXUIBridge shared] hideUI];
-    [[XZXUIBridge shared] destroyInGameUI];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.overlayWindow.hidden = YES;
+        NSLog(@"[XZX] Overlay hidden");
+    });
 }
 
-- (BOOL)isOverlayVisible {
-    return self.inGame;
-}
-
-- (BOOL)isInGame {
-    return _inGame;
-}
+- (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
+- (BOOL)isInGame { return _inGame; }
 
 @end

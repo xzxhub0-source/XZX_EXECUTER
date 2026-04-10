@@ -8,8 +8,11 @@
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
-static const NSInteger kDebounceShow = 2;   // 2 consecutive positives to show
-static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide (survives loading→game transition)
+
+// 2 positives to show, 20 negatives to hide.
+// 20s covers any loading→game transition without flickering.
+static const NSInteger kDebounceShow = 2;
+static const NSInteger kDebounceHide = 20;
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
@@ -53,15 +56,14 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait a shorter time (4 seconds) to start detection earlier,
-        // as we can now reliably filter out the loading screen.
-        [NSThread sleepForTimeInterval:4.0];
+        // 12 seconds: fully clears the Roblox loading screen before
+        // detection starts so we never show during loading.
+        [NSThread sleepForTimeInterval:12.0];
         NSLog(@"[XZX] Detection started");
 
         while (YES) {
             @autoreleasepool {
                 __block BOOL inGame = NO;
-
                 dispatch_sync(dispatch_get_main_queue(), ^{
                     inGame = [self isGameEngineActive];
                 });
@@ -74,20 +76,17 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
                     self.positiveCount = 0;
                 }
 
-                // Show after kDebounceShow consecutive positives
                 if (!self.inGame && self.positiveCount >= kDebounceShow) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected - showing UI");
+                    NSLog(@"[XZX] Game detected — showing UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self showOverlay];
                     });
-                }
-                // Hide only after kDebounceHide consecutive negatives
-                else if (self.inGame && self.negativeCount >= kDebounceHide) {
+                } else if (self.inGame && self.negativeCount >= kDebounceHide) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game - hiding UI");
+                    NSLog(@"[XZX] Left game — hiding UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -98,13 +97,14 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
     });
 }
 
-// THE FINAL DETECTION LOGIC — for Roblox 2.714 on iOS
+// Detection: Metal rendering + fullscreen (status bar hidden) + few native buttons.
+// DO NOT add loading-screen text checks — they match in-game labels too and
+// will permanently break detection.
 - (BOOL)isGameEngineActive {
     @try {
         BOOL statusBarHidden = NO;
         NSInteger buttonCount = 0;
         BOOL hasMetalLayer = NO;
-        BOOL isLoadingScreen = NO; // NEW: Detect the loading screen
 
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
@@ -113,39 +113,16 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
             if (ws.statusBarManager.statusBarHidden) {
                 statusBarHidden = YES;
             }
-
             for (UIWindow *window in ws.windows) {
                 buttonCount += [self countButtonsInView:window];
                 if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
-                // NEW: Check for the "Loading..." text in CoreGui
-                if ([self viewHasLoadingText:window]) isLoadingScreen = YES;
             }
         }
 
-        // In-game = Metal + status bar hidden + few buttons AND NOT on loading screen
-        if (hasMetalLayer && statusBarHidden && buttonCount < 6 && !isLoadingScreen) {
-            return YES;
-        }
+        return (hasMetalLayer && statusBarHidden && buttonCount < 6);
     } @catch (NSException *e) {
         NSLog(@"[XZX] Detection error: %@", e);
     }
-    return NO;
-}
-
-// NEW: Recursively search for "Loading..." text in the view hierarchy
-- (BOOL)viewHasLoadingText:(UIView *)view {
-    @try {
-        if ([view isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)view;
-            if ([label.text containsString:@"Loading"] || [label.text containsString:@"..."]) {
-                NSLog(@"[XZX] Loading screen text detected");
-                return YES;
-            }
-        }
-        for (UIView *sub in view.subviews) {
-            if ([self viewHasLoadingText:sub]) return YES;
-        }
-    } @catch (NSException *e) {}
     return NO;
 }
 
@@ -179,40 +156,38 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
 }
 
 - (void)showOverlay {
+    // Already visible — nothing to do
     if (_overlayWindow && !_overlayWindow.hidden) return;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindowScene *scene = nil;
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                scene = (UIWindowScene *)s;
-                break;
-            }
+    UIWindowScene *scene = nil;
+    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+        if ([s isKindOfClass:[UIWindowScene class]]) {
+            scene = (UIWindowScene *)s;
+            break;
         }
-        if (!scene) { NSLog(@"[XZX] No scene"); return; }
+    }
+    if (!scene) { NSLog(@"[XZX] No scene found"); return; }
 
+    // Only create the window once — reuse on subsequent shows
+    if (!self.overlayWindow) {
         UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-        if (!vc) { NSLog(@"[XZX] VC not found"); return; }
+        if (!vc) { NSLog(@"[XZX] VC class not found"); return; }
 
-        if (!self.overlayWindow) {
-            self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-            self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-            self.overlayWindow.backgroundColor = [UIColor clearColor];
-            self.overlayWindow.rootViewController = vc;
-        }
+        self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+        self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+        self.overlayWindow.backgroundColor = [UIColor clearColor];
+        self.overlayWindow.rootViewController = vc;
+    }
 
-        self.overlayWindow.hidden = NO;
-        [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay shown");
-    });
+    self.overlayWindow.hidden = NO;
+    [self.overlayWindow makeKeyAndVisible];
+    NSLog(@"[XZX] Overlay shown");
 }
 
 - (void)hideOverlay {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.overlayWindow.hidden = YES;
-        NSLog(@"[XZX] Overlay hidden");
-    });
+    self.overlayWindow.hidden = YES;
+    NSLog(@"[XZX] Overlay hidden");
 }
 
 - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }

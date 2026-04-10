@@ -3,6 +3,6 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import "../injector/dylib/Core/LuaExecutor.h"
+#include "injector/dylib/Core/LuaExecutor.h"
 
 #endif

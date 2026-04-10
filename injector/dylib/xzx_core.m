@@ -13,10 +13,6 @@ static const NSInteger kDebounceThreshold = 3;
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
 @property (nonatomic, assign) NSInteger negativeCount;
-// Gate: must see Roblox home screen WebView before in-game detection is trusted.
-// Prevents the launch loading screen (Metal=YES, WebView=NO) from
-// falsely triggering in-game detection on first open.
-@property (nonatomic, assign) BOOL hasSeenHomeScreen;
 @end
 
 @implementation XZXCore
@@ -35,7 +31,6 @@ static const NSInteger kDebounceThreshold = 3;
         _inGame = NO;
         _positiveCount = 0;
         _negativeCount = 0;
-        _hasSeenHomeScreen = NO;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -56,63 +51,54 @@ static const NSInteger kDebounceThreshold = 3;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait for Roblox to finish its initial launch
-        [NSThread sleepForTimeInterval:5.0];
-
-        // Fallback: if WebView never appears within 15s, unlock detection anyway.
-        // This handles Roblox versions that don't use WKWebView for the home screen.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            if (!self.hasSeenHomeScreen) {
-                self.hasSeenHomeScreen = YES;
-                NSLog(@"[XZX] Home screen fallback timer fired - detection unlocked");
-            }
-        });
+        // Wait for Roblox to load
+        [NSThread sleepForTimeInterval:8.0];
+        NSLog(@"[XZX] Monitoring for CAMetalLayer...");
 
         while (YES) {
             @autoreleasepool {
-                __block BOOL hasMetalLayer = NO;
-                __block BOOL hasWebView = NO;
+                __block BOOL hasMetal = NO;
 
                 dispatch_sync(dispatch_get_main_queue(), ^{
+                    // Scan ALL windows and their view hierarchies
                     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
                         if ([scene isKindOfClass:[UIWindowScene class]]) {
                             UIWindowScene *ws = (UIWindowScene *)scene;
                             for (UIWindow *window in ws.windows) {
-                                if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
-                                if ([self viewHasWebView:window]) hasWebView = YES;
+                                if ([self scanForMetalLayer:window]) {
+                                    hasMetal = YES;
+                                    break;
+                                }
                             }
                         }
                     }
                 });
 
-                if (!self.hasSeenHomeScreen && hasWebView) {
-                    self.hasSeenHomeScreen = YES;
-                    NSLog(@"[XZX] Home screen confirmed - detection active");
-                }
-
-                BOOL raw = self.hasSeenHomeScreen && hasMetalLayer && !hasWebView;
-
-                if (raw) {
+                if (hasMetal) {
                     self.positiveCount++;
                     self.negativeCount = 0;
+                    if (self.positiveCount == 1) {
+                        NSLog(@"[XZX] CAMetalLayer detected");
+                    }
                 } else {
                     self.negativeCount++;
                     self.positiveCount = 0;
                 }
 
+                // Show after 3 consistent Metal detections
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected - showing UI");
+                    NSLog(@"[XZX] Game detected - showing overlay");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self showOverlay];
                     });
-                } else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
+                }
+                // Hide after 3 consistent absences
+                else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    self.hasSeenHomeScreen = NO;
-                    NSLog(@"[XZX] Left game - hiding UI");
+                    NSLog(@"[XZX] Game left - hiding overlay");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -123,41 +109,35 @@ static const NSInteger kDebounceThreshold = 3;
     });
 }
 
-// Recursively checks for CAMetalLayer. Must be called on main thread.
-- (BOOL)viewHasMetalLayer:(UIView *)view {
+// Recursively scan entire view hierarchy for CAMetalLayer
+- (BOOL)scanForMetalLayer:(UIView *)view {
     @try {
-        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-        for (CALayer *sub in view.layer.sublayers ?: @[]) {
-            if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-            for (CALayer *subsub in sub.sublayers ?: @[]) {
-                if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+        // Check the view's main layer
+        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
+            return YES;
+        }
+        // Check all sublayers
+        for (CALayer *sublayer in view.layer.sublayers) {
+            if ([sublayer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
+                return YES;
             }
         }
-        for (UIView *sub in view.subviews) {
-            if ([self viewHasMetalLayer:sub]) return YES;
+        // Recursively check all subviews
+        for (UIView *subview in view.subviews) {
+            if ([self scanForMetalLayer:subview]) {
+                return YES;
+            }
         }
-    } @catch (NSException *e) {}
+    } @catch (NSException *e) {
+        // Silently fail
+    }
     return NO;
 }
 
-// Recursively checks for WKWebView. Must be called on main thread.
-- (BOOL)viewHasWebView:(UIView *)view {
-    @try {
-        NSString *cn = NSStringFromClass([view class]);
-        if ([cn containsString:@"WKWebView"] ||
-            [cn containsString:@"WebView"]) return YES;
-        for (UIView *sub in view.subviews) {
-            if ([self viewHasWebView:sub]) return YES;
-        }
-    } @catch (NSException *e) {}
-    return NO;
-}
-
-- (BOOL)isGameEngineActive {
-    // This method is now unused — logic moved into startGameMonitoring
-    // for efficiency. Kept to satisfy header declaration.
-    return self.inGame;
-}
+// Keep for header compatibility
+- (BOOL)viewHasMetalLayer:(UIView *)view { return [self scanForMetalLayer:view]; }
+- (BOOL)viewHasWebView:(UIView *)view { return NO; }
+- (BOOL)isGameEngineActive { return self.inGame; }
 
 - (void)showOverlay {
     if (_overlayWindow && !_overlayWindow.hidden) return;
@@ -170,12 +150,11 @@ static const NSInteger kDebounceThreshold = 3;
                 break;
             }
         }
-        if (!scene) { NSLog(@"[XZX] No scene found"); return; }
+        if (!scene) { return; }
 
         UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-        if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-        if (!vc) { NSLog(@"[XZX] ERROR: MainViewController not found"); return; }
+        if (!vc) { return; }
 
         if (!self.overlayWindow) {
             self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];

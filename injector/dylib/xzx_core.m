@@ -8,7 +8,7 @@
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
-static const NSInteger kDebounceThreshold = 3;
+static const NSInteger kDebounceThreshold = 2;
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
@@ -44,14 +44,13 @@ static const NSInteger kDebounceThreshold = 3;
         InitLua();
         NSLog(@"[XZX] Lua initialized");
         
-        // Create the UI immediately but make it 0.002 x 0.002 pixels (invisible)
+        // Create invisible overlay (0.002 x 0.002 pixels)
         [self createInvisibleOverlay];
         
         [self startGameMonitoring];
     });
 }
 
-// NEW: Create overlay at microscopic size (invisible to human eye)
 - (void)createInvisibleOverlay {
     UIWindowScene *scene = nil;
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
@@ -61,14 +60,14 @@ static const NSInteger kDebounceThreshold = 3;
         }
     }
     if (!scene) {
-        NSLog(@"[XZX] No scene found for invisible overlay");
+        NSLog(@"[XZX] No scene found");
         return;
     }
     
     UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
     if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
     if (!vc) {
-        NSLog(@"[XZX] ERROR: MainViewController not found");
+        NSLog(@"[XZX] MainViewController not found");
         return;
     }
     
@@ -80,33 +79,86 @@ static const NSInteger kDebounceThreshold = 3;
         self.overlayWindow.backgroundColor = [UIColor clearColor];
         self.overlayWindow.rootViewController = vc;
         
-        // CRITICAL: Set frame to 0.002 x 0.002 pixels (invisible)
-        // Also set alpha to 0.01 for extra invisibility
+        // CRITICAL: Invisible size
         self.overlayWindow.frame = CGRectMake(0, 0, 0.002, 0.002);
         self.overlayWindow.alpha = 0.01;
         self.overlayWindow.hidden = NO;
         
-        NSLog(@"[XZX] Invisible overlay created (0.002 x 0.002 pixels)");
+        NSLog(@"[XZX] Invisible overlay created");
     }
 }
 
-// NEW: Resize to normal dimensions when in-game confirmed
 - (void)resizeOverlayToNormal {
     if (!self.overlayWindow) return;
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        // Get screen bounds
         CGRect screenBounds = [UIScreen mainScreen].bounds;
         
-        // Animate the resize for smooth transition
         [UIView animateWithDuration:0.3 animations:^{
             self.overlayWindow.frame = screenBounds;
             self.overlayWindow.alpha = 1.0;
         }];
         
-        [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay resized to normal dimensions: %.0f x %.0f", screenBounds.size.width, screenBounds.size.height);
+        // Notify ViewController to become visible
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"XZXMakeVisible" object:nil];
+        
+        NSLog(@"[XZX] Overlay resized to full screen");
     });
+}
+
+- (void)shrinkOverlayToInvisible {
+    if (!self.overlayWindow) return;
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Notify ViewController to hide first
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"XZXMakeInvisible" object:nil];
+        
+        [UIView animateWithDuration:0.3 animations:^{
+            self.overlayWindow.frame = CGRectMake(0, 0, 0.002, 0.002);
+            self.overlayWindow.alpha = 0.01;
+        }];
+        
+        NSLog(@"[XZX] Overlay shrunk to invisible");
+    });
+}
+
+// CRITICAL: This is the KEY function - checks Roblox's internal placeId
+- (BOOL)isActuallyInGame {
+    @try {
+        // Try all possible DataModel class names
+        NSArray *classNames = @[@"RobloxDataModel", @"RBXDataModel", @"DataModel"];
+        Class dataModelClass = nil;
+        for (NSString *name in classNames) {
+            dataModelClass = NSClassFromString(name);
+            if (dataModelClass) break;
+        }
+        if (!dataModelClass) return NO;
+        
+        // Get shared instance
+        SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
+        if (![dataModelClass respondsToSelector:sharedSel]) return NO;
+        
+        id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
+        if (!dataModel) return NO;
+        
+        // Get placeId
+        SEL placeIdSel = NSSelectorFromString(@"placeId");
+        if (![dataModel respondsToSelector:placeIdSel]) return NO;
+        
+        id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
+        BOOL inGame = (placeId && [placeId intValue] != 0);
+        
+        if (inGame) {
+            NSLog(@"[XZX] placeId = %d - IN GAME", [placeId intValue]);
+        } else {
+            NSLog(@"[XZX] placeId = 0 or nil - NOT in game");
+        }
+        
+        return inGame;
+    } @catch (NSException *e) {
+        NSLog(@"[XZX] isActuallyInGame error: %@", e);
+        return NO;
+    }
 }
 
 - (void)startGameMonitoring {
@@ -114,33 +166,17 @@ static const NSInteger kDebounceThreshold = 3;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait 12 seconds — long enough to skip Roblox loading screen
-        [NSThread sleepForTimeInterval:12.0];
-        NSLog(@"[XZX] Detection active");
+        // Small initial delay for Roblox to load
+        [NSThread sleepForTimeInterval:3.0];
+        NSLog(@"[XZX] Monitoring for placeId > 0...");
 
         while (YES) {
             @autoreleasepool {
-                __block BOOL hasMetalLayer = NO;
+                BOOL inGameNow = [self isActuallyInGame];
 
-                dispatch_sync(dispatch_get_main_queue(), ^{
-                    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                        if ([scene isKindOfClass:[UIWindowScene class]]) {
-                            UIWindowScene *ws = (UIWindowScene *)scene;
-                            for (UIWindow *window in ws.windows) {
-                                if ([self viewHasMetalLayer:window]) {
-                                    hasMetalLayer = YES;
-                                }
-                            }
-                        }
-                    }
-                });
-
-                if (hasMetalLayer) {
+                if (inGameNow) {
                     self.positiveCount++;
                     self.negativeCount = 0;
-                    if (self.positiveCount == 1) {
-                        NSLog(@"[XZX] CAMetalLayer detected");
-                    }
                 } else {
                     self.negativeCount++;
                     self.positiveCount = 0;
@@ -149,14 +185,14 @@ static const NSInteger kDebounceThreshold = 3;
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected - resizing UI to normal size");
+                    NSLog(@"[XZX] ✅ Game confirmed - showing UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self resizeOverlayToNormal];
                     });
                 } else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game - shrinking UI back to invisible");
+                    NSLog(@"[XZX] ❌ Left game - hiding UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self shrinkOverlayToInvisible];
                     });
@@ -164,19 +200,6 @@ static const NSInteger kDebounceThreshold = 3;
             }
             [NSThread sleepForTimeInterval:1.0];
         }
-    });
-}
-
-// NEW: Shrink back to invisible when leaving game
-- (void)shrinkOverlayToInvisible {
-    if (!self.overlayWindow) return;
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:0.3 animations:^{
-            self.overlayWindow.frame = CGRectMake(0, 0, 0.002, 0.002);
-            self.overlayWindow.alpha = 0.01;
-        }];
-        NSLog(@"[XZX] Overlay shrunk to invisible");
     });
 }
 
@@ -196,17 +219,9 @@ static const NSInteger kDebounceThreshold = 3;
     return NO;
 }
 
-- (void)showOverlay {
-    // This is now handled by resizeOverlayToNormal
-    // Kept for compatibility with existing calls
-    [self resizeOverlayToNormal];
-}
-
-- (void)hideOverlay {
-    [self shrinkOverlayToInvisible];
-}
-
-- (BOOL)isOverlayVisible { return _overlayWindow && _overlayWindow.alpha > 0.5 && _overlayWindow.frame.size.width > 100; }
+- (void)showOverlay { [self resizeOverlayToNormal]; }
+- (void)hideOverlay { [self shrinkOverlayToInvisible]; }
+- (BOOL)isOverlayVisible { return _overlayWindow && _overlayWindow.alpha > 0.5; }
 - (BOOL)isInGame { return _inGame; }
 
 @end

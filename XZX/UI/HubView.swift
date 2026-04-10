@@ -2,12 +2,12 @@ import UIKit
 
 class HubView: UIView {
 
-    private let scrollView    = UIScrollView()
-    private let contentStack  = UIStackView()
+    private let scrollView   = UIScrollView()
+    private let contentStack = UIStackView()
     private var trendingCV:  UICollectionView!
     private var verifiedCV:  UICollectionView!
-    private var trendingScripts:  [ScriptItem] = []
-    private var verifiedScripts:  [ScriptItem] = []
+    private var trendingScripts: [ScriptItem] = []
+    private var verifiedScripts: [ScriptItem] = []
     private var hasLoadedInitial = false
 
     override init(frame: CGRect) { super.init(frame: frame); build() }
@@ -27,7 +27,6 @@ class HubView: UIView {
                    tag: 1)
     }
 
-    // MARK: — Search pill (centred, purple capsule)
     private func addSearchPill() {
         let pill = UIView()
         pill.backgroundColor = UIColor(red: 0.38, green: 0.18, blue: 0.65, alpha: 0.75)
@@ -43,7 +42,7 @@ class HubView: UIView {
         let field = UITextField()
         field.attributedPlaceholder = NSAttributedString(
             string: "Search for scripts",
-            attributes: [.foregroundColor: UIColor(white: 1, alpha: 0.55)])
+            attributes: [.foregroundColor: UIColor(white: 1, alpha: 0.5)])
         field.textColor = .white
         field.returnKeyType = .search
         field.delegate = self
@@ -65,7 +64,6 @@ class HubView: UIView {
         ])
     }
 
-    // MARK: — Main scroll
     private func setupScrollView() {
         scrollView.showsVerticalScrollIndicator = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -89,11 +87,10 @@ class HubView: UIView {
         ])
     }
 
-    // MARK: — Section builder
     private func addSection(title: String, subtitle: String, exploreLabel: String, tag: Int) {
-        // Header row
         let header = UIView()
         header.translatesAutoresizingMaskIntoConstraints = false
+        header.heightAnchor.constraint(equalToConstant: 58).isActive = true
 
         let titleLbl = UILabel()
         titleLbl.text = title
@@ -104,7 +101,7 @@ class HubView: UIView {
 
         let subLbl = UILabel()
         subLbl.text = subtitle
-        subLbl.textColor = UIColor(white: 1, alpha: 0.45)
+        subLbl.textColor = UIColor(white: 1, alpha: 0.4)
         subLbl.font = .systemFont(ofSize: 11)
         subLbl.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(subLbl)
@@ -117,7 +114,6 @@ class HubView: UIView {
         header.addSubview(exploreBtn)
 
         NSLayoutConstraint.activate([
-            header.heightAnchor.constraint(equalToConstant: 56),
             titleLbl.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 16),
             titleLbl.topAnchor.constraint(equalTo: header.topAnchor, constant: 10),
             subLbl.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 16),
@@ -127,18 +123,17 @@ class HubView: UIView {
         ])
         contentStack.addArrangedSubview(header)
 
-        // Horizontal collection
         let layout = UICollectionViewFlowLayout()
-        layout.scrollDirection = .horizontal
-        layout.itemSize = CGSize(width: 190, height: 120)
-        layout.minimumLineSpacing = 12
-        layout.sectionInset = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+        layout.scrollDirection     = .horizontal
+        layout.itemSize            = CGSize(width: 190, height: 120)
+        layout.minimumLineSpacing  = 12
+        layout.sectionInset        = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
 
         let cv = UICollectionView(frame: .zero, collectionViewLayout: layout)
         cv.backgroundColor = .clear
         cv.showsHorizontalScrollIndicator = false
         cv.register(ScriptCardCell.self, forCellWithReuseIdentifier: "card")
-        cv.tag = tag
+        cv.tag        = tag
         cv.dataSource = self
         cv.delegate   = self
         cv.translatesAutoresizingMaskIntoConstraints = false
@@ -147,14 +142,12 @@ class HubView: UIView {
         if tag == 0 { trendingCV = cv } else { verifiedCV = cv }
         contentStack.addArrangedSubview(cv)
 
-        // Bottom gap
         let gap = UIView()
         gap.translatesAutoresizingMaskIntoConstraints = false
-        gap.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        gap.heightAnchor.constraint(equalToConstant: 20).isActive = true
         contentStack.addArrangedSubview(gap)
     }
 
-    // MARK: — Load
     func loadInitialScriptsIfNeeded() {
         guard !hasLoadedInitial else { return }
         hasLoadedInitial = true
@@ -176,7 +169,6 @@ class HubView: UIView {
     }
 }
 
-// MARK: — TextField
 extension HubView: UITextFieldDelegate {
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         textField.resignFirstResponder()
@@ -185,73 +177,65 @@ extension HubView: UITextFieldDelegate {
     }
 }
 
-// MARK: — CollectionView
 extension HubView: UICollectionViewDataSource, UICollectionViewDelegate {
     func collectionView(_ cv: UICollectionView, numberOfItemsInSection _: Int) -> Int {
         cv.tag == 0 ? trendingScripts.count : verifiedScripts.count
     }
     func collectionView(_ cv: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
         let cell = cv.dequeueReusableCell(withReuseIdentifier: "card", for: ip) as! ScriptCardCell
-        let script = cv.tag == 0 ? trendingScripts[ip.item] : verifiedScripts[ip.item]
-        cell.configure(with: script)
+        let s = cv.tag == 0 ? trendingScripts[ip.item] : verifiedScripts[ip.item]
+        cell.configure(with: s)
         return cell
     }
     func collectionView(_ cv: UICollectionView, didSelectItemAt ip: IndexPath) {
-        let script = cv.tag == 0 ? trendingScripts[ip.item] : verifiedScripts[ip.item]
-        NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), object: script.script)
+        let s = cv.tag == 0 ? trendingScripts[ip.item] : verifiedScripts[ip.item]
+        NotificationCenter.default.post(name: NSNotification.Name("LoadScript"), object: s.script)
     }
 }
 
-// MARK: — Card Cell (matches reference: big thumbnail, title overlay, views, star)
 class ScriptCardCell: UICollectionViewCell {
 
-    private let thumb     = UIImageView()
-    private let gradient  = CAGradientLayer()
-    private let titleLbl  = UILabel()
-    private let gameLbl   = UILabel()
-    private let viewsLbl  = UILabel()
-    private let starBtn   = UIButton(type: .system)
+    private let thumb    = UIImageView()
+    private let gradient = CAGradientLayer()
+    private let titleLbl = UILabel()
+    private let gameLbl  = UILabel()
+    private let viewsLbl = UILabel()
+    private let starBtn  = UIButton(type: .system)
 
     override init(frame: CGRect) { super.init(frame: frame); setup() }
     required init?(coder: NSCoder) { super.init(coder: coder); setup() }
 
     private func setup() {
-        layer.cornerRadius  = 12
-        clipsToBounds       = true
-        backgroundColor     = UIColor(red: 0.14, green: 0.12, blue: 0.22, alpha: 1)
+        layer.cornerRadius = 12
+        clipsToBounds      = true
+        backgroundColor    = UIColor(red: 0.14, green: 0.12, blue: 0.22, alpha: 1)
 
-        // Thumbnail fills card
-        thumb.contentMode   = .scaleAspectFill
-        thumb.clipsToBounds = true
-        thumb.frame         = bounds
+        thumb.contentMode      = .scaleAspectFill
+        thumb.clipsToBounds    = true
         thumb.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        thumb.frame            = bounds
         contentView.addSubview(thumb)
 
-        // Dark gradient overlay at bottom
-        gradient.colors  = [UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.8).cgColor]
-        gradient.locations = [0.45, 1.0]
+        gradient.colors    = [UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.82).cgColor]
+        gradient.locations = [0.35, 1.0]
         contentView.layer.addSublayer(gradient)
 
-        // Title
-        titleLbl.textColor = .white
-        titleLbl.font      = .systemFont(ofSize: 12, weight: .bold)
+        titleLbl.textColor     = .white
+        titleLbl.font          = .systemFont(ofSize: 12, weight: .bold)
         titleLbl.numberOfLines = 2
         titleLbl.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(titleLbl)
 
-        // Game badge
-        gameLbl.textColor = UIColor(white: 1, alpha: 0.6)
+        gameLbl.textColor = UIColor(white: 1, alpha: 0.55)
         gameLbl.font      = .systemFont(ofSize: 10)
         gameLbl.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(gameLbl)
 
-        // Views
-        viewsLbl.textColor = UIColor(white: 1, alpha: 0.5)
+        viewsLbl.textColor = UIColor(white: 1, alpha: 0.45)
         viewsLbl.font      = .systemFont(ofSize: 10)
         viewsLbl.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(viewsLbl)
 
-        // Star button
         starBtn.setImage(UIImage(systemName: "star"), for: .normal)
         starBtn.tintColor = UIColor(red: 1, green: 0.8, blue: 0.2, alpha: 1)
         starBtn.translatesAutoresizingMaskIntoConstraints = false
@@ -283,10 +267,8 @@ class ScriptCardCell: UICollectionViewCell {
     func configure(with s: ScriptItem) {
         titleLbl.text = s.title
         gameLbl.text  = s.game ?? "Universal"
-        if let v = s.views {
-            viewsLbl.text = "👁 \(v >= 1000 ? "\(v / 1000)k" : "\(v)")"
-        }
-        thumb.image = nil
+        viewsLbl.text = s.views.map { v in "👁 \(v >= 1000 ? "\(v / 1000)k" : "\(v)")" } ?? ""
+        thumb.image   = nil
         if let url = s.thumbnail {
             ScriptBloxAPI.shared.loadThumbnail(url: url) { [weak self] img in
                 self?.thumb.image = img

@@ -10,13 +10,13 @@
 - (void)initialize;
 - (void)showOverlay;
 - (void)hideOverlay;
-- (void)resizeOverlayToNormal;  // NEW: resize from tiny to normal
 - (BOOL)isOverlayVisible;
 - (BOOL)isInGame;
+- (BOOL)isActuallyInGame;  // NEW: checks placeId
 - (BOOL)viewHasMetalLayer:(UIView *)view;
 
 @property (nonatomic, strong) UIWindow *overlayWindow;
-@property (nonatomic, strong) UIViewController *overlayViewController;  // NEW: store reference
+@property (nonatomic, strong) UIViewController *overlayViewController;
 @property (nonatomic, assign) BOOL isInitialized;
 @property (nonatomic, assign) BOOL inGame;
 

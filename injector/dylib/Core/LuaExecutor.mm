@@ -237,3 +237,6 @@ void ExecuteScript(NSString *script) {
         lua_pop(L, 1);
     }
 }
+struct lua_State* GetLuaState(void) {
+    return L;
+}

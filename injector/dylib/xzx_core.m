@@ -1,5 +1,4 @@
 #import "xzx_core.h"
-#import "xzx_hooks.h"
 #import "Core/LuaExecutor.h"
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -10,12 +9,14 @@ static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 static const NSInteger kDebounceThreshold = 3;
-static const NSInteger kRequiredConfirmations = 2;
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
 @property (nonatomic, assign) NSInteger negativeCount;
-@property (nonatomic, assign) NSInteger gameConfirmedCount;
+// Gate: must see Roblox home screen WebView before in-game detection is trusted.
+// Prevents the launch loading screen (Metal=YES, WebView=NO) from
+// falsely triggering in-game detection on first open.
+@property (nonatomic, assign) BOOL hasSeenHomeScreen;
 @end
 
 @implementation XZXCore
@@ -32,10 +33,9 @@ static const NSInteger kRequiredConfirmations = 2;
         _overlayWindow = nil;
         _isInitialized = NO;
         _inGame = NO;
-        _overlayAllowed = NO;
         _positiveCount = 0;
         _negativeCount = 0;
-        _gameConfirmedCount = 0;
+        _hasSeenHomeScreen = NO;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -44,14 +44,11 @@ static const NSInteger kRequiredConfirmations = 2;
 - (void)initialize {
     if (_isInitialized) return;
     _isInitialized = YES;
-    InitLua();
-
-    // Ensure nothing is visible
-    if (_overlayWindow) _overlayWindow.hidden = YES;
-    _overlayAllowed = NO;
-
-    NSLog(@"[XZX] Initialized, overlay locked. Will unlock only after confirmed in-game.");
-    [self startGameMonitoring];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        InitLua();
+        NSLog(@"[XZX] Lua initialized");
+        [self startGameMonitoring];
+    });
 }
 
 - (void)startGameMonitoring {
@@ -59,12 +56,42 @@ static const NSInteger kRequiredConfirmations = 2;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait 15 seconds for Roblox to settle (login, menu, etc.)
-        [NSThread sleepForTimeInterval:15.0];
+        // Wait for Roblox to finish its initial launch
+        [NSThread sleepForTimeInterval:5.0];
+
+        // Fallback: if WebView never appears within 15s, unlock detection anyway.
+        // This handles Roblox versions that don't use WKWebView for the home screen.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (!self.hasSeenHomeScreen) {
+                self.hasSeenHomeScreen = YES;
+                NSLog(@"[XZX] Home screen fallback timer fired - detection unlocked");
+            }
+        });
 
         while (YES) {
             @autoreleasepool {
-                BOOL raw = [self isInGameCheck];
+                __block BOOL hasMetalLayer = NO;
+                __block BOOL hasWebView = NO;
+
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                        if ([scene isKindOfClass:[UIWindowScene class]]) {
+                            UIWindowScene *ws = (UIWindowScene *)scene;
+                            for (UIWindow *window in ws.windows) {
+                                if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                                if ([self viewHasWebView:window]) hasWebView = YES;
+                            }
+                        }
+                    }
+                });
+
+                if (!self.hasSeenHomeScreen && hasWebView) {
+                    self.hasSeenHomeScreen = YES;
+                    NSLog(@"[XZX] Home screen confirmed - detection active");
+                }
+
+                BOOL raw = self.hasSeenHomeScreen && hasMetalLayer && !hasWebView;
 
                 if (raw) {
                     self.positiveCount++;
@@ -74,30 +101,18 @@ static const NSInteger kRequiredConfirmations = 2;
                     self.positiveCount = 0;
                 }
 
-                // Transition to in-game
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
-                    self.gameConfirmedCount++;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected (placeId > 0) - confirmation %ld of %ld",
-                          (long)self.gameConfirmedCount, (long)kRequiredConfirmations);
-
-                    if (self.gameConfirmedCount >= kRequiredConfirmations && !self.overlayAllowed) {
-                        self.overlayAllowed = YES;
-                        NSLog(@"[XZX] Overlay now allowed - showing UI");
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            [self showOverlay];
-                        });
-                    }
-                }
-
-                // Transition out of game
-                if (self.inGame && self.negativeCount >= kDebounceThreshold) {
+                    NSLog(@"[XZX] Game detected - showing UI");
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self showOverlay];
+                    });
+                } else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    self.gameConfirmedCount = 0;
-                    self.overlayAllowed = NO;  // revoke permission immediately
-                    NSLog(@"[XZX] Left game (placeId = 0) - overlay locked again");
+                    self.hasSeenHomeScreen = NO;
+                    NSLog(@"[XZX] Left game - hiding UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -108,50 +123,43 @@ static const NSInteger kRequiredConfirmations = 2;
     });
 }
 
-- (BOOL)isInGameCheck {
+// Recursively checks for CAMetalLayer. Must be called on main thread.
+- (BOOL)viewHasMetalLayer:(UIView *)view {
     @try {
-        NSArray *classNames = @[
-            @"RobloxDataModel",
-            @"RBXDataModel",
-            @"DataModel",
-            @"RBXGame",
-            @"RobloxGame"
-        ];
-
-        Class dmClass = nil;
-        for (NSString *name in classNames) {
-            dmClass = NSClassFromString(name);
-            if (dmClass) break;
+        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+        for (CALayer *sub in view.layer.sublayers ?: @[]) {
+            if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+            for (CALayer *subsub in sub.sublayers ?: @[]) {
+                if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+            }
         }
-
-        if (dmClass) {
-            return (BOOL)isPlayerInGame();
+        for (UIView *sub in view.subviews) {
+            if ([self viewHasMetalLayer:sub]) return YES;
         }
-        return NO;
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] isInGameCheck error: %@", e);
-    }
+    } @catch (NSException *e) {}
     return NO;
 }
 
-- (BOOL)isRobloxForeground {
-    return [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
+// Recursively checks for WKWebView. Must be called on main thread.
+- (BOOL)viewHasWebView:(UIView *)view {
+    @try {
+        NSString *cn = NSStringFromClass([view class]);
+        if ([cn containsString:@"WKWebView"] ||
+            [cn containsString:@"WebView"]) return YES;
+        for (UIView *sub in view.subviews) {
+            if ([self viewHasWebView:sub]) return YES;
+        }
+    } @catch (NSException *e) {}
+    return NO;
+}
+
+- (BOOL)isGameEngineActive {
+    // This method is now unused — logic moved into startGameMonitoring
+    // for efficiency. Kept to satisfy header declaration.
+    return self.inGame;
 }
 
 - (void)showOverlay {
-    // Absolute gates
-    if (!self.overlayAllowed) {
-        NSLog(@"[XZX] showOverlay blocked - overlay not allowed");
-        return;
-    }
-    if (!self.inGame) {
-        NSLog(@"[XZX] showOverlay blocked - not in game");
-        return;
-    }
-    if (![self isRobloxForeground]) {
-        NSLog(@"[XZX] showOverlay blocked - Roblox not in foreground");
-        return;
-    }
     if (_overlayWindow && !_overlayWindow.hidden) return;
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -162,53 +170,29 @@ static const NSInteger kRequiredConfirmations = 2;
                 break;
             }
         }
-        if (!scene) {
-            NSLog(@"[XZX] No window scene");
-            return;
-        }
+        if (!scene) { NSLog(@"[XZX] No scene found"); return; }
 
-        UIViewController *vc = nil;
-        vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
+        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"XZX.MainViewController") alloc] init];
         if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-        if (!vc) {
-            NSLog(@"[XZX] ERROR: MainViewController not found");
-            return;
-        }
+        if (!vc) { NSLog(@"[XZX] ERROR: MainViewController not found"); return; }
 
         if (!self.overlayWindow) {
             self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
             self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
             self.overlayWindow.backgroundColor = [UIColor clearColor];
             self.overlayWindow.rootViewController = vc;
-            self.overlayWindow.hidden = YES;
         }
 
         self.overlayWindow.hidden = NO;
         [self.overlayWindow makeKeyAndVisible];
-        NSLog(@"[XZX] Overlay shown (finally allowed)");
+        NSLog(@"[XZX] Overlay shown");
     });
 }
 
 - (void)hideOverlay {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.overlayWindow) {
-            self.overlayWindow.hidden = YES;
-            // Return focus to Roblox's window
-            UIWindow *robloxWindow = nil;
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    UIWindowScene *ws = (UIWindowScene *)scene;
-                    for (UIWindow *win in ws.windows) {
-                        if (win != self.overlayWindow) {
-                            robloxWindow = win;
-                            break;
-                        }
-                    }
-                }
-            }
-            [robloxWindow makeKeyWindow];
-        }
+        self.overlayWindow.hidden = YES;
         NSLog(@"[XZX] Overlay hidden");
     });
 }

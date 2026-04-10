@@ -530,6 +530,7 @@ jobs:
           - (BOOL)isOverlayVisible;
           - (BOOL)isInGame;
           - (BOOL)viewHasMetalLayer:(UIView *)view;
+          - (NSInteger)countButtonsInView:(UIView *)view;
           @property (nonatomic, strong) UIWindow *overlayWindow;
           @property (nonatomic, assign) BOOL isInitialized;
           @property (nonatomic, assign) BOOL inGame;
@@ -551,7 +552,7 @@ jobs:
           static XZXCore *sharedCore = nil;
           static dispatch_queue_t monitorQueue = nil;
           static BOOL gameDetectionActive = NO;
-          static const NSInteger kDebounceThreshold = 3;
+          static const NSInteger kDebounceThreshold = 2;
 
           @interface XZXCore ()
           @property (nonatomic, assign) NSInteger positiveCount;
@@ -594,29 +595,20 @@ jobs:
               gameDetectionActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  // Wait 12 seconds — long enough to skip Roblox loading screen
-                  // but short enough that user hasn't joined a game yet
-                  [NSThread sleepForTimeInterval:12.0];
-                  NSLog(@"[XZX] Detection active");
+                  // Wait for Roblox to fully launch before starting detection
+                  [NSThread sleepForTimeInterval:4.0];
+                  NSLog(@"[XZX] Detection started");
 
                   while (YES) {
                       @autoreleasepool {
-                          __block BOOL hasMetalLayer = NO;
+                          __block BOOL inGame = NO;
 
+                          // All UIKit access must be on main thread
                           dispatch_sync(dispatch_get_main_queue(), ^{
-                              for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                                  if ([scene isKindOfClass:[UIWindowScene class]]) {
-                                      UIWindowScene *ws = (UIWindowScene *)scene;
-                                      for (UIWindow *window in ws.windows) {
-                                          if ([self viewHasMetalLayer:window]) {
-                                              hasMetalLayer = YES;
-                                          }
-                                      }
-                                  }
-                              }
+                              inGame = [self isGameEngineActive];
                           });
 
-                          if (hasMetalLayer) {
+                          if (inGame) {
                               self.positiveCount++;
                               self.negativeCount = 0;
                           } else {
@@ -645,6 +637,58 @@ jobs:
               });
           }
 
+          // THE DETECTION LOGIC — for Roblox 2.714 on iOS:
+          //
+          // Both home screen AND in-game have CAMetalLayer, so Metal alone is useless.
+          //
+          // Key differences between home screen and in-game:
+          //   Home screen: status bar VISIBLE, many UIButtons (~15+)
+          //   In-game:     status bar HIDDEN (fullscreen 3D), very few UIButtons (~3-4 HUD only)
+          //
+          // We use TWO signals that must BOTH be true to confirm in-game:
+          //   1. statusBarManager.statusBarHidden == YES  (Roblox hides status bar in-game)
+          //   2. UIButton count in hierarchy < 6          (only HUD buttons remain in-game)
+          //
+          // This is robust against timing issues, version changes, and does not rely
+          // on any Roblox internal class names.
+          - (BOOL)isGameEngineActive {
+              @try {
+                  BOOL statusBarHidden = NO;
+                  NSInteger buttonCount = 0;
+                  BOOL hasMetalLayer = NO;
+
+                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+                      UIWindowScene *ws = (UIWindowScene *)scene;
+
+                      // Signal 1: status bar hidden means fullscreen game is active
+                      if (ws.statusBarManager.statusBarHidden) {
+                          statusBarHidden = YES;
+                      }
+
+                      for (UIWindow *window in ws.windows) {
+                          // Signal 2: count interactive UIButtons in hierarchy
+                          buttonCount += [self countButtonsInView:window];
+                          // Signal 3: Metal layer confirms Roblox is rendering
+                          if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                      }
+                  }
+
+                  NSLog(@"[XZX] statusBarHidden=%d buttons=%ld metal=%d",
+                        statusBarHidden, (long)buttonCount, hasMetalLayer);
+
+                  // In-game = Metal rendering + status bar hidden + very few buttons
+                  // Home screen = Metal rendering + status bar visible + many buttons
+                  if (hasMetalLayer && statusBarHidden && buttonCount < 6) {
+                      return YES;
+                  }
+              } @catch (NSException *e) {
+                  NSLog(@"[XZX] Detection error: %@", e);
+              }
+              return NO;
+          }
+
+          // Recursively scan for CAMetalLayer. Must be called on main thread.
           - (BOOL)viewHasMetalLayer:(UIView *)view {
               @try {
                   if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
@@ -661,8 +705,22 @@ jobs:
               return NO;
           }
 
-          // Unused but kept for header compatibility
-          - (BOOL)isGameEngineActive { return self.inGame; }
+          // Count UIButtons recursively. Must be called on main thread.
+          // Home screen has 15+ buttons. In-game HUD has 3-5.
+          - (NSInteger)countButtonsInView:(UIView *)view {
+              NSInteger count = 0;
+              @try {
+                  if ([view isKindOfClass:[UIButton class]]) count++;
+                  // Stop counting early once we know we're on home screen
+                  // (avoids expensive full traversal)
+                  if (count > 10) return count;
+                  for (UIView *sub in view.subviews) {
+                      count += [self countButtonsInView:sub];
+                      if (count > 10) return count;
+                  }
+              } @catch (NSException *e) {}
+              return count;
+          }
 
           - (void)showOverlay {
               if (_overlayWindow && !_overlayWindow.hidden) return;
@@ -675,11 +733,11 @@ jobs:
                           break;
                       }
                   }
-                  if (!scene) { return; }
+                  if (!scene) { NSLog(@"[XZX] No scene"); return; }
 
                   UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
                   if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-                  if (!vc) { return; }
+                  if (!vc) { NSLog(@"[XZX] VC not found"); return; }
 
                   if (!self.overlayWindow) {
                       self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];

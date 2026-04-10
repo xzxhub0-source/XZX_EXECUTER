@@ -53,10 +53,9 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait 8 seconds on startup — gives Roblox time to fully past its
-        // loading screen before we start detection, so we never trigger
-        // show during the loading phase.
-        [NSThread sleepForTimeInterval:8.0];
+        // Wait a shorter time (4 seconds) to start detection earlier,
+        // as we can now reliably filter out the loading screen.
+        [NSThread sleepForTimeInterval:4.0];
         NSLog(@"[XZX] Detection started");
 
         while (YES) {
@@ -85,7 +84,6 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
                     });
                 }
                 // Hide only after kDebounceHide consecutive negatives
-                // 15 seconds covers the full loading→game world transition
                 else if (self.inGame && self.negativeCount >= kDebounceHide) {
                     self.inGame = NO;
                     self.negativeCount = 0;
@@ -100,11 +98,13 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
     });
 }
 
+// THE FINAL DETECTION LOGIC — for Roblox 2.714 on iOS
 - (BOOL)isGameEngineActive {
     @try {
         BOOL statusBarHidden = NO;
         NSInteger buttonCount = 0;
         BOOL hasMetalLayer = NO;
+        BOOL isLoadingScreen = NO; // NEW: Detect the loading screen
 
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
@@ -117,15 +117,35 @@ static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide 
             for (UIWindow *window in ws.windows) {
                 buttonCount += [self countButtonsInView:window];
                 if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+                // NEW: Check for the "Loading..." text in CoreGui
+                if ([self viewHasLoadingText:window]) isLoadingScreen = YES;
             }
         }
 
-        if (hasMetalLayer && statusBarHidden && buttonCount < 6) {
+        // In-game = Metal + status bar hidden + few buttons AND NOT on loading screen
+        if (hasMetalLayer && statusBarHidden && buttonCount < 6 && !isLoadingScreen) {
             return YES;
         }
     } @catch (NSException *e) {
         NSLog(@"[XZX] Detection error: %@", e);
     }
+    return NO;
+}
+
+// NEW: Recursively search for "Loading..." text in the view hierarchy
+- (BOOL)viewHasLoadingText:(UIView *)view {
+    @try {
+        if ([view isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)view;
+            if ([label.text containsString:@"Loading"] || [label.text containsString:@"..."]) {
+                NSLog(@"[XZX] Loading screen text detected");
+                return YES;
+            }
+        }
+        for (UIView *sub in view.subviews) {
+            if ([self viewHasLoadingText:sub]) return YES;
+        }
+    } @catch (NSException *e) {}
     return NO;
 }
 

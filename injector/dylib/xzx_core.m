@@ -8,12 +8,13 @@
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
-static const NSInteger kDebounceShow = 2;   // 2 seconds to show (fast)
-static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids flicker)
+static const NSInteger kDebounceShow = 2;   // 2 consecutive positives to show
+static const NSInteger kDebounceHide = 15;  // 15 consecutive negatives to hide (survives loading→game transition)
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
 @property (nonatomic, assign) NSInteger negativeCount;
+@property (nonatomic, strong) UIWindow *overlayWindow;
 @end
 
 @implementation XZXCore
@@ -27,11 +28,11 @@ static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids f
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _overlayWindow = nil;
-        _isInitialized = NO;
-        _inGame = NO;
-        _positiveCount = 0;
-        _negativeCount = 0;
+        _overlayWindow  = nil;
+        _isInitialized  = NO;
+        _inGame         = NO;
+        _positiveCount  = 0;
+        _negativeCount  = 0;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -52,7 +53,10 @@ static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids f
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        [NSThread sleepForTimeInterval:4.0];
+        // Wait 8 seconds on startup — gives Roblox time to fully past its
+        // loading screen before we start detection, so we never trigger
+        // show during the loading phase.
+        [NSThread sleepForTimeInterval:8.0];
         NSLog(@"[XZX] Detection started");
 
         while (YES) {
@@ -71,7 +75,7 @@ static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids f
                     self.positiveCount = 0;
                 }
 
-                // Show UI after 2 consecutive positives
+                // Show after kDebounceShow consecutive positives
                 if (!self.inGame && self.positiveCount >= kDebounceShow) {
                     self.inGame = YES;
                     self.positiveCount = 0;
@@ -80,7 +84,8 @@ static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids f
                         [self showOverlay];
                     });
                 }
-                // Hide UI only after 5 consecutive negatives (prevents flicker during loading/teleport)
+                // Hide only after kDebounceHide consecutive negatives
+                // 15 seconds covers the full loading→game world transition
                 else if (self.inGame && self.negativeCount >= kDebounceHide) {
                     self.inGame = NO;
                     self.negativeCount = 0;
@@ -115,7 +120,6 @@ static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids f
             }
         }
 
-        // In-game = Metal + status bar hidden + few buttons
         if (hasMetalLayer && statusBarHidden && buttonCount < 6) {
             return YES;
         }
@@ -145,7 +149,7 @@ static const NSInteger kDebounceHide = 5;   // 5 seconds to hide (slow, avoids f
     NSInteger count = 0;
     @try {
         if ([view isKindOfClass:[UIButton class]]) count++;
-        if (count > 10) return count; // early exit
+        if (count > 10) return count;
         for (UIView *sub in view.subviews) {
             count += [self countButtonsInView:sub];
             if (count > 10) return count;

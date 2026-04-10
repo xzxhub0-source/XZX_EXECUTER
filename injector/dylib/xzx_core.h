@@ -8,12 +8,10 @@
 
 + (instancetype)shared;
 - (void)initialize;
-- (void)showOverlay;
-- (void)hideOverlay;
+- (void)showOverlay;      // called when game detected
+- (void)hideOverlay;      // called when leaving game
 - (BOOL)isOverlayVisible;
 - (BOOL)isInGame;
-- (BOOL)isActuallyInGame;  // NEW: checks placeId
-- (BOOL)viewHasMetalLayer:(UIView *)view;
 
 @property (nonatomic, strong) UIWindow *overlayWindow;
 @property (nonatomic, strong) UIViewController *overlayViewController;

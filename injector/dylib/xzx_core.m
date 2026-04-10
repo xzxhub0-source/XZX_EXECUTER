@@ -26,7 +26,7 @@ static const NSInteger kDebounceThreshold = 3;
     self = [super init];
     if (self) {
         _isInitialized = NO;
-        _inGame = NO;
+        _inGame        = NO;
         _positiveCount = 0;
         _negativeCount = 0;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
@@ -45,15 +45,19 @@ static const NSInteger kDebounceThreshold = 3;
 - (void)startGameMonitoring {
     if (gameDetectionActive) return;
     gameDetectionActive = YES;
-    
+
     dispatch_async(monitorQueue, ^{
-        // No initial delay – we rely solely on placeId
+        // Wait for Roblox runtime to fully load before polling.
+        // Without this, DataModel isn't available yet and isPlayerInGame()
+        // returns false for the first few seconds, then may briefly return true
+        // from a stale previous session placeId — causing wrong triggers.
+        [NSThread sleepForTimeInterval:5.0];
         NSLog(@"[XZX] Monitoring placeId...");
-        
+
         while (YES) {
             @autoreleasepool {
                 BOOL inGameNow = isPlayerInGame();
-                
+
                 if (inGameNow) {
                     self.positiveCount++;
                     self.negativeCount = 0;
@@ -61,19 +65,23 @@ static const NSInteger kDebounceThreshold = 3;
                     self.negativeCount++;
                     self.positiveCount = 0;
                 }
-                
+
+                // Entered game — require kDebounceThreshold consecutive positives
+                // to avoid triggering during loading screen transitions.
                 if (!self.inGame && self.positiveCount >= kDebounceThreshold) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] Game detected – creating in-game UI");
+                    NSLog(@"[XZX] Game detected — creating in-game UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self showOverlay];
                     });
                 }
+                // Left game — require kDebounceThreshold consecutive negatives
+                // to avoid hiding on brief disconnects or teleports.
                 else if (self.inGame && self.negativeCount >= kDebounceThreshold) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game – removing UI");
+                    NSLog(@"[XZX] Left game — removing UI");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -85,9 +93,14 @@ static const NSInteger kDebounceThreshold = 3;
 }
 
 - (void)showOverlay {
+    // Guard: only show when the monitor has confirmed we are in game.
+    if (!self.inGame) {
+        NSLog(@"[XZX] showOverlay called while not in game — ignored");
+        return;
+    }
     [[XZXUIBridge shared] createInGameUI];
     [[XZXUIBridge shared] showUI];
-    // Also set up the communication bridge (only needs to be done once)
+    // Set up the RemoteEvent bridge once after the UI exists in CoreGui.
     static dispatch_once_t onceBridge;
     dispatch_once(&onceBridge, ^{
         setupRemoteEventBridge();
@@ -97,6 +110,14 @@ static const NSInteger kDebounceThreshold = 3;
 - (void)hideOverlay {
     [[XZXUIBridge shared] hideUI];
     [[XZXUIBridge shared] destroyInGameUI];
+}
+
+- (BOOL)isOverlayVisible {
+    return self.inGame;
+}
+
+- (BOOL)isInGame {
+    return _inGame;
 }
 
 @end

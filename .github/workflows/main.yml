@@ -61,7 +61,7 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
 
-      # ── LuaExecutor ──────────────────────────────────────────────────────────
+      # ── LuaExecutor (fixed LUA_GLOBALSINDEX → lua_pushglobaltable) ───────────
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -174,7 +174,7 @@ jobs:
           static int xzx_setthreadid     (lua_State *L) { return 0; }
           static int xzx_fireclickdet    (lua_State *L) { return 0; }
           static int xzx_getgenv         (lua_State *L) {
-              lua_pushvalue(L, LUA_GLOBALSINDEX); return 1;
+              lua_pushglobaltable(L); return 1;   // FIXED: was LUA_GLOBALSINDEX
           }
           static int xzx_getreg          (lua_State *L) {
               lua_pushvalue(L, LUA_REGISTRYINDEX); return 1;
@@ -231,7 +231,7 @@ jobs:
           struct lua_State* GetLuaState(void) { return L; }
           CPPEOF
 
-      # ── XZXMainViewController (FIXED) ─────────────────────────────────────────
+      # ── XZXMainViewController (already fixed) ─────────────────────────────────
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -466,7 +466,6 @@ jobs:
               }
           }
 
-          // ========== FIXED executeScript method ==========
           - (void)executeScript {
               NSString *script = _textView.text;
               if (script.length == 0) return;

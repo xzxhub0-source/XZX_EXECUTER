@@ -13,20 +13,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies (curl only)
+      - name: Install gdown
         run: |
-          # No pipx/gdown needed
-          echo "Using curl for download"
+          pip3 install gdown
 
-      - name: Download Roblox IPA (direct curl with cookie)
+      - name: Download Roblox IPA
         run: |
           FILE_ID="16uaCXW9O3SmjYEPjc1wRhIj-o2NAXqdW"
-          # Fetch confirmation page and save cookie
-          curl -sc /tmp/cookie "https://drive.google.com/uc?export=download&id=${FILE_ID}" > /dev/null
-          # Extract confirmation token
-          CONFIRM=$(awk '/download/ {print $NF}' /tmp/cookie)
-          # Download with confirmation
-          curl -Lb /tmp/cookie "https://drive.google.com/uc?export=download&confirm=${CONFIRM}&id=${FILE_ID}" -o Roblox.ipa
+          gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O Roblox.ipa
+          # Verify download
+          if [ ! -f Roblox.ipa ] || [ $(stat -c%s Roblox.ipa) -lt 1000000 ]; then
+            echo "Download failed or file too small"
+            exit 1
+          fi
+          file Roblox.ipa
           ls -la Roblox.ipa
 
       - name: Download and compile insert_dylib
@@ -70,7 +70,7 @@ jobs:
           rm -f injector/dylib/xzx_editor.m
           rm -f injector/dylib/xzx_editor.h
 
-      # ----- LuaExecutor (unchanged) -----
+      # ----- LuaExecutor -----
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -250,7 +250,7 @@ jobs:
           }
           EOF
 
-      # ----- Objective-C UI (XZXMainViewController) -----
+      # ----- Objective-C UI -----
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -494,7 +494,7 @@ jobs:
           @end
           EOF
 
-      # ----- Core detection (WKWebView based) -----
+      # ----- Core detection -----
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -722,7 +722,7 @@ jobs:
           }
           EOF
 
-      # ----- Stub files (each individually) -----
+      # ----- Stub files -----
       - name: Create stub xzx_injection_randomizer
         run: |
           cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'

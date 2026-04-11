@@ -231,7 +231,7 @@ jobs:
           struct lua_State* GetLuaState(void) { return L; }
           CPPEOF
 
-      # ── XZXMainViewController (pure ObjC, no Swift) ──────────────────────────
+      # ── XZXMainViewController (pure ObjC, includes fixed) ─────────────────────
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -254,7 +254,7 @@ jobs:
         run: |
           cat > XZX/UI/XZXMainViewController.m << 'EOF'
           #import "XZXMainViewController.h"
-          #include "injector/dylib/Core/LuaExecutor.h"
+          #include "LuaExecutor.h"   // <--- FIXED: use just the header name, path is in -I
 
           @implementation XZXMainViewController
 
@@ -518,19 +518,7 @@ jobs:
           @end
           EOF
 
-      # ── xzx_core — THE FIX ───────────────────────────────────────────────────
-      #
-      # ROOT CAUSE OF THE BUG:
-      # The previous version used WKWebView presence to detect the menu.
-      # Roblox 2.714 removed WKWebView from the home screen (uses native UIKit).
-      # So isMenuVisible() always returned NO, and the UI fired immediately on launch.
-      #
-      # THE CORRECT DETECTION for Roblox 2.714:
-      #   Home screen: status bar VISIBLE, 15+ UIButtons in hierarchy
-      #   In-game:     status bar HIDDEN (fullscreen), <6 UIButtons (HUD only)
-      #   Both:        CAMetalLayer present (Roblox renders everything via Metal)
-      #
-      # We check all three. Requires 2 consecutive positive checks to debounce.
+      # ── xzx_core — detection logic for Roblox 2.714 ───────────────────────────
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -608,15 +596,11 @@ jobs:
               monitorActive = YES;
 
               dispatch_async(monitorQueue, ^{
-                  // Wait for Roblox to fully launch before first check
                   [NSThread sleepForTimeInterval:4.0];
                   NSLog(@"[XZX] Monitor active");
 
                   while (YES) {
                       @autoreleasepool {
-                          // UIKit must ONLY be accessed on the main thread.
-                          // dispatch_sync blocks this background thread until
-                          // the main thread completes the check.
                           __block BOOL detected = NO;
                           dispatch_sync(dispatch_get_main_queue(), ^{
                               detected = [self isInGameCheck];
@@ -651,24 +635,7 @@ jobs:
               });
           }
 
-          //
-          // isInGameCheck — the core detection logic for Roblox 2.714
-          //
-          // Roblox 2.714 facts:
-          //   • CAMetalLayer is present on home screen AND in-game (both use Metal)
-          //   • WKWebView is GONE from home screen since ~2.680 (pure native UIKit now)
-          //   • Home screen: status bar is VISIBLE showing time/battery
-          //   • In-game:     status bar is HIDDEN (fullscreen 3D rendering)
-          //   • Home screen: 15+ UIButtons (nav, play, avatar, shop tabs, etc.)
-          //   • In-game:     3-5 UIButtons maximum (jump button, HUD controls only)
-          //
-          // Detection requires ALL THREE to be true simultaneously:
-          //   1. CAMetalLayer present  → confirms we are inside Roblox rendering
-          //   2. Status bar hidden     → confirms fullscreen game is active
-          //   3. Button count < 6     → confirms home screen UI is gone
-          //
-          // MUST be called on main thread.
-          //
+          // Detection: Metal layer + status bar hidden + button count < 6
           - (BOOL)isInGameCheck {
               @try {
                   BOOL hasMetalLayer  = NO;
@@ -679,7 +646,6 @@ jobs:
                       if (![scene isKindOfClass:[UIWindowScene class]]) continue;
                       UIWindowScene *ws = (UIWindowScene *)scene;
 
-                      // Signal 1: status bar hidden = fullscreen game active
                       if (@available(iOS 13.0, *)) {
                           if (ws.statusBarManager.statusBarHidden) {
                               statusBarHidden = YES;
@@ -688,11 +654,9 @@ jobs:
 
                       for (UIWindow *window in ws.windows) {
                           if (window == _overlayWindow) continue;
-                          // Signal 2: Metal layer = Roblox rendering active
                           if (!hasMetalLayer && [self viewHasMetalLayer:window]) {
                               hasMetalLayer = YES;
                           }
-                          // Signal 3: count buttons (cap at 20 for performance)
                           if (buttonCount < 20) {
                               buttonCount += [self countButtons:window];
                           }
@@ -709,7 +673,6 @@ jobs:
               return NO;
           }
 
-          // Scan layer tree for CAMetalLayer. Must run on main thread.
           - (BOOL)viewHasMetalLayer:(UIView *)view {
               @try {
                   if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
@@ -726,7 +689,6 @@ jobs:
               return NO;
           }
 
-          // Count UIButtons recursively. Stops early at 20. Must run on main thread.
           - (NSInteger)countButtons:(UIView *)view {
               NSInteger n = 0;
               @try {
@@ -898,8 +860,8 @@ jobs:
             XZX/UI/XZXMainViewController.m
           "
           # All stub files
-          STUB_FILES=$(ls injector/dylib/xzx_*.m \
-            | grep -v xzx_core.m | grep -v xzx_hooks.m)
+          STUB_FILES=$(ls injector/dylib/xzx_*.m 2>/dev/null \
+            | grep -v xzx_core.m | grep -v xzx_hooks.m || true)
 
           ALL_FILES="$CORE_FILES $STUB_FILES"
 

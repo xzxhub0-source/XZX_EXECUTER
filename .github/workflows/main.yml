@@ -824,44 +824,177 @@ jobs:
           EOF
 
       # ──────────────────────────────────────────────────────────────────────────
-      # Stub files – explicit class names (BUG 5 fixed)
+      # Stub files – explicit class names (BUG 5 fixed, no associative array)
       # ──────────────────────────────────────────────────────────────────────────
       - name: Create stub files
         run: |
-          # explicit mapping to avoid sed mangling (BUG 5)
-          declare -A classes=(
-            [xzx_injection_randomizer]="XZXInjectionRandomizer"
-            [xzx_obfuscator]="XZXObfuscator"
-            [xzx_antidetection]="XZXAntiDetection"
-            [xzx_ban_protection]="XZXBanProtection"
-            [xzx_hook_manager]="XZXHookManager"
-            [xzx_physics_bypass]="XZXPhysicsBypass"
-            [xzx_memory_obfuscator]="XZXMemoryObfuscator"
-            [xzx_security]="XZXSecurity"
-            [xzx_functions]="XZXFunctions"
-            [xzx_editor]="XZXEditor"
-            [xzx_scriptblox]="XZXScriptBlox"
-            [xzx_uibridge]="XZXUIBridge"
-          )
-          for name in "${!classes[@]}"; do
-            class="${classes[$name]}"
-            cat > "injector/dylib/${name}.h" << HEOF
+          # xzx_injection_randomizer
+          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
           #import <Foundation/Foundation.h>
-          @interface $class : NSObject
+          @interface XZXInjectionRandomizer : NSObject
           + (instancetype)shared;
           @end
-          HEOF
-            cat > "injector/dylib/${name}.m" << MEOF
-          #import "${name}.h"
-          @implementation $class
-          + (instancetype)shared {
-              static id i; static dispatch_once_t t;
-              dispatch_once(&t, ^{ i = [[self alloc] init]; });
-              return i;
-          }
+          EOF
+          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
+          #import "xzx_injection_randomizer.h"
+          @implementation XZXInjectionRandomizer
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
           @end
-          MEOF
-          done
+          EOF
+
+          # xzx_obfuscator
+          cat > injector/dylib/xzx_obfuscator.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXObfuscator : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_obfuscator.m << 'EOF'
+          #import "xzx_obfuscator.h"
+          @implementation XZXObfuscator
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_antidetection
+          cat > injector/dylib/xzx_antidetection.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXAntiDetection : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_antidetection.m << 'EOF'
+          #import "xzx_antidetection.h"
+          @implementation XZXAntiDetection
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_ban_protection
+          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXBanProtection : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
+          #import "xzx_ban_protection.h"
+          @implementation XZXBanProtection
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_hook_manager
+          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXHookManager : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
+          #import "xzx_hook_manager.h"
+          @implementation XZXHookManager
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_physics_bypass
+          cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXPhysicsBypass : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
+          #import "xzx_physics_bypass.h"
+          @implementation XZXPhysicsBypass
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_memory_obfuscator
+          cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXMemoryObfuscator : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
+          #import "xzx_memory_obfuscator.h"
+          @implementation XZXMemoryObfuscator
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_security
+          cat > injector/dylib/xzx_security.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXSecurity : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_security.m << 'EOF'
+          #import "xzx_security.h"
+          @implementation XZXSecurity
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_functions
+          cat > injector/dylib/xzx_functions.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXFunctions : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_functions.m << 'EOF'
+          #import "xzx_functions.h"
+          @implementation XZXFunctions
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_editor
+          cat > injector/dylib/xzx_editor.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXEditor : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_editor.m << 'EOF'
+          #import "xzx_editor.h"
+          @implementation XZXEditor
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_scriptblox
+          cat > injector/dylib/xzx_scriptblox.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXScriptBlox : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_scriptblox.m << 'EOF'
+          #import "xzx_scriptblox.h"
+          @implementation XZXScriptBlox
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
+
+          # xzx_uibridge
+          cat > injector/dylib/xzx_uibridge.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXUIBridge : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_uibridge.m << 'EOF'
+          #import "xzx_uibridge.h"
+          @implementation XZXUIBridge
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          @end
+          EOF
 
       # ──────────────────────────────────────────────────────────────────────────
       # Compile – no ARC flags, just standard compilation

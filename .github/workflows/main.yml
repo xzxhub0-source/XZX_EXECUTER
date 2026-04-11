@@ -59,7 +59,7 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
 
-      # ----- LuaExecutor (unchanged) -----
+      # ----- LuaExecutor -----
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -239,7 +239,7 @@ jobs:
           }
           EOF
 
-      # ----- Objective-C UI (XZXMainViewController) -----
+      # ----- Objective-C UI -----
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -473,7 +473,6 @@ jobs:
               [gr setTranslation:CGPointZero inView:self.view];
           }
 
-          // Use dealloc without calling [super dealloc] – ARC handles it. Silence warning.
           #pragma clang diagnostic push
           #pragma clang diagnostic ignored "-Wobjc-missing-super-calls"
           - (void)dealloc {
@@ -484,7 +483,7 @@ jobs:
           @end
           EOF
 
-      # ----- Core detection (WKWebView based) -----
+      # ----- Core detection -----
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -663,7 +662,7 @@ jobs:
           @end
           SWIFTEOF
 
-      # ----- Create xzx_hooks and entry (already present, but we'll ensure they exist) -----
+      # ----- Hooks and entry -----
       - name: Create xzx_hooks.h
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
@@ -712,28 +711,141 @@ jobs:
           }
           EOF
 
-      # ----- Stub files for all other headers (fixed: include Foundation) -----
-      - name: Create stub files
+      # ----- Stub files (each individually to avoid shell loop issues) -----
+      - name: Create stub xzx_injection_randomizer
         run: |
-          for stub in xzx_injection_randomizer xzx_obfuscator xzx_antidetection xzx_ban_protection xzx_hook_manager xzx_physics_bypass xzx_memory_obfuscator xzx_security xzx_functions; do
-            cat > injector/dylib/${stub}.h << EOF
-            #import <Foundation/Foundation.h>
-            @interface ${stub} : NSObject
-            + (instancetype)shared;
-            @end
-            EOF
-            cat > injector/dylib/${stub}.m << EOF
-            #import "${stub}.h"
-            @implementation ${stub}
-            + (instancetype)shared {
-                static ${stub} *instance = nil;
-                static dispatch_once_t onceToken;
-                dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
-                return instance;
-            }
-            @end
-            EOF
-          done
+          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXInjectionRandomizer : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
+          #import "xzx_injection_randomizer.h"
+          @implementation XZXInjectionRandomizer
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_obfuscator
+        run: |
+          cat > injector/dylib/xzx_obfuscator.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXObfuscator : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_obfuscator.m << 'EOF'
+          #import "xzx_obfuscator.h"
+          @implementation XZXObfuscator
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_antidetection
+        run: |
+          cat > injector/dylib/xzx_antidetection.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXAntiDetection : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_antidetection.m << 'EOF'
+          #import "xzx_antidetection.h"
+          @implementation XZXAntiDetection
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_ban_protection
+        run: |
+          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXBanProtection : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
+          #import "xzx_ban_protection.h"
+          @implementation XZXBanProtection
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_hook_manager
+        run: |
+          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXHookManager : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
+          #import "xzx_hook_manager.h"
+          @implementation XZXHookManager
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_physics_bypass
+        run: |
+          cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXPhysicsBypass : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
+          #import "xzx_physics_bypass.h"
+          @implementation XZXPhysicsBypass
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_memory_obfuscator
+        run: |
+          cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXMemoryObfuscator : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
+          #import "xzx_memory_obfuscator.h"
+          @implementation XZXMemoryObfuscator
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_security
+        run: |
+          cat > injector/dylib/xzx_security.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXSecurity : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_security.m << 'EOF'
+          #import "xzx_security.h"
+          @implementation XZXSecurity
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
+
+      - name: Create stub xzx_functions
+        run: |
+          cat > injector/dylib/xzx_functions.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface XZXFunctions : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/xzx_functions.m << 'EOF'
+          #import "xzx_functions.h"
+          @implementation XZXFunctions
+          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
+          @end
+          EOF
 
       # ----- Compilation -----
       - name: Compile Objective-C files

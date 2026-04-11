@@ -9,9 +9,6 @@ static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 
-// Menu and game both have Metal + hidden status bar.
-// The ONLY reliable difference: menu has a WKWebView, in-game does not.
-// Show after 3 consecutive in-game positives, hide after 20 consecutive negatives.
 static const NSInteger kDebounceShow = 3;
 static const NSInteger kDebounceHide = 20;
 
@@ -33,11 +30,11 @@ static const NSInteger kDebounceHide = 20;
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _overlayWindow  = nil;
-        _isInitialized  = NO;
-        _inGame         = NO;
-        _positiveCount  = 0;
-        _negativeCount  = 0;
+        _overlayWindow = nil;
+        _isInitialized = NO;
+        _inGame        = NO;
+        _positiveCount = 0;
+        _negativeCount = 0;
         monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -48,7 +45,7 @@ static const NSInteger kDebounceHide = 20;
     _isInitialized = YES;
     dispatch_async(dispatch_get_main_queue(), ^{
         InitLua();
-        NSLog(@"[XZX] Lua initialized");
+        NSLog(@"[XZX] Initialized");
         [self startGameMonitoring];
     });
 }
@@ -58,9 +55,8 @@ static const NSInteger kDebounceHide = 20;
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // 8s startup wait — let Roblox fully launch before we start scanning
         [NSThread sleepForTimeInterval:8.0];
-        NSLog(@"[XZX] Detection started");
+        NSLog(@"[XZX] Detection loop started");
 
         while (YES) {
             @autoreleasepool {
@@ -80,7 +76,7 @@ static const NSInteger kDebounceHide = 20;
                 if (!self.inGame && self.positiveCount >= kDebounceShow) {
                     self.inGame = YES;
                     self.positiveCount = 0;
-                    NSLog(@"[XZX] In-game confirmed — showing overlay");
+                    NSLog(@"[XZX] ✅ IN GAME — showing overlay");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self showOverlay];
                         [self startWatchdog];
@@ -88,7 +84,7 @@ static const NSInteger kDebounceHide = 20;
                 } else if (self.inGame && self.negativeCount >= kDebounceHide) {
                     self.inGame = NO;
                     self.negativeCount = 0;
-                    NSLog(@"[XZX] Left game — hiding overlay");
+                    NSLog(@"[XZX] ❌ LEFT GAME — hiding overlay");
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self hideOverlay];
                     });
@@ -99,7 +95,6 @@ static const NSInteger kDebounceHide = 20;
     });
 }
 
-// Watchdog: if we're supposed to be in-game but window died, revive it
 - (void)startWatchdog {
     [_watchdogTimer invalidate];
     _watchdogTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
@@ -112,43 +107,69 @@ static const NSInteger kDebounceHide = 20;
 - (void)watchdogTick {
     if (!self.inGame) return;
     if (!_overlayWindow || _overlayWindow.hidden) {
-        NSLog(@"[XZX] Watchdog: window gone — reviving");
+        NSLog(@"[XZX] Watchdog: reviving overlay");
         _overlayWindow = nil;
         [self showOverlay];
     }
 }
 
-// THE FIX: menu has WKWebView, in-game does not.
-// Also exclude our own overlay window from all scanning.
 - (BOOL)isInGameState {
     @try {
-        BOOL hasMetalLayer = NO;
+        BOOL hasMetalLayer  = NO;
+        BOOL hasWebView     = NO;
         BOOL statusBarHidden = NO;
-        BOOL hasWebView = NO;
 
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
             UIWindowScene *ws = (UIWindowScene *)scene;
 
-            if (ws.statusBarManager.statusBarHidden) {
-                statusBarHidden = YES;
-            }
+            if (ws.statusBarManager.statusBarHidden) statusBarHidden = YES;
 
             for (UIWindow *window in ws.windows) {
-                // CRITICAL: exclude our own overlay window from all checks
+                // Always skip our own overlay window
                 if (window == _overlayWindow) continue;
 
+                // Log every non-overlay VC so we can see exactly what Roblox exposes
+                UIViewController *rvc = window.rootViewController;
+                if (rvc) {
+                    NSLog(@"[XZX] Window VC: %@ | key:%d",
+                          NSStringFromClass([rvc class]), window.isKeyWindow);
+                    // Log child VCs
+                    for (UIViewController *child in rvc.childViewControllers) {
+                        NSLog(@"[XZX]   Child VC: %@", NSStringFromClass([child class]));
+                    }
+                }
+
+                // Metal check
                 if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
-                if ([self viewHasWebView:window])    hasWebView = YES;
+
+                // WebView check — Roblox home feed uses WKWebView
+                // If WKWebView is present → we're in the menu
+                if ([self viewHasWebView:window]) {
+                    NSLog(@"[XZX] WKWebView detected — menu state");
+                    hasWebView = YES;
+                }
+
+                // Also check VC class name for game-specific controllers
+                UIViewController *vc = window.rootViewController;
+                while (vc.presentedViewController) vc = vc.presentedViewController;
+                NSString *vcName = NSStringFromClass([vc class]).lowercaseString;
+                if ([vcName containsString:@"game"]   ||
+                    [vcName containsString:@"render"]  ||
+                    [vcName containsString:@"play"]    ||
+                    [vcName containsString:@"rbxgame"]) {
+                    NSLog(@"[XZX] Game VC found: %@", NSStringFromClass([vc class]));
+                    return YES; // Definitive: we're in-game
+                }
             }
         }
 
-        NSLog(@"[XZX] Metal:%d StatusHidden:%d WebView:%d",
-              hasMetalLayer, statusBarHidden, hasWebView);
+        NSLog(@"[XZX] Metal:%d WebView:%d StatusHidden:%d",
+              hasMetalLayer, hasWebView, statusBarHidden);
 
-        // In-game = Metal rendering + fullscreen + NO web view
-        // Menu    = Metal rendering + fullscreen + HAS web view (home feed)
-        return (hasMetalLayer && statusBarHidden && !hasWebView);
+        // In-game:  Metal rendering + no WKWebView + fullscreen
+        // Menu:     Metal rendering + WKWebView present (home feed)
+        return (hasMetalLayer && !hasWebView && statusBarHidden);
 
     } @catch (NSException *e) {
         NSLog(@"[XZX] Detection error: %@", e);
@@ -156,14 +177,14 @@ static const NSInteger kDebounceHide = 20;
     return NO;
 }
 
-// Check for WKWebView or any web-based view (Roblox menu home feed)
+// Roblox menu home feed is a WKWebView
 - (BOOL)viewHasWebView:(UIView *)view {
     @try {
         if ([view isKindOfClass:[WKWebView class]]) return YES;
-        NSString *className = NSStringFromClass([view class]);
-        if ([className containsString:@"WebView"] ||
-            [className containsString:@"WKWeb"] ||
-            [className containsString:@"BrowserView"]) return YES;
+        NSString *cn = NSStringFromClass([view class]);
+        if ([cn containsString:@"WebView"] ||
+            [cn containsString:@"WKContent"] ||
+            [cn containsString:@"WebContent"]) return YES;
         for (UIView *sub in view.subviews) {
             if ([self viewHasWebView:sub]) return YES;
         }
@@ -194,21 +215,18 @@ static const NSInteger kDebounceHide = 20;
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
         if ([s isKindOfClass:[UIWindowScene class]] &&
             s.activationState == UISceneActivationStateForegroundActive) {
-            scene = (UIWindowScene *)s;
-            break;
+            scene = (UIWindowScene *)s; break;
         }
     }
     if (!scene) {
         for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
             if ([s isKindOfClass:[UIWindowScene class]]) {
-                scene = (UIWindowScene *)s;
-                break;
+                scene = (UIWindowScene *)s; break;
             }
         }
     }
-    if (!scene) { NSLog(@"[XZX] No scene found"); return; }
+    if (!scene) { NSLog(@"[XZX] No scene"); return; }
 
-    // If scene changed (load→game transition), rebuild window
     if (_overlayWindow && _overlayWindow.windowScene != scene) {
         _overlayWindow = nil;
     }

@@ -59,6 +59,13 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
 
+      # ----- Remove conflicting files from previous runs -----
+      - name: Remove conflicting files
+        run: |
+          rm -f injector/dylib/xzx_uibridge.m
+          rm -f injector/dylib/xzx_editor.m
+          rm -f injector/dylib/xzx_editor.h
+
       # ----- LuaExecutor -----
       - name: Create LuaExecutor.h
         run: |
@@ -711,7 +718,7 @@ jobs:
           }
           EOF
 
-      # ----- Stub files (each individually to avoid shell loop issues) -----
+      # ----- Stub files (each individually) -----
       - name: Create stub xzx_injection_randomizer
         run: |
           cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'

@@ -211,6 +211,7 @@
     }
 }
 
+// ========== FIXED: executeScript method ==========
 - (void)executeScript {
     NSString *script = _textView.text;
     if (script.length == 0) return;

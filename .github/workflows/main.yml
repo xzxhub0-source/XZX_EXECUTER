@@ -61,7 +61,7 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
 
-      # LuaExecutor.h – forward declaration
+      # LuaExecutor.h
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -176,7 +176,7 @@ jobs:
           static int xzx_setthreadid     (lua_State *L) { return 0; }
           static int xzx_fireclickdet    (lua_State *L) { return 0; }
           static int xzx_getgenv         (lua_State *L) {
-              lua_pushglobaltable(L);      // FIX: LUA_GLOBALSINDEX → lua_pushglobaltable
+              lua_pushglobaltable(L);      // FIXED
               return 1;
           }
           static int xzx_getreg          (lua_State *L) {
@@ -511,7 +511,7 @@ jobs:
           @end
           EOF
 
-      # xzx_core.h
+      # xzx_core – simple fixed‑delay version (to isolate detection issues)
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -534,7 +534,6 @@ jobs:
           #endif
           EOF
 
-      # xzx_core.m – iterative BFS, main‑queue polling, WKWebView detection
       - name: Create xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'HEREDOC'
@@ -542,18 +541,9 @@ jobs:
           #import "Core/LuaExecutor.h"
           #import "XZXMainViewController.h"
           #import <UIKit/UIKit.h>
-          #import <WebKit/WebKit.h>
-          #import <QuartzCore/QuartzCore.h>
           #import <objc/runtime.h>
 
           static XZXCore *sharedCore = nil;
-          static const NSInteger kDebounce = 2;
-
-          @interface XZXCore ()
-          @property (nonatomic, strong) UIWindow *overlayWindow;
-          @property (nonatomic, assign) NSInteger positiveCount;
-          @property (nonatomic, assign) NSInteger negativeCount;
-          @end
 
           @implementation XZXCore
 
@@ -569,8 +559,6 @@ jobs:
                   _overlayWindow  = nil;
                   _isInitialized  = NO;
                   _inGame         = NO;
-                  _positiveCount  = 0;
-                  _negativeCount  = 0;
               }
               return self;
           }
@@ -580,99 +568,12 @@ jobs:
               _isInitialized = YES;
               InitLua();
               NSLog(@"[XZX] Lua initialized");
-              [self startPolling];
-          }
-
-          - (void)startPolling {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)),
+              // Wait 12 seconds, then show overlay (no detection)
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12.0 * NSEC_PER_SEC)),
                              dispatch_get_main_queue(), ^{
-                  [self pollOnce];
-              });
-          }
-
-          - (void)pollOnce {
-              BOOL inGame = [self isInGameCheck];
-
-              if (inGame) {
-                  self.positiveCount++;
-                  self.negativeCount = 0;
-              } else {
-                  self.negativeCount++;
-                  self.positiveCount = 0;
-              }
-
-              if (!self.inGame && self.positiveCount >= kDebounce) {
-                  self.inGame = YES;
-                  self.positiveCount = 0;
-                  NSLog(@"[XZX] In-game confirmed — showing UI");
                   [self showOverlay];
-              } else if (self.inGame && self.negativeCount >= kDebounce) {
-                  self.inGame = NO;
-                  self.negativeCount = 0;
-                  NSLog(@"[XZX] Left game — hiding UI");
-                  [self hideOverlay];
-              }
-
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                             dispatch_get_main_queue(), ^{
-                  [self pollOnce];
+                  _inGame = YES;
               });
-          }
-
-          - (BOOL)isInGameCheck {
-              @try {
-                  __block BOOL hasWebView = NO;
-
-                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                      UIWindowScene *ws = (UIWindowScene *)scene;
-                      for (UIWindow *window in ws.windows) {
-                          if (window == _overlayWindow) continue;
-                          if ([self hasVisibleWebView:window]) {
-                              hasWebView = YES;
-                              break;
-                          }
-                      }
-                      if (hasWebView) break;
-                  }
-
-                  // In-game = no visible WKWebView (menu always has one)
-                  return !hasWebView;
-              } @catch (NSException *e) {
-                  NSLog(@"[XZX] isInGameCheck error: %@", e);
-              }
-              return NO;
-          }
-
-          - (BOOL)hasVisibleWebView:(UIView *)root {
-              if (!root) return NO;
-              NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
-              NSUInteger maxNodes = 2000;
-              NSUInteger index = 0;
-
-              while (index < queue.count && index < maxNodes) {
-                  UIView *view = queue[index];
-                  index++;
-
-                  @try {
-                      if (view.isHidden || view.alpha < 0.01) continue;
-                      if ([view isKindOfClass:[WKWebView class]] &&
-                          view.bounds.size.width > 50 && view.bounds.size.height > 50) {
-                          NSLog(@"[XZX] Found visible WKWebView: %@", NSStringFromCGRect(view.frame));
-                          return YES;
-                      }
-                      NSString *className = NSStringFromClass([view class]);
-                      if (([className containsString:@"WKWeb"] || [className containsString:@"WebView"]) &&
-                          view.bounds.size.width > 50) {
-                          NSLog(@"[XZX] Found WebView subclass: %@", className);
-                          return YES;
-                      }
-                      for (UIView *sub in view.subviews) {
-                          if (queue.count < maxNodes) [queue addObject:sub];
-                      }
-                  } @catch (NSException *e) {}
-              }
-              return NO;
           }
 
           - (void)showOverlay {
@@ -722,7 +623,7 @@ jobs:
           @end
           HEREDOC
 
-      # xzx_hooks
+      # xzx_hooks (stubs)
       - name: Create xzx_hooks.h
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
@@ -757,28 +658,9 @@ jobs:
               });
           }
 
-          void install_hook(void *target, void *replacement, void **original) {
-              if (!target || !replacement) return;
-              if (original) *original = target;
-              original_methods[method_count++] = target;
-              vm_address_t addr = (vm_address_t)target;
-              vm_protect(mach_task_self(), addr & ~(PAGE_SIZE-1), PAGE_SIZE, 0,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-              uint32_t branch = 0x14000000 |
-                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
-              memcpy(target, &branch, 4);
-              __builtin___clear_cache((char *)target, (char *)target + 4);
-              vm_protect(mach_task_self(), addr & ~(PAGE_SIZE-1), PAGE_SIZE, 0,
-                         VM_PROT_READ | VM_PROT_EXECUTE);
-          }
-
-          void hook_roblox_functions(void) {
-              if (hooks_active) return;
-              hooks_active = YES;
-          }
-
-          void unhook_roblox_functions(void) { hooks_active = NO; }
-
+          void install_hook(void *target, void *replacement, void **original) {}
+          void hook_roblox_functions(void) {}
+          void unhook_roblox_functions(void) {}
           bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
           EOF
 
@@ -797,164 +679,26 @@ jobs:
           }
           EOF
 
-      # Stub files – explicit class names
+      # Stub files (all required)
       - name: Create stub files
         run: |
-          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
+          for stub in xzx_injection_randomizer xzx_obfuscator xzx_antidetection \
+                      xzx_ban_protection xzx_hook_manager xzx_physics_bypass \
+                      xzx_memory_obfuscator xzx_security xzx_functions \
+                      xzx_editor xzx_scriptblox xzx_uibridge; do
+            cat > "injector/dylib/${stub}.h" << HEOF
           #import <Foundation/Foundation.h>
-          @interface XZXInjectionRandomizer : NSObject
+          @interface XZX${stub#xzx_} : NSObject
           + (instancetype)shared;
           @end
-          EOF
-          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
-          #import "xzx_injection_randomizer.h"
-          @implementation XZXInjectionRandomizer
+          HEOF
+            cat > "injector/dylib/${stub}.m" << MEOF
+          #import "${stub}.h"
+          @implementation XZX${stub#xzx_}
           + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
           @end
-          EOF
-
-          cat > injector/dylib/xzx_obfuscator.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXObfuscator : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_obfuscator.m << 'EOF'
-          #import "xzx_obfuscator.h"
-          @implementation XZXObfuscator
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_antidetection.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXAntiDetection : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_antidetection.m << 'EOF'
-          #import "xzx_antidetection.h"
-          @implementation XZXAntiDetection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXBanProtection : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
-          #import "xzx_ban_protection.h"
-          @implementation XZXBanProtection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXHookManager : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
-          #import "xzx_hook_manager.h"
-          @implementation XZXHookManager
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXPhysicsBypass : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
-          #import "xzx_physics_bypass.h"
-          @implementation XZXPhysicsBypass
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXMemoryObfuscator : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
-          #import "xzx_memory_obfuscator.h"
-          @implementation XZXMemoryObfuscator
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_security.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXSecurity : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_security.m << 'EOF'
-          #import "xzx_security.h"
-          @implementation XZXSecurity
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_functions.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXFunctions : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_functions.m << 'EOF'
-          #import "xzx_functions.h"
-          @implementation XZXFunctions
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_editor.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXEditor : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_editor.m << 'EOF'
-          #import "xzx_editor.h"
-          @implementation XZXEditor
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_scriptblox.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXScriptBlox : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_scriptblox.m << 'EOF'
-          #import "xzx_scriptblox.h"
-          @implementation XZXScriptBlox
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          cat > injector/dylib/xzx_uibridge.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXUIBridge : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_uibridge.m << 'EOF'
-          #import "xzx_uibridge.h"
-          @implementation XZXUIBridge
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
+          MEOF
+          done
 
       # Compile
       - name: Compile Objective-C files
@@ -1015,7 +759,7 @@ jobs:
           echo "✅ Dylib linked"
           ls -lh build/executor.dylib
 
-      # 🔐 SIGN THE DYLIB (fixes code signing crash)
+      # Sign dylib
       - name: Sign dylib
         run: codesign -f -s - build/executor.dylib
 
@@ -1038,8 +782,8 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
 
-      # 🔐 RE‑SIGN THE ENTIRE APP
-      - name: Resign the app
+      # Resign the entire app
+      - name: Resign app
         run: codesign -f -s - extracted/Payload/Roblox.app
 
       - name: Create IPA

@@ -13,14 +13,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install gdown
+      - name: Install pipx and gdown
         run: |
-          pip3 install gdown
+          brew install pipx
+          pipx ensurepath
+          pipx install gdown
 
       - name: Download Roblox IPA
         run: |
           FILE_ID="16uaCXW9O3SmjYEPjc1wRhIj-o2NAXqdW"
-          gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O Roblox.ipa
+          pipx run gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O Roblox.ipa
           # Verify download
           if [ ! -f Roblox.ipa ] || [ $(stat -c%s Roblox.ipa) -lt 1000000 ]; then
             echo "Download failed or file too small"
@@ -70,7 +72,7 @@ jobs:
           rm -f injector/dylib/xzx_editor.m
           rm -f injector/dylib/xzx_editor.h
 
-      # ----- LuaExecutor -----
+      # ----- LuaExecutor (unchanged) -----
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -494,7 +496,7 @@ jobs:
           @end
           EOF
 
-      # ----- Core detection -----
+      # ----- Core detection (WKWebView based) -----
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -722,7 +724,7 @@ jobs:
           }
           EOF
 
-      # ----- Stub files -----
+      # ----- Stub files (each individually) -----
       - name: Create stub xzx_injection_randomizer
         run: |
           cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'

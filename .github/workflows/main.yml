@@ -61,9 +61,7 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # LuaExecutor.h — added forward declaration of RegisterXZXFunctions (BUG 6)
-      # ──────────────────────────────────────────────────────────────────────────
+      # LuaExecutor.h – forward declaration
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -76,7 +74,7 @@ jobs:
           void InitLua(void);
           void ExecuteScript(const char *script);
           void RegisterFunction(const char *name, int (*func)(struct lua_State*));
-          void RegisterXZXFunctions(void);   // FIXED BUG 6: forward declaration
+          void RegisterXZXFunctions(void);
           struct lua_State* GetLuaState(void);
           #ifdef __cplusplus
           }
@@ -84,9 +82,7 @@ jobs:
           #endif
           EOF
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # LuaExecutor.mm — replaced LUA_GLOBALSINDEX with lua_pushglobaltable (BUG 2)
-      # ──────────────────────────────────────────────────────────────────────────
+      # LuaExecutor.mm – fixed LUA_GLOBALSINDEX
       - name: Create LuaExecutor.mm
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'CPPEOF'
@@ -180,7 +176,7 @@ jobs:
           static int xzx_setthreadid     (lua_State *L) { return 0; }
           static int xzx_fireclickdet    (lua_State *L) { return 0; }
           static int xzx_getgenv         (lua_State *L) {
-              lua_pushglobaltable(L);      // FIXED BUG 2: LUA_GLOBALSINDEX → lua_pushglobaltable
+              lua_pushglobaltable(L);      // FIX: LUA_GLOBALSINDEX → lua_pushglobaltable
               return 1;
           }
           static int xzx_getreg          (lua_State *L) {
@@ -238,9 +234,7 @@ jobs:
           struct lua_State* GetLuaState(void) { return L; }
           CPPEOF
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # XZXMainViewController — removed [super dealloc] (BUG 1)
-      # ──────────────────────────────────────────────────────────────────────────
+      # XZXMainViewController – no [super dealloc]
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -510,7 +504,6 @@ jobs:
               [gr setTranslation:CGPointZero inView:self.view];
           }
 
-          // FIXED BUG 1: removed [super dealloc] – ARC handles it automatically
           - (void)dealloc {
               [[NSNotificationCenter defaultCenter] removeObserver:self];
           }
@@ -518,9 +511,7 @@ jobs:
           @end
           EOF
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # xzx_core.h – simplified detection interface
-      # ──────────────────────────────────────────────────────────────────────────
+      # xzx_core.h
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -543,10 +534,7 @@ jobs:
           #endif
           EOF
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # xzx_core.m – iterative BFS (no recursion, BUG 3) + WKWebView detection (BUG 4)
-      # No dispatch_sync on background thread – uses main queue polling (BUG 7)
-      # ──────────────────────────────────────────────────────────────────────────
+      # xzx_core.m – iterative BFS, main‑queue polling, WKWebView detection
       - name: Create xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'HEREDOC'
@@ -595,7 +583,6 @@ jobs:
               [self startPolling];
           }
 
-          // FIXED BUG 7: no background thread, no dispatch_sync. Pure main‑queue polling.
           - (void)startPolling {
               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)),
                              dispatch_get_main_queue(), ^{
@@ -626,15 +613,12 @@ jobs:
                   [self hideOverlay];
               }
 
-              // schedule next poll in 1 second
               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                              dispatch_get_main_queue(), ^{
                   [self pollOnce];
               });
           }
 
-          // FIXED BUG 4: use WKWebView detection (menu has webview, game doesn't)
-          // Also uses iterative BFS with a node cap to avoid stack overflow (BUG 3)
           - (BOOL)isInGameCheck {
               @try {
                   __block BOOL hasWebView = NO;
@@ -660,7 +644,6 @@ jobs:
               return NO;
           }
 
-          // Iterative BFS with max node limit (2000) – no recursion, no stack overflow
           - (BOOL)hasVisibleWebView:(UIView *)root {
               if (!root) return NO;
               NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
@@ -672,25 +655,18 @@ jobs:
                   index++;
 
                   @try {
-                      // Skip invisible views
                       if (view.isHidden || view.alpha < 0.01) continue;
-
-                      // Check if this view is a visible WKWebView
                       if ([view isKindOfClass:[WKWebView class]] &&
                           view.bounds.size.width > 50 && view.bounds.size.height > 50) {
                           NSLog(@"[XZX] Found visible WKWebView: %@", NSStringFromCGRect(view.frame));
                           return YES;
                       }
-
-                      // Also check class name for WebView subclasses
                       NSString *className = NSStringFromClass([view class]);
                       if (([className containsString:@"WKWeb"] || [className containsString:@"WebView"]) &&
                           view.bounds.size.width > 50) {
                           NSLog(@"[XZX] Found WebView subclass: %@", className);
                           return YES;
                       }
-
-                      // Add subviews to queue
                       for (UIView *sub in view.subviews) {
                           if (queue.count < maxNodes) [queue addObject:sub];
                       }
@@ -746,9 +722,7 @@ jobs:
           @end
           HEREDOC
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # xzx_hooks – minimal stubs (no background thread issues)
-      # ──────────────────────────────────────────────────────────────────────────
+      # xzx_hooks
       - name: Create xzx_hooks.h
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
@@ -823,12 +797,9 @@ jobs:
           }
           EOF
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # Stub files – explicit class names (BUG 5 fixed, no associative array)
-      # ──────────────────────────────────────────────────────────────────────────
+      # Stub files – explicit class names
       - name: Create stub files
         run: |
-          # xzx_injection_randomizer
           cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXInjectionRandomizer : NSObject
@@ -842,7 +813,6 @@ jobs:
           @end
           EOF
 
-          # xzx_obfuscator
           cat > injector/dylib/xzx_obfuscator.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXObfuscator : NSObject
@@ -856,7 +826,6 @@ jobs:
           @end
           EOF
 
-          # xzx_antidetection
           cat > injector/dylib/xzx_antidetection.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXAntiDetection : NSObject
@@ -870,7 +839,6 @@ jobs:
           @end
           EOF
 
-          # xzx_ban_protection
           cat > injector/dylib/xzx_ban_protection.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXBanProtection : NSObject
@@ -884,7 +852,6 @@ jobs:
           @end
           EOF
 
-          # xzx_hook_manager
           cat > injector/dylib/xzx_hook_manager.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXHookManager : NSObject
@@ -898,7 +865,6 @@ jobs:
           @end
           EOF
 
-          # xzx_physics_bypass
           cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXPhysicsBypass : NSObject
@@ -912,7 +878,6 @@ jobs:
           @end
           EOF
 
-          # xzx_memory_obfuscator
           cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXMemoryObfuscator : NSObject
@@ -926,7 +891,6 @@ jobs:
           @end
           EOF
 
-          # xzx_security
           cat > injector/dylib/xzx_security.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXSecurity : NSObject
@@ -940,7 +904,6 @@ jobs:
           @end
           EOF
 
-          # xzx_functions
           cat > injector/dylib/xzx_functions.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXFunctions : NSObject
@@ -954,7 +917,6 @@ jobs:
           @end
           EOF
 
-          # xzx_editor
           cat > injector/dylib/xzx_editor.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXEditor : NSObject
@@ -968,7 +930,6 @@ jobs:
           @end
           EOF
 
-          # xzx_scriptblox
           cat > injector/dylib/xzx_scriptblox.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXScriptBlox : NSObject
@@ -982,7 +943,6 @@ jobs:
           @end
           EOF
 
-          # xzx_uibridge
           cat > injector/dylib/xzx_uibridge.h << 'EOF'
           #import <Foundation/Foundation.h>
           @interface XZXUIBridge : NSObject
@@ -996,9 +956,7 @@ jobs:
           @end
           EOF
 
-      # ──────────────────────────────────────────────────────────────────────────
-      # Compile – no ARC flags, just standard compilation
-      # ──────────────────────────────────────────────────────────────────────────
+      # Compile
       - name: Compile Objective-C files
         run: |
           mkdir -p build
@@ -1057,6 +1015,10 @@ jobs:
           echo "✅ Dylib linked"
           ls -lh build/executor.dylib
 
+      # 🔐 SIGN THE DYLIB (fixes code signing crash)
+      - name: Sign dylib
+        run: codesign -f -s - build/executor.dylib
+
       - name: Extract and patch IPA
         run: |
           unzip -q Roblox.ipa -d extracted/
@@ -1076,6 +1038,12 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
           plutil -convert binary1 "$INFO_PLIST"
 
+      # 🔐 RE‑SIGN THE ENTIRE APP
+      - name: Resign the app
+        run: codesign -f -s - extracted/Payload/Roblox.app
+
+      - name: Create IPA
+        run: |
           cd extracted && zip -qr ../XZX.ipa Payload/ && cd ..
           echo "✅ IPA ready"
 

@@ -1,13 +1,20 @@
 #import "xzx_core.h"
 #import "Core/LuaExecutor.h"
+#import "XZXMainViewController.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 static XZXCore *sharedCore = nil;
+static dispatch_queue_t monitorQueue = nil;
+static BOOL gameDetectionActive = NO;
+
+static const NSInteger kDebounceShow = 2;   // 2 seconds to show
+static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
 
 @interface XZXCore ()
+@property (nonatomic, assign) NSInteger positiveCount;
+@property (nonatomic, assign) NSInteger negativeCount;
 @property (nonatomic, strong) UIWindow *overlayWindow;
-@property (nonatomic, strong) NSTimer  *watchdogTimer;
 @end
 
 @implementation XZXCore
@@ -24,6 +31,9 @@ static XZXCore *sharedCore = nil;
         _overlayWindow  = nil;
         _isInitialized  = NO;
         _inGame         = NO;
+        _positiveCount  = 0;
+        _negativeCount  = 0;
+        monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
     }
     return self;
 }
@@ -31,85 +41,163 @@ static XZXCore *sharedCore = nil;
 - (void)initialize {
     if (_isInitialized) return;
     _isInitialized = YES;
-
-    InitLua();
-    NSLog(@"[XZX] Lua initialized");
-
-    // Wait 12 seconds — clears loading screen completely before we show anything
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        [self showOverlay];
-        [self startWatchdog];
-        _inGame = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        InitLua();
+        NSLog(@"[XZX] Lua initialized");
+        [self startGameMonitoring];
     });
 }
 
-// Watchdog: every 3 seconds check if our window got killed and revive it
-- (void)startWatchdog {
-    _watchdogTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
-                                                      target:self
-                                                    selector:@selector(watchdogTick)
-                                                    userInfo:nil
-                                                     repeats:YES];
+- (void)startGameMonitoring {
+    if (gameDetectionActive) return;
+    gameDetectionActive = YES;
+
+    dispatch_async(monitorQueue, ^{
+        // Wait 15 seconds – long enough to clear the initial loading screen completely
+        [NSThread sleepForTimeInterval:15.0];
+        NSLog(@"[XZX] Detection started");
+
+        while (YES) {
+            @autoreleasepool {
+                __block BOOL inGame = NO;
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    inGame = [self isGameEngineActive];
+                });
+
+                if (inGame) {
+                    self.positiveCount++;
+                    self.negativeCount = 0;
+                } else {
+                    self.negativeCount++;
+                    self.positiveCount = 0;
+                }
+
+                // Show after 2 consecutive positives
+                if (!self.inGame && self.positiveCount >= kDebounceShow) {
+                    self.inGame = YES;
+                    self.positiveCount = 0;
+                    NSLog(@"[XZX] Game detected — showing UI");
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self showOverlay];
+                    });
+                }
+                // Hide after 20 consecutive negatives
+                else if (self.inGame && self.negativeCount >= kDebounceHide) {
+                    self.inGame = NO;
+                    self.negativeCount = 0;
+                    NSLog(@"[XZX] Left game — hiding UI");
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self hideOverlay];
+                    });
+                }
+            }
+            [NSThread sleepForTimeInterval:1.0];
+        }
+    });
 }
 
-- (void)watchdogTick {
-    if (!_overlayWindow || _overlayWindow.hidden) {
-        NSLog(@"[XZX] Watchdog: overlay gone — reviving");
-        [self showOverlay];
+- (BOOL)isGameEngineActive {
+    @try {
+        BOOL statusBarHidden = NO;
+        NSInteger buttonCount = 0;
+        BOOL hasMetalLayer = NO;
+
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+
+            if (ws.statusBarManager.statusBarHidden) {
+                statusBarHidden = YES;
+            }
+
+            for (UIWindow *window in ws.windows) {
+                buttonCount += [self countButtonsInView:window];
+                if ([self viewHasMetalLayer:window]) hasMetalLayer = YES;
+            }
+        }
+
+        return (hasMetalLayer && statusBarHidden && buttonCount < 6);
+    } @catch (NSException *e) {
+        NSLog(@"[XZX] Detection error: %@", e);
     }
+    return NO;
+}
+
+- (BOOL)viewHasMetalLayer:(UIView *)view {
+    @try {
+        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+        for (CALayer *sub in view.layer.sublayers ?: @[]) {
+            if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+            for (CALayer *subsub in sub.sublayers ?: @[]) {
+                if ([subsub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+            }
+        }
+        for (UIView *sub in view.subviews) {
+            if ([self viewHasMetalLayer:sub]) return YES;
+        }
+    } @catch (NSException *e) {}
+    return NO;
+}
+
+- (NSInteger)countButtonsInView:(UIView *)view {
+    NSInteger count = 0;
+    @try {
+        if ([view isKindOfClass:[UIButton class]]) count++;
+        if (count > 10) return count;
+        for (UIView *sub in view.subviews) {
+            count += [self countButtonsInView:sub];
+            if (count > 10) return count;
+        }
+    } @catch (NSException *e) {}
+    return count;
 }
 
 - (void)showOverlay {
     if (_overlayWindow && !_overlayWindow.hidden) return;
 
-    UIWindowScene *scene = nil;
-    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-        if ([s isKindOfClass:[UIWindowScene class]] &&
-            s.activationState == UISceneActivationStateForegroundActive) {
-            scene = (UIWindowScene *)s;
-            break;
-        }
-    }
-    // Fallback: grab any connected scene
-    if (!scene) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *scene = nil;
         for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
+            if ([s isKindOfClass:[UIWindowScene class]] &&
+                s.activationState == UISceneActivationStateForegroundActive) {
                 scene = (UIWindowScene *)s;
                 break;
             }
         }
-    }
-    if (!scene) { NSLog(@"[XZX] No scene"); return; }
+        if (!scene) {
+            for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                if ([s isKindOfClass:[UIWindowScene class]]) {
+                    scene = (UIWindowScene *)s;
+                    break;
+                }
+            }
+        }
+        if (!scene) { NSLog(@"[XZX] No scene"); return; }
 
-    // Rebuild the window if the scene changed (happens during load→game transition)
-    if (_overlayWindow && _overlayWindow.windowScene != scene) {
-        NSLog(@"[XZX] Scene changed — rebuilding window");
-        _overlayWindow = nil;
-    }
+        if (_overlayWindow && _overlayWindow.windowScene != scene) {
+            _overlayWindow = nil;
+        }
 
-    if (!_overlayWindow) {
-        UIViewController *vc = [[NSClassFromString(@"XZXMainViewController") alloc] init];
-        if (!vc) vc = [[NSClassFromString(@"MainViewController") alloc] init];
-        if (!vc) { NSLog(@"[XZX] VC not found"); return; }
+        if (!_overlayWindow) {
+            UIViewController *vc = [[XZXMainViewController alloc] init];
+            if (!vc) { NSLog(@"[XZX] VC not found"); return; }
+            _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+            _overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+            _overlayWindow.backgroundColor = [UIColor clearColor];
+            _overlayWindow.rootViewController = vc;
+        }
 
-        _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-        _overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-        _overlayWindow.backgroundColor = [UIColor clearColor];
-        _overlayWindow.rootViewController = vc;
-    }
-
-    _overlayWindow.hidden = NO;
-    [_overlayWindow makeKeyAndVisible];
-    NSLog(@"[XZX] Overlay shown");
+        _overlayWindow.hidden = NO;
+        [_overlayWindow makeKeyAndVisible];
+        NSLog(@"[XZX] Overlay shown");
+    });
 }
 
 - (void)hideOverlay {
-    _overlayWindow.hidden = YES;
-    // Stop watchdog so user-triggered hide stays hidden
-    [_watchdogTimer invalidate];
-    _watchdogTimer = nil;
-    NSLog(@"[XZX] Overlay hidden by user");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        _overlayWindow.hidden = YES;
+        NSLog(@"[XZX] Overlay hidden");
+    });
 }
 
 - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }

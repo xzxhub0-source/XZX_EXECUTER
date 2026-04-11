@@ -239,7 +239,7 @@ jobs:
           }
           EOF
 
-      # ----- New Objective‑C UI files -----
+      # ----- Objective-C UI (XZXMainViewController) -----
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -263,16 +263,12 @@ jobs:
           cat > XZX/UI/XZXMainViewController.m << 'EOF'
           #import "XZXMainViewController.h"
 
-          @interface XZXMainViewController ()
-          @end
-
           @implementation XZXMainViewController
 
           - (void)viewDidLoad {
               [super viewDidLoad];
               self.view.backgroundColor = [UIColor clearColor];
 
-              // Floating drag button
               UIButton *toggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
               toggleBtn.frame = CGRectMake(20, 80, 52, 52);
               toggleBtn.backgroundColor = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:0.95];
@@ -284,10 +280,8 @@ jobs:
               [toggleBtn setTitle:@"⚡" forState:UIControlStateNormal];
               toggleBtn.titleLabel.font = [UIFont systemFontOfSize:24];
               [toggleBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-
               UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragBtn:)];
               [toggleBtn addGestureRecognizer:pan];
-
               [self.view addSubview:toggleBtn];
               _toggleBtn = toggleBtn;
 
@@ -314,7 +308,6 @@ jobs:
               _panel.layer.shadowOffset  = CGSizeZero;
               [self.view addSubview:_panel];
 
-              // Title bar
               UIView *titleBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, 44)];
               titleBar.backgroundColor = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:1];
               titleBar.layer.cornerRadius = 18;
@@ -335,11 +328,9 @@ jobs:
               [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
               [titleBar addSubview:closeBtn];
 
-              // Drag title bar
               UIPanGestureRecognizer *panPanel = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPanel:)];
               [titleBar addGestureRecognizer:panPanel];
 
-              // Tab bar
               NSArray *tabs = @[@"Editor", @"Hub", @"Saved"];
               _tabButtons = [NSMutableArray array];
               CGFloat tw = pw / tabs.count;
@@ -355,15 +346,12 @@ jobs:
                   [_tabButtons addObject:tab];
               }
 
-              // Tab indicator line
               _tabLine = [[UIView alloc] initWithFrame:CGRectMake(0, 82, tw, 2)];
               _tabLine.backgroundColor = [UIColor colorWithRed:0.65 green:0.35 blue:1 alpha:1];
               [_panel addSubview:_tabLine];
 
-              // Content area
               CGRect content = CGRectMake(0, 84, pw, ph - 84);
 
-              // Editor tab
               _editorView = [[UIView alloc] initWithFrame:content];
               _editorView.hidden = NO;
               [_panel addSubview:_editorView];
@@ -390,11 +378,9 @@ jobs:
               [clearBtn addTarget:self action:@selector(clearScript) forControlEvents:UIControlEventTouchUpInside];
               [_editorView addSubview:clearBtn];
 
-              // Hub tab
               _hubView = [[UIView alloc] initWithFrame:content];
               _hubView.hidden = YES;
               [_panel addSubview:_hubView];
-
               UILabel *hubPlaceholder = [[UILabel alloc] initWithFrame:_hubView.bounds];
               hubPlaceholder.text = @"Script Hub";
               hubPlaceholder.textColor = [UIColor colorWithWhite:1 alpha:0.3];
@@ -402,11 +388,9 @@ jobs:
               hubPlaceholder.font = [UIFont systemFontOfSize:16];
               [_hubView addSubview:hubPlaceholder];
 
-              // Saved tab
               _savedView = [[UIView alloc] initWithFrame:content];
               _savedView.hidden = YES;
               [_panel addSubview:_savedView];
-
               UILabel *savedPlaceholder = [[UILabel alloc] initWithFrame:_savedView.bounds];
               savedPlaceholder.text = @"No saved scripts";
               savedPlaceholder.textColor = [UIColor colorWithWhite:1 alpha:0.3];
@@ -445,14 +429,12 @@ jobs:
               _editorView.hidden = (idx != 0);
               _hubView.hidden    = (idx != 1);
               _savedView.hidden  = (idx != 2);
-
               CGFloat tw = _panel.bounds.size.width / _tabButtons.count;
               [UIView animateWithDuration:0.18 animations:^{
                   CGRect f = _tabLine.frame;
                   f.origin.x = idx * tw;
                   _tabLine.frame = f;
               }];
-
               for (UIButton *btn in _tabButtons) {
                   btn.titleLabel.alpha = (btn.tag == idx) ? 1.0 : 0.4;
                   [btn setTitleColor:(btn.tag == idx ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.4])
@@ -498,7 +480,7 @@ jobs:
           @end
           EOF
 
-      # ----- Core detection files (as you provided) -----
+      # ----- Core detection (WKWebView based) -----
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
@@ -523,11 +505,12 @@ jobs:
 
       - name: Create xzx_core.m
         run: |
-          cat > injector/dylib/xzx_core.m << 'EOF'
+          cat > injector/dylib/xzx_core.m << 'SWIFTEOF'
           #import "xzx_core.h"
           #import "Core/LuaExecutor.h"
           #import "XZXMainViewController.h"
           #import <UIKit/UIKit.h>
+          #import <WebKit/WebKit.h>
           #import <objc/runtime.h>
 
           static XZXCore *sharedCore = nil;
@@ -547,30 +530,69 @@ jobs:
 
           - (instancetype)init {
               self = [super init];
-              if (self) {
-                  _overlayWindow  = nil;
-                  _isInitialized  = NO;
-                  _inGame         = NO;
-              }
+              if (self) { _overlayWindow = nil; _isInitialized = NO; _inGame = NO; }
               return self;
           }
 
           - (void)initialize {
               if (_isInitialized) return;
               _isInitialized = YES;
-
               InitLua();
               NSLog(@"[XZX] Lua initialized");
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                             dispatch_get_main_queue(), ^{ [self pollForGameState]; });
+          }
 
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12.0 * NSEC_PER_SEC)),
-                             dispatch_get_main_queue(), ^{
+          - (void)pollForGameState {
+              if (_inGame) return;
+              if ([self isMenuVisible]) {
+                  NSLog(@"[XZX] Menu visible, waiting...");
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                                 dispatch_get_main_queue(), ^{ [self pollForGameState]; });
+              } else {
+                  NSLog(@"[XZX] Game detected — showing overlay");
+                  _inGame = YES;
                   [self showOverlay];
                   [self startWatchdog];
-                  _inGame = YES;
-              });
+              }
+          }
+
+          - (BOOL)isMenuVisible {
+              @try {
+                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+                      for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                          if (window == _overlayWindow) continue;
+                          if ([self viewHasVisibleWebView:window]) return YES;
+                      }
+                  }
+              } @catch (NSException *e) {}
+              return NO;
+          }
+
+          - (BOOL)viewHasVisibleWebView:(UIView *)view {
+              @try {
+                  if (view.isHidden || view.alpha < 0.01f) return NO;
+                  if ([view isKindOfClass:[WKWebView class]] &&
+                      view.bounds.size.width > 50 && view.bounds.size.height > 50) {
+                      NSLog(@"[XZX] WKWebView found: %@", NSStringFromCGRect(view.frame));
+                      return YES;
+                  }
+                  NSString *cn = NSStringFromClass([view class]);
+                  if (([cn containsString:@"WKWeb"] || [cn containsString:@"WebView"]) &&
+                      view.bounds.size.width > 50) {
+                      NSLog(@"[XZX] WebView subclass: %@", cn);
+                      return YES;
+                  }
+                  for (UIView *sub in view.subviews) {
+                      if ([self viewHasVisibleWebView:sub]) return YES;
+                  }
+              } @catch (NSException *e) {}
+              return NO;
           }
 
           - (void)startWatchdog {
+              [_watchdogTimer invalidate];
               _watchdogTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
                                                                 target:self
                                                               selector:@selector(watchdogTick)
@@ -579,47 +601,48 @@ jobs:
           }
 
           - (void)watchdogTick {
+              if ([self isMenuVisible]) {
+                  if (_inGame) {
+                      NSLog(@"[XZX] Menu reappeared — hiding overlay");
+                      _inGame = NO;
+                      [self hideOverlay];
+                      [_watchdogTimer invalidate];
+                      _watchdogTimer = nil;
+                      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                                     dispatch_get_main_queue(), ^{ [self pollForGameState]; });
+                  }
+                  return;
+              }
               if (!_overlayWindow || _overlayWindow.hidden) {
-                  NSLog(@"[XZX] Watchdog: overlay gone — reviving");
+                  NSLog(@"[XZX] Watchdog: rebuilding overlay");
+                  _overlayWindow = nil;
                   [self showOverlay];
               }
           }
 
           - (void)showOverlay {
               if (_overlayWindow && !_overlayWindow.hidden) return;
-
               UIWindowScene *scene = nil;
               for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
                   if ([s isKindOfClass:[UIWindowScene class]] &&
                       s.activationState == UISceneActivationStateForegroundActive) {
-                      scene = (UIWindowScene *)s;
-                      break;
+                      scene = (UIWindowScene *)s; break;
                   }
               }
               if (!scene) {
                   for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-                      if ([s isKindOfClass:[UIWindowScene class]]) {
-                          scene = (UIWindowScene *)s;
-                          break;
-                      }
+                      if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
                   }
               }
               if (!scene) { NSLog(@"[XZX] No scene"); return; }
-
-              if (_overlayWindow && _overlayWindow.windowScene != scene) {
-                  NSLog(@"[XZX] Scene changed — rebuilding window");
-                  _overlayWindow = nil;
-              }
-
+              if (_overlayWindow && _overlayWindow.windowScene != scene) _overlayWindow = nil;
               if (!_overlayWindow) {
-                  UIViewController *vc = [[XZXMainViewController alloc] init];
-                  if (!vc) { NSLog(@"[XZX] VC not found"); return; }
+                  XZXMainViewController *vc = [[XZXMainViewController alloc] init];
                   _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
                   _overlayWindow.windowLevel = UIWindowLevelAlert + 1;
                   _overlayWindow.backgroundColor = [UIColor clearColor];
                   _overlayWindow.rootViewController = vc;
               }
-
               _overlayWindow.hidden = NO;
               [_overlayWindow makeKeyAndVisible];
               NSLog(@"[XZX] Overlay shown");
@@ -627,33 +650,17 @@ jobs:
 
           - (void)hideOverlay {
               _overlayWindow.hidden = YES;
-              [_watchdogTimer invalidate];
-              _watchdogTimer = nil;
-              NSLog(@"[XZX] Overlay hidden by user");
+              NSLog(@"[XZX] Overlay hidden");
           }
 
           - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
           - (BOOL)isInGame { return _inGame; }
 
           @end
-          EOF
+          SWIFTEOF
 
-      # ----- Other stub files (unchanged) -----
-      - name: Create entry.m
-        run: |
-          cat > injector/dylib/entry.m << 'EOF'
-          #import <UIKit/UIKit.h>
-          #import "xzx_core.h"
-
-          __attribute__((constructor))
-          static void entry() {
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [[XZXCore shared] initialize];
-              });
-          }
-          EOF
-
-      - name: Create xzx_hooks.h
+      # ----- Stub files (minimal to satisfy linker) -----
+      - name: Create stub files
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
@@ -666,9 +673,6 @@ jobs:
           bool isPlayerInGame(void);
           #endif
           EOF
-
-      - name: Create xzx_hooks.m
-        run: |
           cat > injector/dylib/xzx_hooks.m << 'EOF'
           #import "xzx_hooks.h"
           #import "xzx_core.h"
@@ -676,78 +680,43 @@ jobs:
           #import <mach-o/dyld.h>
           #import <objc/runtime.h>
           #import <objc/message.h>
-
           static void *original_methods[128];
           static int method_count = 0;
           static BOOL hooks_active = NO;
-
           void notify_game_joined(void) {
               dispatch_async(dispatch_get_main_queue(), ^{
-                  if (![[XZXCore shared] isInGame]) {
-                      [[XZXCore shared] showOverlay];
-                  }
+                  if (![[XZXCore shared] isInGame]) [[XZXCore shared] showOverlay];
               });
           }
-
-          void install_hook(void *target, void *replacement, void **original) {
-              if (!target || !replacement) return;
-              if (original) *original = target;
-              original_methods[method_count++] = target;
-              vm_address_t address = (vm_address_t)target;
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-              uint32_t branch = 0x14000000 |
-                  (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
-              memcpy(target, &branch, 4);
-              __builtin___clear_cache((char *)target, (char *)target + 4);
-              vm_protect(mach_task_self(), address & ~(PAGE_SIZE - 1), PAGE_SIZE, 0,
-                         VM_PROT_READ | VM_PROT_EXECUTE);
-          }
-
-          void hook_roblox_functions(void) {
-              if (hooks_active) return;
-              hooks_active = YES;
-          }
-
-          void unhook_roblox_functions(void) { hooks_active = NO; }
-
+          void install_hook(void *target, void *replacement, void **original) {}
+          void hook_roblox_functions(void) {}
+          void unhook_roblox_functions(void) {}
           bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
           EOF
-
-      # ----- Stub files (antidetection, etc.) remain as before -----
-      # (Omitted for brevity – include all the other stub files you had)
-      # For completeness, add the minimal stubs required to compile:
-
-      - name: Create stub files
-        run: |
-          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
-          #ifndef XZX_INJECTION_RANDOMIZER_H
-          #define XZX_INJECTION_RANDOMIZER_H
-          #import <Foundation/Foundation.h>
-          @interface XZXInjectionRandomizer : NSObject
-          + (instancetype)shared;
-          @end
-          #endif
+          cat > injector/dylib/entry.m << 'EOF'
+          #import <UIKit/UIKit.h>
+          #import "xzx_core.h"
+          __attribute__((constructor))
+          static void entry() {
+              dispatch_async(dispatch_get_main_queue(), ^{ [[XZXCore shared] initialize]; });
+          }
           EOF
-          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
-          #import "xzx_injection_randomizer.h"
-          @implementation XZXInjectionRandomizer
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc]init];}); return i; }
-          @end
-          EOF
-          # (Add similar empty implementations for all other stubs to satisfy linker)
+          # Additional stubs for other headers (antidetection, etc.) – empty implementations
+          for stub in xzx_injection_randomizer xzx_obfuscator xzx_antidetection xzx_ban_protection xzx_hook_manager xzx_physics_bypass xzx_memory_obfuscator xzx_security xzx_functions; do
+            echo "@interface ${stub} : NSObject @end @implementation ${stub} @end" > injector/dylib/${stub}.m
+            echo "#import <Foundation/Foundation.h> @interface ${stub} : NSObject @end" > injector/dylib/${stub}.h
+          done
 
-      # ----- Compilation (now including XZXMainViewController.m) -----
+      # ----- Compilation -----
       - name: Compile Objective-C files
         run: |
           mkdir -p build
-          FILES="
-            injector/dylib/entry.m
-            injector/dylib/xzx_core.m
-            injector/dylib/xzx_hooks.m
-            injector/dylib/xzx_injection_randomizer.m
-            XZX/UI/XZXMainViewController.m
-          "
+          FILES="injector/dylib/entry.m injector/dylib/xzx_core.m injector/dylib/xzx_hooks.m XZX/UI/XZXMainViewController.m"
+          for stub in injector/dylib/xzx_*.m; do
+            if [ "$stub" != "injector/dylib/xzx_core.m" ] && [ "$stub" != "injector/dylib/xzx_hooks.m" ] && [ "$stub" != "injector/dylib/xzx_uibridge.m" ]; then
+              FILES="$FILES $stub"
+            fi
+          done
           for file in $FILES; do
             if [ -f "$file" ]; then
               xcrun -sdk iphoneos clang -c \
@@ -770,7 +739,8 @@ jobs:
         run: |
           xcrun -sdk iphoneos clang++ -shared \
             -framework UIKit -framework Foundation -framework CoreGraphics \
-            -framework WebKit -framework QuartzCore -framework Metal \
+            -framework WebKit \
+            -framework QuartzCore -framework Metal \
             -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
             -Xlinker -rpath -Xlinker /usr/lib/swift \
             -Xlinker -rpath -Xlinker @executable_path/Frameworks \

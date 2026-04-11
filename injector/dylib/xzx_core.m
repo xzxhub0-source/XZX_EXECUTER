@@ -2,14 +2,18 @@
 #import "Core/LuaExecutor.h"
 #import "XZXMainViewController.h"
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 static XZXCore *sharedCore = nil;
 static dispatch_queue_t monitorQueue = nil;
 static BOOL gameDetectionActive = NO;
 
-static const NSInteger kDebounceShow = 2;   // 2 seconds to show
-static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
+// 2 positives to show, 20 negatives to hide.
+// 20s covers any loading→game transition without flickering.
+static const NSInteger kDebounceShow = 2;
+static const NSInteger kDebounceHide = 20;
 
 @interface XZXCore ()
 @property (nonatomic, assign) NSInteger positiveCount;
@@ -53,8 +57,9 @@ static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
     gameDetectionActive = YES;
 
     dispatch_async(monitorQueue, ^{
-        // Wait 15 seconds – long enough to clear the initial loading screen completely
-        [NSThread sleepForTimeInterval:15.0];
+        // Wait 12 seconds: fully clears the Roblox loading screen before
+        // detection starts so we never show during loading.
+        [NSThread sleepForTimeInterval:12.0];
         NSLog(@"[XZX] Detection started");
 
         while (YES) {
@@ -72,7 +77,6 @@ static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
                     self.positiveCount = 0;
                 }
 
-                // Show after 2 consecutive positives
                 if (!self.inGame && self.positiveCount >= kDebounceShow) {
                     self.inGame = YES;
                     self.positiveCount = 0;
@@ -80,9 +84,7 @@ static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self showOverlay];
                     });
-                }
-                // Hide after 20 consecutive negatives
-                else if (self.inGame && self.negativeCount >= kDebounceHide) {
+                } else if (self.inGame && self.negativeCount >= kDebounceHide) {
                     self.inGame = NO;
                     self.negativeCount = 0;
                     NSLog(@"[XZX] Left game — hiding UI");
@@ -96,6 +98,7 @@ static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
     });
 }
 
+// Detection: Metal rendering + fullscreen (status bar hidden) + few native buttons.
 - (BOOL)isGameEngineActive {
     @try {
         BOOL statusBarHidden = NO;
@@ -175,6 +178,7 @@ static const NSInteger kDebounceHide = 20;  // 20 seconds to hide
         if (!scene) { NSLog(@"[XZX] No scene"); return; }
 
         if (_overlayWindow && _overlayWindow.windowScene != scene) {
+            NSLog(@"[XZX] Scene changed — rebuilding window");
             _overlayWindow = nil;
         }
 

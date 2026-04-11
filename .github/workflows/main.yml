@@ -13,16 +13,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (curl only)
         run: |
-          brew install pipx
-          pipx ensurepath
-          pipx install gdown
+          # No pipx/gdown needed
+          echo "Using curl for download"
 
-      - name: Download Roblox IPA
+      - name: Download Roblox IPA (direct curl with cookie)
         run: |
           FILE_ID="16uaCXW9O3SmjYEPjc1wRhIj-o2NAXqdW"
-          pipx run gdown https://drive.google.com/uc?id=${FILE_ID} -O Roblox.ipa
+          # Fetch confirmation page and save cookie
+          curl -sc /tmp/cookie "https://drive.google.com/uc?export=download&id=${FILE_ID}" > /dev/null
+          # Extract confirmation token
+          CONFIRM=$(awk '/download/ {print $NF}' /tmp/cookie)
+          # Download with confirmation
+          curl -Lb /tmp/cookie "https://drive.google.com/uc?export=download&confirm=${CONFIRM}&id=${FILE_ID}" -o Roblox.ipa
+          ls -la Roblox.ipa
 
       - name: Download and compile insert_dylib
         run: |
@@ -59,14 +64,13 @@ jobs:
           mkdir -p XZX/UI
           mkdir -p injector/dylib/Core
 
-      # ----- Remove conflicting files from previous runs -----
       - name: Remove conflicting files
         run: |
           rm -f injector/dylib/xzx_uibridge.m
           rm -f injector/dylib/xzx_editor.m
           rm -f injector/dylib/xzx_editor.h
 
-      # ----- LuaExecutor -----
+      # ----- LuaExecutor (unchanged) -----
       - name: Create LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
@@ -246,7 +250,7 @@ jobs:
           }
           EOF
 
-      # ----- Objective-C UI -----
+      # ----- Objective-C UI (XZXMainViewController) -----
       - name: Create XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
@@ -490,7 +494,7 @@ jobs:
           @end
           EOF
 
-      # ----- Core detection -----
+      # ----- Core detection (WKWebView based) -----
       - name: Create xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'

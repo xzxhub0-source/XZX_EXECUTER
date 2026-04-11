@@ -473,9 +473,13 @@ jobs:
               [gr setTranslation:CGPointZero inView:self.view];
           }
 
+          // Use dealloc without calling [super dealloc] – ARC handles it. Silence warning.
+          #pragma clang diagnostic push
+          #pragma clang diagnostic ignored "-Wobjc-missing-super-calls"
           - (void)dealloc {
               [[NSNotificationCenter defaultCenter] removeObserver:self];
           }
+          #pragma clang diagnostic pop
 
           @end
           EOF
@@ -659,8 +663,8 @@ jobs:
           @end
           SWIFTEOF
 
-      # ----- Stub files (minimal to satisfy linker) -----
-      - name: Create stub files
+      # ----- Create xzx_hooks and entry (already present, but we'll ensure they exist) -----
+      - name: Create xzx_hooks.h
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
@@ -673,6 +677,9 @@ jobs:
           bool isPlayerInGame(void);
           #endif
           EOF
+
+      - name: Create xzx_hooks.m
+        run: |
           cat > injector/dylib/xzx_hooks.m << 'EOF'
           #import "xzx_hooks.h"
           #import "xzx_core.h"
@@ -693,6 +700,9 @@ jobs:
           void unhook_roblox_functions(void) {}
           bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
           EOF
+
+      - name: Create entry.m
+        run: |
           cat > injector/dylib/entry.m << 'EOF'
           #import <UIKit/UIKit.h>
           #import "xzx_core.h"
@@ -701,10 +711,28 @@ jobs:
               dispatch_async(dispatch_get_main_queue(), ^{ [[XZXCore shared] initialize]; });
           }
           EOF
-          # Additional stubs for other headers (antidetection, etc.) – empty implementations
+
+      # ----- Stub files for all other headers (fixed: include Foundation) -----
+      - name: Create stub files
+        run: |
           for stub in xzx_injection_randomizer xzx_obfuscator xzx_antidetection xzx_ban_protection xzx_hook_manager xzx_physics_bypass xzx_memory_obfuscator xzx_security xzx_functions; do
-            echo "@interface ${stub} : NSObject @end @implementation ${stub} @end" > injector/dylib/${stub}.m
-            echo "#import <Foundation/Foundation.h> @interface ${stub} : NSObject @end" > injector/dylib/${stub}.h
+            cat > injector/dylib/${stub}.h << EOF
+            #import <Foundation/Foundation.h>
+            @interface ${stub} : NSObject
+            + (instancetype)shared;
+            @end
+            EOF
+            cat > injector/dylib/${stub}.m << EOF
+            #import "${stub}.h"
+            @implementation ${stub}
+            + (instancetype)shared {
+                static ${stub} *instance = nil;
+                static dispatch_once_t onceToken;
+                dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+                return instance;
+            }
+            @end
+            EOF
           done
 
       # ----- Compilation -----
@@ -713,7 +741,7 @@ jobs:
           mkdir -p build
           FILES="injector/dylib/entry.m injector/dylib/xzx_core.m injector/dylib/xzx_hooks.m XZX/UI/XZXMainViewController.m"
           for stub in injector/dylib/xzx_*.m; do
-            if [ "$stub" != "injector/dylib/xzx_core.m" ] && [ "$stub" != "injector/dylib/xzx_hooks.m" ] && [ "$stub" != "injector/dylib/xzx_uibridge.m" ]; then
+            if [ "$stub" != "injector/dylib/xzx_core.m" ] && [ "$stub" != "injector/dylib/xzx_hooks.m" ]; then
               FILES="$FILES $stub"
             fi
           done

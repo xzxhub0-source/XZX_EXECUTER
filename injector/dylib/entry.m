@@ -2,9 +2,7 @@
 #import "SRFXCore.h"
 
 static uint32_t random_delay(void) {
-    uint32_t base = 3.0 * NSEC_PER_SEC;
-    uint32_t jitter = arc4random_uniform(4 * NSEC_PER_SEC);
-    return base + jitter;
+    return (arc4random_uniform(4) + 3) * NSEC_PER_SEC;
 }
 
 __attribute__((constructor))

@@ -1,4 +1,4 @@
-name: Build XZX Executor (Final)
+name: Build XZX Executor
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           chmod +x ../tools/insert_dylib
           cd ..
 
-      - name: Download and compile Lua for iOS
+      - name: Build Lua for iOS
         run: |
           mkdir -p $HOME/lua-ios
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
@@ -44,9 +44,12 @@ jobs:
           for file in src/*.c; do
             filename=$(basename "$file" .c)
             if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
-              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 \
-                -o "src/$filename.o" "src/$filename.c" \
-                -target arm64-apple-ios15.0 -I src
+              xcrun -sdk iphoneos clang -c \
+                -O2 -DLUA_USE_IOS \
+                -arch arm64 \
+                -target arm64-apple-ios15.0 \
+                -I src \
+                -o "src/$filename.o" "$file"
             fi
           done
           ar rcs $HOME/lua-ios/liblua.a src/*.o
@@ -54,15 +57,12 @@ jobs:
           cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
           cd ..
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
+          echo "LUA_LIB_DIR=$HOME/lua-ios"             >> $GITHUB_ENV
 
-      - name: Create directory structure
-        run: |
-          mkdir -p XZX/UI
-          mkdir -p injector/dylib/Core
+      - name: Create build directories
+        run: mkdir -p build XZX/UI injector/dylib/Core
 
-      # ----- LuaExecutor.h -----
-      - name: Create LuaExecutor.h
+      - name: Write LuaExecutor.h
         run: |
           cat > injector/dylib/Core/LuaExecutor.h << 'EOF'
           #ifndef LuaExecutor_h
@@ -72,9 +72,9 @@ jobs:
           extern "C" {
           #endif
           void InitLua(void);
+          void RegisterXZXFunctions(void);
           void ExecuteScript(const char *script);
           void RegisterFunction(const char *name, int (*func)(struct lua_State*));
-          void RegisterXZXFunctions(void);
           struct lua_State* GetLuaState(void);
           #ifdef __cplusplus
           }
@@ -82,8 +82,7 @@ jobs:
           #endif
           EOF
 
-      # ----- LuaExecutor.mm (fixed LUA_GLOBALSINDEX) -----
-      - name: Create LuaExecutor.mm
+      - name: Write LuaExecutor.mm
         run: |
           cat > injector/dylib/Core/LuaExecutor.mm << 'CPPEOF'
           #import <Foundation/Foundation.h>
@@ -93,23 +92,24 @@ jobs:
           #include <lualib.h>
           #include "LuaExecutor.h"
 
-          static lua_State *L = nil;
+          static lua_State *gL = NULL;
 
           static int xzx_print(lua_State *L) {
               int n = lua_gettop(L);
               NSMutableString *out = [NSMutableString string];
               for (int i = 1; i <= n; i++) {
                   if (i > 1) [out appendString:@" "];
-                  if (lua_isstring(L, i))       [out appendFormat:@"%s", lua_tostring(L, i)];
+                  if      (lua_isstring(L, i))  [out appendFormat:@"%s", lua_tostring(L, i)];
                   else if (lua_isnumber(L, i))  [out appendFormat:@"%g", lua_tonumber(L, i)];
                   else if (lua_isboolean(L, i)) [out appendString:lua_toboolean(L, i) ? @"true" : @"false"];
                   else if (lua_istable(L, i))   [out appendString:@"table"];
                   else if (lua_isfunction(L, i))[out appendString:@"function"];
                   else                          [out appendString:@"nil"];
               }
-              NSLog(@"[XZX] %@", out);
+              NSLog(@"[XZX Lua] %@", out);
+              NSString *copy = [out copy];
               dispatch_async(dispatch_get_main_queue(), ^{
-                  [[NSNotificationCenter defaultCenter] postNotificationName:@"XZXPrint" object:out];
+                  [[NSNotificationCenter defaultCenter] postNotificationName:@"XZXPrint" object:copy];
               });
               return 0;
           }
@@ -121,24 +121,24 @@ jobs:
                   if (i > 1) [out appendString:@" "];
                   if (lua_isstring(L, i)) [out appendFormat:@"%s", lua_tostring(L, i)];
               }
-              NSLog(@"[XZX WARN] %@", out);
+              NSLog(@"[XZX Lua WARN] %@", out);
               return 0;
           }
 
           static int xzx_getscript(lua_State *L) {
-              const char *url = luaL_checkstring(L, 1);
+              const char *urlStr = luaL_checkstring(L, 1);
               dispatch_semaphore_t sem = dispatch_semaphore_create(0);
               __block NSString *result = nil;
-              NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
-                  [NSURL URLWithString:[NSString stringWithUTF8String:url]]];
+              NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:urlStr]];
+              if (!url) { lua_pushnil(L); return 1; }
+              NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
               [req setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
               [[[NSURLSession sharedSession] dataTaskWithRequest:req
                   completionHandler:^(NSData *data, NSURLResponse *r, NSError *e) {
-                  if (data) result = [[NSString alloc] initWithData:data
-                                         encoding:NSUTF8StringEncoding];
-                  dispatch_semaphore_signal(sem);
+                      if (data) result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                      dispatch_semaphore_signal(sem);
               }] resume];
-              dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10*NSEC_PER_SEC));
+              dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
               if (result) lua_pushstring(L, [result UTF8String]);
               else        lua_pushnil(L);
               return 1;
@@ -147,376 +147,318 @@ jobs:
           static int xzx_loadstring(lua_State *L) {
               const char *code = luaL_checkstring(L, 1);
               int status = luaL_loadstring(L, code);
-              if (status != 0) { lua_pushnil(L); lua_insert(L, -2); return 2; }
+              if (status != LUA_OK) { lua_pushnil(L); lua_insert(L, -2); return 2; }
               return 1;
           }
 
           static int xzx_base64_encode(lua_State *L) {
-              const char *d = luaL_checkstring(L, 1);
-              NSString *enc = [[NSData dataWithBytes:d length:strlen(d)]
-                                base64EncodedStringWithOptions:0];
+              size_t len = 0;
+              const char *d = luaL_checklstring(L, 1, &len);
+              NSString *enc = [[NSData dataWithBytes:d length:len] base64EncodedStringWithOptions:0];
               lua_pushstring(L, [enc UTF8String]);
               return 1;
           }
 
           static int xzx_base64_decode(lua_State *L) {
               const char *d = luaL_checkstring(L, 1);
-              NSData *dec = [[NSData alloc] initWithBase64EncodedString:
-                  [NSString stringWithUTF8String:d] options:0];
-              NSString *s = [[NSString alloc] initWithData:dec encoding:NSUTF8StringEncoding];
+              NSData *dec = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:d]
+                  options:NSDataBase64DecodingIgnoreUnknownCharacters];
+              NSString *s = dec ? [[NSString alloc] initWithData:dec encoding:NSUTF8StringEncoding] : nil;
               lua_pushstring(L, s ? [s UTF8String] : "");
               return 1;
           }
 
           static int xzx_identifyexecutor(lua_State *L) { lua_pushstring(L,"XZX"); return 1; }
           static int xzx_getexecutorname (lua_State *L) { lua_pushstring(L,"XZX"); return 1; }
-          static int xzx_checkcaller     (lua_State *L) { lua_pushboolean(L,1); return 1; }
-          static int xzx_isrbxactive     (lua_State *L) { lua_pushboolean(L,1); return 1; }
-          static int xzx_getthreadid     (lua_State *L) { lua_pushinteger(L,8); return 1; }
-          static int xzx_setthreadid     (lua_State *L) { return 0; }
-          static int xzx_fireclickdet    (lua_State *L) { return 0; }
-          static int xzx_getgenv         (lua_State *L) {
-              lua_pushglobaltable(L);      // FIXED: LUA_GLOBALSINDEX removed in Lua 5.4
-              return 1;
-          }
-          static int xzx_getreg          (lua_State *L) {
-              lua_pushvalue(L, LUA_REGISTRYINDEX); return 1;
-          }
+          static int xzx_checkcaller     (lua_State *L) { lua_pushboolean(L,1);   return 1; }
+          static int xzx_isrbxactive     (lua_State *L) { lua_pushboolean(L,1);   return 1; }
+          static int xzx_getthreadid     (lua_State *L) { lua_pushinteger(L,8);   return 1; }
+          static int xzx_setthreadid     (lua_State *L) { (void)L; return 0; }
+          static int xzx_fireclickdet    (lua_State *L) { (void)L; return 0; }
+          static int xzx_firetouchint    (lua_State *L) { (void)L; return 0; }
+          static int xzx_getgenv(lua_State *L) { lua_pushglobaltable(L); return 1; }
+          static int xzx_getreg (lua_State *L) { lua_pushvalue(L, LUA_REGISTRYINDEX); return 1; }
 
           void RegisterXZXFunctions(void) {
-              lua_register(L, "print",             xzx_print);
-              lua_register(L, "warn",              xzx_warn);
-              lua_register(L, "getscript",         xzx_getscript);
-              lua_register(L, "loadstring",        xzx_loadstring);
-              lua_register(L, "base64_encode",     xzx_base64_encode);
-              lua_register(L, "base64_decode",     xzx_base64_decode);
-              lua_register(L, "identifyexecutor",  xzx_identifyexecutor);
-              lua_register(L, "getexecutorname",   xzx_getexecutorname);
-              lua_register(L, "checkcaller",       xzx_checkcaller);
-              lua_register(L, "isrbxactive",       xzx_isrbxactive);
-              lua_register(L, "getthreadidentity", xzx_getthreadid);
-              lua_register(L, "setthreadidentity", xzx_setthreadid);
-              lua_register(L, "fireclickdetector", xzx_fireclickdet);
-              lua_register(L, "getgenv",           xzx_getgenv);
-              lua_register(L, "getreg",            xzx_getreg);
-              luaL_dostring(L, "xzx = { version='3.0.0', unc=95, sunc=90 }");
+              if (!gL) return;
+              lua_register(gL, "print",             xzx_print);
+              lua_register(gL, "warn",              xzx_warn);
+              lua_register(gL, "getscript",         xzx_getscript);
+              lua_register(gL, "loadstring",        xzx_loadstring);
+              lua_register(gL, "base64_encode",     xzx_base64_encode);
+              lua_register(gL, "base64_decode",     xzx_base64_decode);
+              lua_register(gL, "identifyexecutor",  xzx_identifyexecutor);
+              lua_register(gL, "getexecutorname",   xzx_getexecutorname);
+              lua_register(gL, "checkcaller",       xzx_checkcaller);
+              lua_register(gL, "isrbxactive",       xzx_isrbxactive);
+              lua_register(gL, "getthreadidentity", xzx_getthreadid);
+              lua_register(gL, "setthreadidentity", xzx_setthreadid);
+              lua_register(gL, "fireclickdetector", xzx_fireclickdet);
+              lua_register(gL, "firetouchinterest", xzx_firetouchint);
+              lua_register(gL, "getgenv",           xzx_getgenv);
+              lua_register(gL, "getreg",            xzx_getreg);
+              luaL_dostring(gL, "xzx={version='3.0.0',unc=95,sunc=90}");
           }
 
           void InitLua(void) {
-              if (!L) {
-                  L = luaL_newstate();
-                  luaL_openlibs(L);
-                  RegisterXZXFunctions();
-                  NSLog(@"[XZX] Lua state ready");
-              }
+              if (gL) return;
+              gL = luaL_newstate();
+              if (!gL) { NSLog(@"[XZX] FATAL: luaL_newstate() returned NULL"); return; }
+              luaL_openlibs(gL);
+              RegisterXZXFunctions();
+              NSLog(@"[XZX] Lua 5.4 state ready");
           }
 
           void ExecuteScript(const char *script) {
-              if (!L) InitLua();
-              if (!script || strlen(script) == 0) return;
-              int status = luaL_dostring(L, script);
+              if (!gL) InitLua();
+              if (!gL || !script || script[0] == '\0') return;
+              int status = luaL_dostring(gL, script);
               if (status != LUA_OK) {
-                  const char *err = lua_tostring(L, -1);
-                  NSLog(@"[XZX] Lua Error: %s", err);
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      [[NSNotificationCenter defaultCenter]
-                          postNotificationName:@"XZXError"
-                          object:[NSString stringWithUTF8String:err]];
-                  });
-                  lua_pop(L, 1);
+                  const char *err = lua_tostring(gL, -1);
+                  NSLog(@"[XZX] Lua error: %s", err ? err : "(unknown)");
+                  if (err) {
+                      NSString *errStr = [NSString stringWithUTF8String:err];
+                      dispatch_async(dispatch_get_main_queue(), ^{
+                          [[NSNotificationCenter defaultCenter] postNotificationName:@"XZXError" object:errStr];
+                      });
+                  }
+                  lua_pop(gL, 1);
               }
           }
 
           void RegisterFunction(const char *name, int (*func)(struct lua_State*)) {
-              if (L) lua_register(L, name, func);
+              if (gL && name && func) lua_register(gL, name, func);
           }
 
-          struct lua_State* GetLuaState(void) { return L; }
+          struct lua_State* GetLuaState(void) { return gL; }
           CPPEOF
 
-      # ----- XZXMainViewController (full UI) -----
-      - name: Create XZXMainViewController.h
+      - name: Write XZXMainViewController.h
         run: |
           cat > XZX/UI/XZXMainViewController.h << 'EOF'
           #import <UIKit/UIKit.h>
-
           @interface XZXMainViewController : UIViewController
-          @property (nonatomic, strong) UIView      *panel;
-          @property (nonatomic, strong) UITextView  *textView;
-          @property (nonatomic, strong) UIView      *editorView;
-          @property (nonatomic, strong) UIView      *hubView;
-          @property (nonatomic, strong) UIView      *savedView;
-          @property (nonatomic, strong) UIView      *tabLine;
-          @property (nonatomic, strong) UIButton    *toggleBtn;
+          @property (nonatomic, strong) UIView         *panel;
+          @property (nonatomic, strong) UITextView     *textView;
+          @property (nonatomic, strong) UIView         *editorView;
+          @property (nonatomic, strong) UIView         *hubView;
+          @property (nonatomic, strong) UIView         *savedView;
+          @property (nonatomic, strong) UIView         *tabLine;
+          @property (nonatomic, strong) UIButton       *toggleBtn;
           @property (nonatomic, strong) NSMutableArray *tabButtons;
-          @property (nonatomic, assign) BOOL        panelVisible;
+          @property (nonatomic, assign) BOOL            panelVisible;
           @end
           EOF
 
-      - name: Create XZXMainViewController.m
+      - name: Write XZXMainViewController.m
         run: |
           cat > XZX/UI/XZXMainViewController.m << 'EOF'
           #import "XZXMainViewController.h"
-          #include "LuaExecutor.h"
+          #include "Core/LuaExecutor.h"
 
           @implementation XZXMainViewController
 
           - (void)viewDidLoad {
               [super viewDidLoad];
               self.view.backgroundColor = [UIColor clearColor];
-
-              UIButton *toggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-              toggleBtn.frame = CGRectMake(20, 80, 52, 52);
-              toggleBtn.backgroundColor = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:0.95];
-              toggleBtn.layer.cornerRadius = 26;
-              toggleBtn.layer.shadowColor = [UIColor colorWithRed:0.65 green:0.35 blue:1 alpha:1].CGColor;
-              toggleBtn.layer.shadowOpacity = 0.8;
-              toggleBtn.layer.shadowRadius  = 10;
-              toggleBtn.layer.shadowOffset  = CGSizeZero;
-              [toggleBtn setTitle:@"⚡" forState:UIControlStateNormal];
-              toggleBtn.titleLabel.font = [UIFont systemFontOfSize:24];
-              [toggleBtn addTarget:self action:@selector(togglePanel)
-                  forControlEvents:UIControlEventTouchUpInside];
-
-              UIPanGestureRecognizer *pan =
-                  [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragBtn:)];
-              [toggleBtn addGestureRecognizer:pan];
-              [self.view addSubview:toggleBtn];
-              _toggleBtn = toggleBtn;
-
+              _toggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+              _toggleBtn.frame = CGRectMake(20, 80, 52, 52);
+              _toggleBtn.backgroundColor = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:0.95];
+              _toggleBtn.layer.cornerRadius  = 26;
+              _toggleBtn.layer.shadowColor   = [UIColor colorWithRed:0.65 green:0.35 blue:1 alpha:1].CGColor;
+              _toggleBtn.layer.shadowOpacity = 0.8f;
+              _toggleBtn.layer.shadowRadius  = 10;
+              _toggleBtn.layer.shadowOffset  = CGSizeZero;
+              [_toggleBtn setTitle:@"⚡" forState:UIControlStateNormal];
+              _toggleBtn.titleLabel.font = [UIFont systemFontOfSize:24];
+              [_toggleBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
+              UIPanGestureRecognizer *btnPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragBtn:)];
+              [_toggleBtn addGestureRecognizer:btnPan];
+              [self.view addSubview:_toggleBtn];
               [self buildPanel];
               _panelVisible = NO;
               _panel.hidden = YES;
-              _panel.alpha  = 0;
+              _panel.alpha  = 0.0f;
           }
 
           - (void)buildPanel {
-              CGRect screen = UIScreen.mainScreen.bounds;
+              CGRect  screen = UIScreen.mainScreen.bounds;
               CGFloat pw = MIN(screen.size.width  - 40, 440);
               CGFloat ph = MIN(screen.size.height - 120, 520);
-              CGFloat px = (screen.size.width  - pw) / 2;
-              CGFloat py = (screen.size.height - ph) / 2;
-
+              CGFloat px = (screen.size.width  - pw) / 2.0f;
+              CGFloat py = (screen.size.height - ph) / 2.0f;
               _panel = [[UIView alloc] initWithFrame:CGRectMake(px, py, pw, ph)];
-              _panel.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.11 alpha:0.97];
+              _panel.backgroundColor    = [UIColor colorWithRed:0.07 green:0.07 blue:0.11 alpha:0.97];
               _panel.layer.cornerRadius  = 18;
-              _panel.layer.borderWidth   = 1.2;
+              _panel.layer.borderWidth   = 1.2f;
               _panel.layer.borderColor   = [UIColor colorWithRed:0.55 green:0.25 blue:0.95 alpha:0.7].CGColor;
               _panel.layer.shadowColor   = [UIColor colorWithRed:0.65 green:0.35 blue:1 alpha:1].CGColor;
-              _panel.layer.shadowOpacity = 0.6;
+              _panel.layer.shadowOpacity = 0.6f;
               _panel.layer.shadowRadius  = 20;
               _panel.layer.shadowOffset  = CGSizeZero;
               [self.view addSubview:_panel];
 
-              UIView *titleBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, 44)];
-              titleBar.backgroundColor = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:1];
-              titleBar.layer.cornerRadius = 18;
-              titleBar.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
-              [_panel addSubview:titleBar];
-
+              UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, 44)];
+              bar.backgroundColor    = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:1];
+              bar.layer.cornerRadius = 18;
+              bar.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+              [_panel addSubview:bar];
               UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, pw - 60, 44)];
-              titleLbl.text      = @"⚡ XZX Executor";
-              titleLbl.textColor = UIColor.whiteColor;
-              titleLbl.font      = [UIFont boldSystemFontOfSize:15];
-              [titleBar addSubview:titleLbl];
-
+              titleLbl.text = @"⚡ XZX Executor"; titleLbl.textColor = UIColor.whiteColor;
+              titleLbl.font = [UIFont boldSystemFontOfSize:15];
+              [bar addSubview:titleLbl];
               UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
               closeBtn.frame = CGRectMake(pw - 44, 0, 44, 44);
               [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
               [closeBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
               closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-              [closeBtn addTarget:self action:@selector(togglePanel)
-                  forControlEvents:UIControlEventTouchUpInside];
-              [titleBar addSubview:closeBtn];
-
-              UIPanGestureRecognizer *panPanel =
-                  [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPanel:)];
-              [titleBar addGestureRecognizer:panPanel];
+              [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
+              [bar addSubview:closeBtn];
+              UIPanGestureRecognizer *barPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPanel:)];
+              [bar addGestureRecognizer:barPan];
 
               NSArray *tabs = @[@"Editor", @"Hub", @"Saved"];
-              _tabButtons = [NSMutableArray array];
-              CGFloat tw = pw / tabs.count;
-              for (int i = 0; i < (int)tabs.count; i++) {
+              _tabButtons = [NSMutableArray arrayWithCapacity:tabs.count];
+              CGFloat tw = pw / (CGFloat)tabs.count;
+              for (NSInteger i = 0; i < (NSInteger)tabs.count; i++) {
                   UIButton *tab = [UIButton buttonWithType:UIButtonTypeSystem];
                   tab.frame = CGRectMake(i * tw, 44, tw, 38);
                   [tab setTitle:tabs[i] forState:UIControlStateNormal];
-                  BOOL sel = (i == 0);
-                  [tab setTitleColor:(sel ? UIColor.whiteColor
-                                         : [UIColor colorWithWhite:1 alpha:0.4])
-                            forState:UIControlStateNormal];
+                  [tab setTitleColor:(i == 0 ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.4]) forState:UIControlStateNormal];
                   tab.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
                   tab.tag = i;
-                  [tab addTarget:self action:@selector(switchTab:)
-                      forControlEvents:UIControlEventTouchUpInside];
+                  [tab addTarget:self action:@selector(switchTab:) forControlEvents:UIControlEventTouchUpInside];
                   [_panel addSubview:tab];
                   [_tabButtons addObject:tab];
               }
-
               _tabLine = [[UIView alloc] initWithFrame:CGRectMake(0, 82, tw, 2)];
               _tabLine.backgroundColor = [UIColor colorWithRed:0.65 green:0.35 blue:1 alpha:1];
               [_panel addSubview:_tabLine];
 
               CGRect content = CGRectMake(0, 84, pw, ph - 84);
-
               _editorView = [[UIView alloc] initWithFrame:content];
               [_panel addSubview:_editorView];
-
-              _textView = [[UITextView alloc] initWithFrame:
-                  CGRectMake(10, 8, pw - 20, ph - 84 - 54)];
+              _textView = [[UITextView alloc] initWithFrame:CGRectMake(10, 8, pw - 20, ph - 84 - 54)];
               _textView.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.10 alpha:1];
-              _textView.textColor       = [UIColor colorWithRed:0.75 green:0.95 blue:0.75 alpha:1];
-              _textView.font = [UIFont fontWithName:@"Menlo" size:13]
-                            ?: [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
-              _textView.text                = @"-- XZX Executor\nprint(\"Hello from XZX!\")";
-              _textView.layer.cornerRadius  = 8;
-              _textView.autocorrectionType  = UITextAutocorrectionTypeNo;
+              _textView.textColor = [UIColor colorWithRed:0.75 green:0.95 blue:0.75 alpha:1];
+              _textView.font = [UIFont fontWithName:@"Menlo" size:13] ?: [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
+              _textView.text = @"-- XZX Executor\nprint(\"Hello from XZX!\")";
+              _textView.layer.cornerRadius = 8;
+              _textView.autocorrectionType = UITextAutocorrectionTypeNo;
               _textView.autocapitalizationType = UITextAutocapitalizationTypeNone;
               [_editorView addSubview:_textView];
 
               CGFloat btnY = ph - 84 - 42;
-              CGFloat bw   = (pw - 30) / 2;
-
-              UIButton *execBtn = [self makeButton:@"▶  Execute"
-                  color:[UIColor colorWithRed:0.2 green:0.7 blue:0.3 alpha:1]];
+              CGFloat bw = (pw - 30) / 2.0f;
+              UIButton *execBtn = [self makeButton:@"▶  Execute" color:[UIColor colorWithRed:0.2 green:0.7 blue:0.3 alpha:1]];
               execBtn.frame = CGRectMake(10, btnY, bw, 36);
-              [execBtn addTarget:self action:@selector(executeScript)
-                  forControlEvents:UIControlEventTouchUpInside];
+              [execBtn addTarget:self action:@selector(doExecute) forControlEvents:UIControlEventTouchUpInside];
               [_editorView addSubview:execBtn];
-
-              UIButton *clearBtn = [self makeButton:@"🗑  Clear"
-                  color:[UIColor colorWithRed:0.5 green:0.1 blue:0.1 alpha:1]];
+              UIButton *clearBtn = [self makeButton:@"🗑  Clear" color:[UIColor colorWithRed:0.5 green:0.1 blue:0.1 alpha:1]];
               clearBtn.frame = CGRectMake(20 + bw, btnY, bw, 36);
-              [clearBtn addTarget:self action:@selector(clearScript)
-                  forControlEvents:UIControlEventTouchUpInside];
+              [clearBtn addTarget:self action:@selector(doClear) forControlEvents:UIControlEventTouchUpInside];
               [_editorView addSubview:clearBtn];
 
-              _hubView = [[UIView alloc] initWithFrame:content];
-              _hubView.hidden = YES;
+              _hubView = [[UIView alloc] initWithFrame:content]; _hubView.hidden = YES;
               [_panel addSubview:_hubView];
               UILabel *hubLbl = [[UILabel alloc] initWithFrame:_hubView.bounds];
-              hubLbl.text          = @"Script Hub";
-              hubLbl.textColor     = [UIColor colorWithWhite:1 alpha:0.3];
-              hubLbl.textAlignment = NSTextAlignmentCenter;
-              hubLbl.font          = [UIFont systemFontOfSize:16];
+              hubLbl.text = @"Script Hub"; hubLbl.textColor = [UIColor colorWithWhite:1 alpha:0.3];
+              hubLbl.textAlignment = NSTextAlignmentCenter; hubLbl.font = [UIFont systemFontOfSize:16];
               [_hubView addSubview:hubLbl];
 
-              _savedView = [[UIView alloc] initWithFrame:content];
-              _savedView.hidden = YES;
+              _savedView = [[UIView alloc] initWithFrame:content]; _savedView.hidden = YES;
               [_panel addSubview:_savedView];
               UILabel *saveLbl = [[UILabel alloc] initWithFrame:_savedView.bounds];
-              saveLbl.text          = @"No saved scripts";
-              saveLbl.textColor     = [UIColor colorWithWhite:1 alpha:0.3];
-              saveLbl.textAlignment = NSTextAlignmentCenter;
-              saveLbl.font          = [UIFont systemFontOfSize:16];
+              saveLbl.text = @"No saved scripts"; saveLbl.textColor = [UIColor colorWithWhite:1 alpha:0.3];
+              saveLbl.textAlignment = NSTextAlignmentCenter; saveLbl.font = [UIFont systemFontOfSize:16];
               [_savedView addSubview:saveLbl];
 
-              [[NSNotificationCenter defaultCenter]
-                  addObserver:self selector:@selector(loadScript:)
-                  name:@"LoadScript" object:nil];
-              [[NSNotificationCenter defaultCenter]
-                  addObserver:self selector:@selector(onXZXError:)
-                  name:@"XZXError" object:nil];
+              NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+              [nc addObserver:self selector:@selector(onLoadScript:) name:@"LoadScript" object:nil];
+              [nc addObserver:self selector:@selector(onXZXError:)  name:@"XZXError"   object:nil];
           }
 
           - (UIButton *)makeButton:(NSString *)title color:(UIColor *)color {
               UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-              btn.backgroundColor = color;
+              btn.backgroundColor = color; btn.layer.cornerRadius = 8;
               [btn setTitle:title forState:UIControlStateNormal];
               [btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              btn.titleLabel.font    = [UIFont boldSystemFontOfSize:13];
-              btn.layer.cornerRadius = 8;
+              btn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
               return btn;
           }
 
           - (void)togglePanel {
               _panelVisible = !_panelVisible;
-              [UIView animateWithDuration:0.22 animations:^{
-                  _panel.hidden    = NO;
-                  _panel.alpha     = _panelVisible ? 1 : 0;
-                  _panel.transform = _panelVisible
-                      ? CGAffineTransformIdentity
-                      : CGAffineTransformMakeScale(0.92, 0.92);
-              } completion:^(BOOL finished) {
-                  if (!_panelVisible) _panel.hidden = YES;
-              }];
+              _panel.hidden = NO;
+              [UIView animateWithDuration:0.22 delay:0
+                  options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionBeginFromCurrentState
+                  animations:^{
+                      self->_panel.alpha = self->_panelVisible ? 1.0f : 0.0f;
+                      self->_panel.transform = self->_panelVisible
+                          ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.92f, 0.92f);
+                  } completion:^(BOOL done) {
+                      if (!self->_panelVisible) self->_panel.hidden = YES;
+                  }];
           }
 
           - (void)switchTab:(UIButton *)sender {
               NSInteger idx = sender.tag;
-              _editorView.hidden = (idx != 0);
-              _hubView.hidden    = (idx != 1);
-              _savedView.hidden  = (idx != 2);
-              CGFloat tw = _panel.bounds.size.width / _tabButtons.count;
+              _editorView.hidden = (idx != 0); _hubView.hidden = (idx != 1); _savedView.hidden = (idx != 2);
+              CGFloat tw = _panel.bounds.size.width / (CGFloat)_tabButtons.count;
               [UIView animateWithDuration:0.18 animations:^{
-                  CGRect f = _tabLine.frame;
-                  f.origin.x = idx * tw;
-                  _tabLine.frame = f;
+                  CGRect f = self->_tabLine.frame; f.origin.x = idx * tw; self->_tabLine.frame = f;
               }];
-              for (UIButton *btn in _tabButtons) {
-                  BOOL sel = (btn.tag == idx);
-                  [btn setTitleColor:(sel ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.4])
-                            forState:UIControlStateNormal];
-              }
+              for (UIButton *btn in _tabButtons)
+                  [btn setTitleColor:(btn.tag==idx ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.4]) forState:UIControlStateNormal];
           }
 
-          - (void)executeScript {
-              NSString *script = _textView.text;
-              if (script.length == 0) return;
-              ExecuteScript(script.UTF8String);
+          - (void)doExecute {
+              if (_textView.text.length == 0) return;
+              ExecuteScript(_textView.text.UTF8String);
           }
 
-          - (void)clearScript { _textView.text = @""; }
+          - (void)doClear { _textView.text = @""; }
 
-          - (void)loadScript:(NSNotification *)note {
-              NSString *script = note.object;
-              if (!script) return;
+          - (void)onLoadScript:(NSNotification *)note {
+              NSString *script = note.object; if (!script) return;
               _textView.text = script;
-              [self switchTab:_tabButtons[0]];
+              if (_tabButtons.count > 0) [self switchTab:_tabButtons[0]];
               if (!_panelVisible) [self togglePanel];
           }
 
           - (void)onXZXError:(NSNotification *)note {
-              NSString *err = note.object;
-              if (!err) return;
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  UIAlertController *alert =
-                      [UIAlertController alertControllerWithTitle:@"XZX Error"
-                                                          message:err
-                                                   preferredStyle:UIAlertControllerStyleAlert];
-                  [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                            style:UIAlertActionStyleDefault
-                                                          handler:nil]];
-                  [self presentViewController:alert animated:YES completion:nil];
-              });
+              NSString *err = note.object; if (!err) return;
+              UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Script Error" message:err preferredStyle:UIAlertControllerStyleAlert];
+              [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+              UIViewController *top = self;
+              while (top.presentedViewController) top = top.presentedViewController;
+              [top presentViewController:alert animated:YES completion:nil];
           }
 
           - (void)dragBtn:(UIPanGestureRecognizer *)gr {
               CGPoint t = [gr translationInView:self.view];
-              _toggleBtn.center = CGPointMake(_toggleBtn.center.x + t.x,
-                                              _toggleBtn.center.y + t.y);
+              _toggleBtn.center = CGPointMake(_toggleBtn.center.x + t.x, _toggleBtn.center.y + t.y);
               [gr setTranslation:CGPointZero inView:self.view];
           }
 
           - (void)dragPanel:(UIPanGestureRecognizer *)gr {
               CGPoint t = [gr translationInView:self.view];
-              _panel.center = CGPointMake(_panel.center.x + t.x,
-                                          _panel.center.y + t.y);
+              _panel.center = CGPointMake(_panel.center.x + t.x, _panel.center.y + t.y);
               [gr setTranslation:CGPointZero inView:self.view];
           }
 
-          // ARC handles deallocation – no need to call [super dealloc]
+          - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+
           @end
           EOF
 
-      # ----- xzx_core.h -----
-      - name: Create xzx_core.h
+      - name: Write xzx_core.h
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
           #ifndef XZX_CORE_H
           #define XZX_CORE_H
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
-
           @interface XZXCore : NSObject
           + (instancetype)shared;
           - (void)initialize;
@@ -527,12 +469,10 @@ jobs:
           @property (nonatomic, assign) BOOL isInitialized;
           @property (nonatomic, assign) BOOL inGame;
           @end
-
           #endif
           EOF
 
-      # ----- xzx_core.m (detection + polling) -----
-      - name: Create xzx_core.m
+      - name: Write xzx_core.m
         run: |
           cat > injector/dylib/xzx_core.m << 'HEREDOC'
           #import "xzx_core.h"
@@ -543,10 +483,14 @@ jobs:
           #import <objc/runtime.h>
 
           static XZXCore *sharedCore = nil;
-          static const NSInteger kDebounce = 2;
+          static const NSTimeInterval kStartupDelay     = 8.0;
+          static const NSTimeInterval kPollInterval     = 1.5;
+          static const NSInteger      kDebounce         = 3;
+          static const NSTimeInterval kWatchdogInterval = 3.0;
 
           @interface XZXCore ()
           @property (nonatomic, strong) UIWindow *overlayWindow;
+          @property (nonatomic, strong) NSTimer  *watchdogTimer;
           @property (nonatomic, assign) NSInteger positiveCount;
           @property (nonatomic, assign) NSInteger negativeCount;
           @end
@@ -561,13 +505,7 @@ jobs:
 
           - (instancetype)init {
               self = [super init];
-              if (self) {
-                  self.overlayWindow = nil;
-                  _isInitialized = NO;
-                  _inGame = NO;
-                  _positiveCount = 0;
-                  _negativeCount = 0;
-              }
+              if (self) { _overlayWindow=nil; _watchdogTimer=nil; _isInitialized=NO; _inGame=NO; _positiveCount=0; _negativeCount=0; }
               return self;
           }
 
@@ -575,150 +513,134 @@ jobs:
               if (_isInitialized) return;
               _isInitialized = YES;
               InitLua();
-              NSLog(@"[XZX] Lua initialized");
-              [self startPolling];
+              NSLog(@"[XZX] Lua initialized. First poll in %.0fs.", kStartupDelay);
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kStartupDelay * NSEC_PER_SEC)),
+                  dispatch_get_main_queue(), ^{ [self schedulePoll]; });
           }
 
-          - (void)startPolling {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)),
-                             dispatch_get_main_queue(), ^{
-                  [self pollOnce];
-              });
+          - (void)schedulePoll {
+              if (_inGame) return;
+              [self pollOnce];
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kPollInterval * NSEC_PER_SEC)),
+                  dispatch_get_main_queue(), ^{ [self schedulePoll]; });
           }
 
           - (void)pollOnce {
-              BOOL inGame = [self isInGameCheck];
+              BOOL gameActive = [self isInGameState];
+              if (gameActive) { _positiveCount++; _negativeCount = 0; }
+              else            { _negativeCount++; _positiveCount = 0; }
 
-              if (inGame) {
-                  self.positiveCount++;
-                  self.negativeCount = 0;
-              } else {
-                  self.negativeCount++;
-                  self.positiveCount = 0;
-              }
-
-              if (!self.inGame && self.positiveCount >= kDebounce) {
-                  self.inGame = YES;
-                  self.positiveCount = 0;
+              if (!_inGame && _positiveCount >= kDebounce) {
+                  _inGame = YES; _positiveCount = 0; _negativeCount = 0;
                   NSLog(@"[XZX] In-game confirmed — showing UI");
                   [self showOverlay];
-              } else if (self.inGame && self.negativeCount >= kDebounce) {
-                  self.inGame = NO;
-                  self.negativeCount = 0;
+                  [self startWatchdog];
+              } else if (_inGame && _negativeCount >= kDebounce) {
+                  _inGame = NO; _positiveCount = 0; _negativeCount = 0;
                   NSLog(@"[XZX] Left game — hiding UI");
                   [self hideOverlay];
+                  [self stopWatchdog];
+                  [self schedulePoll];
               }
-
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                             dispatch_get_main_queue(), ^{
-                  [self pollOnce];
-              });
           }
 
-          - (BOOL)isInGameCheck {
+          - (BOOL)isInGameState {
               @try {
-                  __block BOOL hasWebView = NO;
-
                   for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
                       if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                      UIWindowScene *ws = (UIWindowScene *)scene;
-                      for (UIWindow *window in ws.windows) {
-                          if (window == self.overlayWindow) continue;
-                          if ([self hasVisibleWebView:window]) {
-                              hasWebView = YES;
-                              break;
-                          }
+                      for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                          if (window == _overlayWindow) continue;
+                          if ([self windowHasVisibleWebView:window]) return NO;
                       }
-                      if (hasWebView) break;
                   }
-                  // In-game = no visible WKWebView (menu always has one)
-                  return !hasWebView;
-              } @catch (NSException *e) {
-                  NSLog(@"[XZX] isInGameCheck error: %@", e);
+                  return YES;
+              } @catch (NSException *e) { NSLog(@"[XZX] isInGameState error: %@", e); return NO; }
+          }
+
+          - (BOOL)windowHasVisibleWebView:(UIWindow *)window {
+              NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithCapacity:128];
+              [queue addObject:window];
+              NSUInteger limit = 2000, idx = 0;
+              while (idx < queue.count && idx < limit) {
+                  UIView *v = queue[idx++];
+                  if (v.isHidden || v.alpha < 0.01f) continue;
+                  NSString *cn = NSStringFromClass(v.class);
+                  BOOL isWebView = [v isKindOfClass:[WKWebView class]] ||
+                                   [cn hasPrefix:@"WKWeb"] ||
+                                   [cn containsString:@"WebView"];
+                  if (isWebView) {
+                      CGSize sz = v.bounds.size;
+                      if (sz.width > 80 && sz.height > 80) {
+                          NSLog(@"[XZX] WebView (%@ %.0fx%.0f) → menu", cn, sz.width, sz.height);
+                          return YES;
+                      }
+                  }
+                  for (UIView *child in v.subviews)
+                      if (queue.count < limit) [queue addObject:child];
               }
               return NO;
           }
 
-          - (BOOL)hasVisibleWebView:(UIView *)root {
-              if (!root) return NO;
-              NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
-              NSUInteger maxNodes = 2000;
-              NSUInteger index = 0;
+          - (void)startWatchdog {
+              [_watchdogTimer invalidate];
+              _watchdogTimer = [NSTimer scheduledTimerWithTimeInterval:kWatchdogInterval
+                  target:self selector:@selector(watchdogTick) userInfo:nil repeats:YES];
+          }
 
-              while (index < queue.count && index < maxNodes) {
-                  UIView *view = queue[index];
-                  index++;
+          - (void)stopWatchdog { [_watchdogTimer invalidate]; _watchdogTimer = nil; }
 
-                  @try {
-                      if (view.isHidden || view.alpha < 0.01) continue;
-                      if ([view isKindOfClass:[WKWebView class]] &&
-                          view.bounds.size.width > 50 && view.bounds.size.height > 50) {
-                          NSLog(@"[XZX] Found visible WKWebView: %@", NSStringFromCGRect(view.frame));
-                          return YES;
+          - (void)watchdogTick {
+              if (!_inGame) return;
+              if (![self isInGameState]) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                      dispatch_get_main_queue(), ^{
+                      if (![self isInGameState]) {
+                          NSLog(@"[XZX] Watchdog: menu reappeared");
+                          self->_inGame = NO; self->_positiveCount = 0; self->_negativeCount = 0;
+                          [self hideOverlay]; [self stopWatchdog]; [self schedulePoll];
                       }
-                      NSString *className = NSStringFromClass([view class]);
-                      if (([className containsString:@"WKWeb"] || [className containsString:@"WebView"]) &&
-                          view.bounds.size.width > 50) {
-                          NSLog(@"[XZX] Found WebView subclass: %@", className);
-                          return YES;
-                      }
-                      for (UIView *sub in view.subviews) {
-                          if (queue.count < maxNodes) [queue addObject:sub];
-                      }
-                  } @catch (NSException *e) {}
+                  });
+                  return;
               }
-              return NO;
+              if (!_overlayWindow || _overlayWindow.hidden) {
+                  NSLog(@"[XZX] Watchdog: overlay gone — rebuilding");
+                  _overlayWindow = nil; [self showOverlay];
+              }
           }
 
           - (void)showOverlay {
-              if (self.overlayWindow && !self.overlayWindow.hidden) return;
-
+              if (_overlayWindow && !_overlayWindow.hidden) return;
               UIWindowScene *scene = nil;
               for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
                   if ([s isKindOfClass:[UIWindowScene class]] &&
-                      s.activationState == UISceneActivationStateForegroundActive) {
-                      scene = (UIWindowScene *)s; break;
-                  }
+                      ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive)
+                  { scene = (UIWindowScene *)s; break; }
               }
-              if (!scene) {
-                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-                      if ([s isKindOfClass:[UIWindowScene class]]) {
-                          scene = (UIWindowScene *)s; break;
-                      }
-                  }
-              }
+              if (!scene)
+                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
+                      if ([s isKindOfClass:[UIWindowScene class]]) { scene=(UIWindowScene *)s; break; }
               if (!scene) { NSLog(@"[XZX] showOverlay: no scene"); return; }
-
-              if (self.overlayWindow && self.overlayWindow.windowScene != scene) {
-                  self.overlayWindow = nil;
-              }
-
-              if (!self.overlayWindow) {
+              if (_overlayWindow && _overlayWindow.windowScene != scene) _overlayWindow = nil;
+              if (!_overlayWindow) {
                   XZXMainViewController *vc = [[XZXMainViewController alloc] init];
-                  self.overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-                  self.overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-                  self.overlayWindow.backgroundColor = [UIColor clearColor];
-                  self.overlayWindow.rootViewController = vc;
+                  _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+                  _overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+                  _overlayWindow.backgroundColor = [UIColor clearColor];
+                  _overlayWindow.rootViewController = vc;
               }
-
-              self.overlayWindow.hidden = NO;
-              [self.overlayWindow makeKeyAndVisible];
+              _overlayWindow.hidden = NO;
+              [_overlayWindow makeKeyAndVisible];
               NSLog(@"[XZX] Overlay shown");
           }
 
-          - (void)hideOverlay {
-              self.overlayWindow.hidden = YES;
-              NSLog(@"[XZX] Overlay hidden");
-          }
-
-          - (BOOL)isOverlayVisible { return self.overlayWindow && !self.overlayWindow.hidden; }
-          - (BOOL)isInGame         { return _inGame; }
+          - (void)hideOverlay { if (_overlayWindow) _overlayWindow.hidden = YES; NSLog(@"[XZX] Overlay hidden"); }
+          - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
+          - (BOOL)isInGame { return _inGame; }
 
           @end
           HEREDOC
 
-      # ----- xzx_hooks.h and .m (minimal stubs) -----
-      - name: Create xzx_hooks.h
+      - name: Write xzx_hooks.h
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
           #ifndef XZX_HOOKS_H
@@ -726,280 +648,84 @@ jobs:
           #include <stdbool.h>
           void hook_roblox_functions(void);
           void unhook_roblox_functions(void);
-          void install_hook(void *target, void *replacement, void **original);
           void notify_game_joined(void);
           bool isPlayerInGame(void);
           #endif
           EOF
 
-      - name: Create xzx_hooks.m
+      - name: Write xzx_hooks.m
         run: |
           cat > injector/dylib/xzx_hooks.m << 'EOF'
           #import "xzx_hooks.h"
           #import "xzx_core.h"
-          #import <mach/mach.h>
-          #import <mach-o/dyld.h>
-          #import <objc/runtime.h>
-          #import <objc/message.h>
-
-          static void *original_methods[128];
-          static int   method_count = 0;
-          static BOOL  hooks_active = NO;
-
           void notify_game_joined(void) {
               dispatch_async(dispatch_get_main_queue(), ^{
                   if (![[XZXCore shared] isInGame]) [[XZXCore shared] showOverlay];
               });
           }
-
-          void install_hook(void *target, void *replacement, void **original) {}
-          void hook_roblox_functions(void) {}
+          void hook_roblox_functions(void)   {}
           void unhook_roblox_functions(void) {}
           bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
           EOF
 
-      - name: Create entry.m
+      - name: Write entry.m
         run: |
           cat > injector/dylib/entry.m << 'EOF'
           #import <UIKit/UIKit.h>
           #import "xzx_core.h"
-
           __attribute__((constructor))
-          static void entry() {
-              NSLog(@"[XZX] Dylib loaded");
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [[XZXCore shared] initialize];
-              });
+          static void xzx_entry(void) {
+              dispatch_async(dispatch_get_main_queue(), ^{ [[XZXCore shared] initialize]; });
           }
           EOF
 
-      # ----- Stub files (minimal implementations to satisfy linker) -----
-      - name: Create stub files
+      - name: Write stub files
         run: |
-          # XZXInjectionRandomizer
-          cat > injector/dylib/xzx_injection_randomizer.h << 'EOF'
+          write_stub() {
+            local FILE="$1" CLASS="$2"
+            cat > "injector/dylib/${FILE}.h" << HEOF
           #import <Foundation/Foundation.h>
-          @interface XZXInjectionRandomizer : NSObject
+          @interface ${CLASS} : NSObject
           + (instancetype)shared;
           @end
-          EOF
-          cat > injector/dylib/xzx_injection_randomizer.m << 'EOF'
-          #import "xzx_injection_randomizer.h"
-          @implementation XZXInjectionRandomizer
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          HEOF
+            cat > "injector/dylib/${FILE}.m" << MEOF
+          #import "${FILE}.h"
+          @implementation ${CLASS}
+          + (instancetype)shared {
+              static ${CLASS} *inst = nil; static dispatch_once_t tok;
+              dispatch_once(&tok, ^{ inst = [[self alloc] init]; }); return inst;
+          }
           @end
-          EOF
+          MEOF
+          }
+          write_stub xzx_antidetection       XZXAntiDetection
+          write_stub xzx_ban_protection      XZXBanProtection
+          write_stub xzx_hook_manager        XZXHookManager
+          write_stub xzx_physics_bypass      XZXPhysicsBypass
+          write_stub xzx_memory_obfuscator   XZXMemoryObfuscator
+          write_stub xzx_security            XZXSecurity
+          write_stub xzx_functions           XZXFunctions
+          write_stub xzx_editor              XZXEditor
+          write_stub xzx_scriptblox          XZXScriptBlox
+          write_stub xzx_uibridge            XZXUIBridge
+          write_stub xzx_injection_randomizer XZXInjectionRandomizer
 
-          # XZXObfuscator
-          cat > injector/dylib/xzx_obfuscator.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXObfuscator : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_obfuscator.m << 'EOF'
-          #import "xzx_obfuscator.h"
-          @implementation XZXObfuscator
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXAntiDetection (full implementation of all declared methods)
-          cat > injector/dylib/xzx_antidetection.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXAntiDetection : NSObject
-          + (instancetype)shared;
-          - (void)initializeProtection;
-          - (void)runIntegrityChecks;
-          - (BOOL)isUnderInvestigation;
-          - (void)emergencyShutdown;
-          - (void)obfuscateMemory;
-          - (void)randomizeInjectionPattern;
-          - (void)spoofConnections;
-          - (void)cleanTraces;
-          - (void)bypassAdonis;
-          - (void)bypassKRX;
-          - (void)bypassSentinelAC;
-          - (void)bypassPhysicsChecks;
-          - (void)updateBanProbability;
-          - (BOOL)shouldSelfDestruct;
-          @property (nonatomic, assign) NSInteger currentStrikes;
-          @property (nonatomic, assign) NSInteger maxStrikes;
-          @property (nonatomic, assign) double banProbability;
-          @end
-          EOF
-          cat > injector/dylib/xzx_antidetection.m << 'EOF'
-          #import "xzx_antidetection.h"
-          @implementation XZXAntiDetection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          - (void)initializeProtection {}
-          - (void)runIntegrityChecks {}
-          - (BOOL)isUnderInvestigation { return NO; }
-          - (void)emergencyShutdown {}
-          - (void)obfuscateMemory {}
-          - (void)randomizeInjectionPattern {}
-          - (void)spoofConnections {}
-          - (void)cleanTraces {}
-          - (void)bypassAdonis {}
-          - (void)bypassKRX {}
-          - (void)bypassSentinelAC {}
-          - (void)bypassPhysicsChecks {}
-          - (void)updateBanProbability {}
-          - (BOOL)shouldSelfDestruct { return NO; }
-          @end
-          EOF
-
-          # XZXBanProtection
-          cat > injector/dylib/xzx_ban_protection.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXBanProtection : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_ban_protection.m << 'EOF'
-          #import "xzx_ban_protection.h"
-          @implementation XZXBanProtection
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXHookManager
-          cat > injector/dylib/xzx_hook_manager.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXHookManager : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_hook_manager.m << 'EOF'
-          #import "xzx_hook_manager.h"
-          @implementation XZXHookManager
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXPhysicsBypass
-          cat > injector/dylib/xzx_physics_bypass.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXPhysicsBypass : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_physics_bypass.m << 'EOF'
-          #import "xzx_physics_bypass.h"
-          @implementation XZXPhysicsBypass
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXMemoryObfuscator
-          cat > injector/dylib/xzx_memory_obfuscator.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXMemoryObfuscator : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_memory_obfuscator.m << 'EOF'
-          #import "xzx_memory_obfuscator.h"
-          @implementation XZXMemoryObfuscator
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXSecurity
-          cat > injector/dylib/xzx_security.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXSecurity : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_security.m << 'EOF'
-          #import "xzx_security.h"
-          @implementation XZXSecurity
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXFunctions
-          cat > injector/dylib/xzx_functions.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXFunctions : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_functions.m << 'EOF'
-          #import "xzx_functions.h"
-          @implementation XZXFunctions
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXEditor
-          cat > injector/dylib/xzx_editor.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXEditor : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_editor.m << 'EOF'
-          #import "xzx_editor.h"
-          @implementation XZXEditor
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXScriptBlox
-          cat > injector/dylib/xzx_scriptblox.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXScriptBlox : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_scriptblox.m << 'EOF'
-          #import "xzx_scriptblox.h"
-          @implementation XZXScriptBlox
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-          # XZXUIBridge (empty stub – not used)
-          cat > injector/dylib/xzx_uibridge.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface XZXUIBridge : NSObject
-          + (instancetype)shared;
-          @end
-          EOF
-          cat > injector/dylib/xzx_uibridge.m << 'EOF'
-          #import "xzx_uibridge.h"
-          @implementation XZXUIBridge
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
-          @end
-          EOF
-
-      # ----- Compile all Objective-C files (excluding xzx_uibridge.m) -----
       - name: Compile Objective-C files
         run: |
           mkdir -p build
-          CORE_FILES="
-            injector/dylib/entry.m
-            injector/dylib/xzx_core.m
-            injector/dylib/xzx_hooks.m
-            XZX/UI/XZXMainViewController.m
-          "
-          # Include all stub files except xzx_uibridge.m (to avoid conflicts)
-          STUB_FILES=$(ls injector/dylib/xzx_*.m 2>/dev/null \
-            | grep -v xzx_core.m | grep -v xzx_hooks.m | grep -v xzx_uibridge.m || true)
-          ALL_FILES="$CORE_FILES $STUB_FILES"
-          for file in $ALL_FILES; do
-            [ -f "$file" ] || continue
+          CORE_FILES=("injector/dylib/entry.m" "injector/dylib/xzx_core.m" "injector/dylib/xzx_hooks.m" "XZX/UI/XZXMainViewController.m")
+          STUB_FILES=("injector/dylib/xzx_antidetection.m" "injector/dylib/xzx_ban_protection.m" "injector/dylib/xzx_hook_manager.m" "injector/dylib/xzx_physics_bypass.m" "injector/dylib/xzx_memory_obfuscator.m" "injector/dylib/xzx_security.m" "injector/dylib/xzx_functions.m" "injector/dylib/xzx_editor.m" "injector/dylib/xzx_scriptblox.m" "injector/dylib/xzx_uibridge.m" "injector/dylib/xzx_injection_randomizer.m")
+          ALL_FILES=("${CORE_FILES[@]}" "${STUB_FILES[@]}")
+          for file in "${ALL_FILES[@]}"; do
+            [ -f "$file" ] || { echo "SKIP: $file"; continue; }
             out="build/$(basename "$file" .m).o"
             xcrun -sdk iphoneos clang -c \
-              -I./injector/dylib \
-              -I./injector/dylib/Core \
-              -I./XZX/UI \
+              -fobjc-arc -Wno-deprecated-declarations \
+              -I./injector/dylib -I./injector/dylib/Core -I./XZX/UI \
               -I${{ env.LUA_INCLUDE_DIR }} \
-              -o "$out" "$file" \
               -target arm64-apple-ios15.0 \
-              && echo "✓ $file" || { echo "✗ FAILED: $file"; exit 1; }
+              -o "$out" "$file" && echo "✓ $file" || { echo "✗ FAILED: $file"; exit 1; }
           done
 
       - name: Compile C++ files
@@ -1007,63 +733,76 @@ jobs:
           for file in injector/dylib/Core/*.mm; do
             [ -f "$file" ] || continue
             out="build/$(basename "$file" .mm).o"
-            xcrun -sdk iphoneos clang++ -c -std=c++17 \
-              -I./injector/dylib \
-              -I./injector/dylib/Core \
+            xcrun -sdk iphoneos clang++ -c \
+              -std=c++17 -fobjc-arc -Wno-deprecated-declarations \
+              -I./injector/dylib -I./injector/dylib/Core \
               -I${{ env.LUA_INCLUDE_DIR }} \
-              -o "$out" "$file" \
               -target arm64-apple-ios15.0 \
-              && echo "✓ $file" || { echo "✗ FAILED: $file"; exit 1; }
+              -o "$out" "$file" && echo "✓ $file" || { echo "✗ FAILED: $file"; exit 1; }
           done
 
       - name: Link dylib
         run: |
           xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit \
-            -framework Foundation \
-            -framework CoreGraphics \
-            -framework WebKit \
-            -framework QuartzCore \
-            -framework Metal \
-            -L${{ env.LUA_LIB_DIR }} \
-            -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
-            -Xlinker -rpath -Xlinker /usr/lib/swift \
+            -target arm64-apple-ios15.0 \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
+            -framework WebKit -framework QuartzCore -framework Metal \
+            -L${{ env.LUA_LIB_DIR }} -Wl,-force_load,${{ env.LUA_LIB_DIR }}/liblua.a \
             -Xlinker -rpath -Xlinker @executable_path/Frameworks \
-            -undefined dynamic_lookup \
-            -o build/executor.dylib build/*.o \
-            -lc++ -target arm64-apple-ios15.0
-          echo "✅ Dylib linked"
-          ls -lh build/executor.dylib
+            -Xlinker -rpath -Xlinker @loader_path \
+            -undefined dynamic_lookup -lc++ \
+            -o build/executor.dylib build/*.o
+          echo "✅ Dylib linked: $(ls -lh build/executor.dylib | awk '{print $5}')"
 
-      - name: Sign dylib
-        run: codesign -f -s - build/executor.dylib
-
-      - name: Extract and patch IPA
+      - name: Verify dylib symbols
         run: |
-          unzip -q Roblox.ipa -d extracted/
-          cp build/executor.dylib extracted/Payload/Roblox.app/
-          rm -rf extracted/Payload/Roblox.app/_CodeSignature
-          rm -f  extracted/Payload/Roblox.app/embedded.mobileprovision
+          xcrun nm -gU build/executor.dylib | grep "_InitLua" && echo "✅ InitLua found" || { echo "❌ InitLua MISSING"; exit 1; }
+          xcrun nm -gU build/executor.dylib | grep "_ExecuteScript" && echo "✅ ExecuteScript found" || { echo "❌ ExecuteScript MISSING"; exit 1; }
 
-          ./tools/insert_dylib --all-yes @executable_path/executor.dylib \
+      - name: Extract IPA
+        run: unzip -q Roblox.ipa -d extracted/
+
+      - name: Inject dylib
+        run: |
+          cp build/executor.dylib extracted/Payload/Roblox.app/executor.dylib
+
+      - name: Patch Roblox binary
+        run: |
+          ./tools/insert_dylib --all-yes \
+            @executable_path/executor.dylib \
             extracted/Payload/Roblox.app/Roblox \
             extracted/Payload/Roblox.app/Roblox_patched
-          mv extracted/Payload/Roblox.app/Roblox_patched \
-             extracted/Payload/Roblox.app/Roblox
+          mv extracted/Payload/Roblox.app/Roblox_patched extracted/Payload/Roblox.app/Roblox
 
-          INFO_PLIST="extracted/Payload/Roblox.app/Info.plist"
-          plutil -convert xml1 "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$INFO_PLIST" 2>/dev/null || \
-          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$INFO_PLIST"
-          plutil -convert binary1 "$INFO_PLIST"
+      - name: Patch Info.plist
+        run: |
+          PLIST="extracted/Payload/Roblox.app/Info.plist"
+          plutil -convert xml1 "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" "$PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" "$PLIST"
+          plutil -convert binary1 "$PLIST"
 
-      - name: Resign the app
-        run: codesign -f -s - extracted/Payload/Roblox.app
+      - name: Remove old signatures
+        run: |
+          rm -rf extracted/Payload/Roblox.app/_CodeSignature
+          rm -f  extracted/Payload/Roblox.app/embedded.mobileprovision
+          find extracted/Payload/Roblox.app -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Sign app bundle
+        run: |
+          APP="extracted/Payload/Roblox.app"
+          codesign -f -s - "$APP/executor.dylib"
+          find "$APP/Frameworks" -name "*.dylib" -o -name "*.framework" 2>/dev/null | while read f; do
+            codesign -f -s - "$f" 2>/dev/null || true
+          done
+          codesign -f -s - "$APP/Roblox"
+          codesign -f -s - --deep "$APP"
+          codesign -v "$APP" && echo "✅ Signature verified" || echo "⚠️ Signature verify warning"
 
       - name: Create IPA
         run: |
           cd extracted && zip -qr ../XZX.ipa Payload/ && cd ..
-          echo "✅ IPA ready"
+          echo "✅ XZX.ipa: $(ls -lh XZX.ipa | awk '{print $5}')"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

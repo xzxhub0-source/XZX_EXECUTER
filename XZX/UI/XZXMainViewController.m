@@ -50,7 +50,6 @@
     _panel.layer.shadowOffset  = CGSizeZero;
     [self.view addSubview:_panel];
 
-    // Title bar
     UIView *titleBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, 44)];
     titleBar.backgroundColor = [UIColor colorWithRed:0.45 green:0.20 blue:0.85 alpha:1];
     titleBar.layer.cornerRadius = 18;
@@ -76,7 +75,6 @@
         [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPanel:)];
     [titleBar addGestureRecognizer:panPanel];
 
-    // Tab bar
     NSArray *tabs = @[@"Editor", @"Hub", @"Saved"];
     _tabButtons = [NSMutableArray array];
     CGFloat tw = pw / tabs.count;
@@ -102,7 +100,6 @@
 
     CGRect content = CGRectMake(0, 84, pw, ph - 84);
 
-    // Editor tab
     _editorView = [[UIView alloc] initWithFrame:content];
     [_panel addSubview:_editorView];
 
@@ -135,11 +132,9 @@
         forControlEvents:UIControlEventTouchUpInside];
     [_editorView addSubview:clearBtn];
 
-    // Hub tab
     _hubView = [[UIView alloc] initWithFrame:content];
     _hubView.hidden = YES;
     [_panel addSubview:_hubView];
-
     UILabel *hubLbl = [[UILabel alloc] initWithFrame:_hubView.bounds];
     hubLbl.text          = @"Script Hub";
     hubLbl.textColor     = [UIColor colorWithWhite:1 alpha:0.3];
@@ -147,11 +142,9 @@
     hubLbl.font          = [UIFont systemFontOfSize:16];
     [_hubView addSubview:hubLbl];
 
-    // Saved tab
     _savedView = [[UIView alloc] initWithFrame:content];
     _savedView.hidden = YES;
     [_panel addSubview:_savedView];
-
     UILabel *saveLbl = [[UILabel alloc] initWithFrame:_savedView.bounds];
     saveLbl.text          = @"No saved scripts";
     saveLbl.textColor     = [UIColor colorWithWhite:1 alpha:0.3];
@@ -162,7 +155,6 @@
     [[NSNotificationCenter defaultCenter]
         addObserver:self selector:@selector(loadScript:)
         name:@"LoadScript" object:nil];
-
     [[NSNotificationCenter defaultCenter]
         addObserver:self selector:@selector(onXZXError:)
         name:@"XZXError" object:nil];
@@ -196,14 +188,12 @@
     _editorView.hidden = (idx != 0);
     _hubView.hidden    = (idx != 1);
     _savedView.hidden  = (idx != 2);
-
     CGFloat tw = _panel.bounds.size.width / _tabButtons.count;
     [UIView animateWithDuration:0.18 animations:^{
         CGRect f = _tabLine.frame;
         f.origin.x = idx * tw;
         _tabLine.frame = f;
     }];
-
     for (UIButton *btn in _tabButtons) {
         BOOL sel = (btn.tag == idx);
         [btn setTitleColor:(sel ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.4])
@@ -211,16 +201,13 @@
     }
 }
 
-// ========== FIXED: executeScript method ==========
 - (void)executeScript {
     NSString *script = _textView.text;
     if (script.length == 0) return;
     ExecuteScript(script.UTF8String);
 }
 
-- (void)clearScript {
-    _textView.text = @"";
-}
+- (void)clearScript { _textView.text = @""; }
 
 - (void)loadScript:(NSNotification *)note {
     NSString *script = note.object;
@@ -261,7 +248,6 @@
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
-    [super dealloc];
 }
 
 @end

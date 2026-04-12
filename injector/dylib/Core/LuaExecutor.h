@@ -10,7 +10,8 @@ extern "C" {
 void InitLua(void);
 void ExecuteScript(const char *script);
 void RegisterFunction(const char *name, int (*func)(struct lua_State*));
-struct lua_State* GetLuaState(void);  // NEW: expose Lua state for hooks
+void RegisterXZXFunctions(void);
+struct lua_State* GetLuaState(void);
 
 #ifdef __cplusplus
 }

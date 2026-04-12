@@ -1,7 +1,5 @@
 #import "SRFXCore.h"
 #import "SRFXMainViewController.h"
-#import "SRFXMemory.h"
-#import "SRFXSecurity.h"
 #include "Core/SRFXLua.h"
 
 static SRFXCore *instance = nil;
@@ -24,9 +22,8 @@ static SRFXCore *instance = nil;
 }
 
 - (void)start {
-    [SRFXMemory obfuscate];
     SRFXLuaInit();
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3.0 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
         [self startGameDetection];
     });

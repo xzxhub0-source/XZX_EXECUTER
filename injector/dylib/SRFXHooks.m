@@ -1,2 +1,6 @@
 #import "SRFXHooks.h"
-void SRFXHooksInstall(void) {}
+#import <objc/runtime.h>
+#import <objc/message.h>
+
+void SRFXHooksInstall(void) {
+}

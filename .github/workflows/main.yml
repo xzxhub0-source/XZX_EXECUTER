@@ -446,6 +446,7 @@ jobs:
           static int srfx_getscripts(lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getloadedmodules(lua_State *L) { lua_newtable(L); return 1; }
 
+          __attribute__((visibility("default")))
           void SRFXLuaInit(void) {
               if (L) return;
               L = luaL_newstate();
@@ -534,6 +535,7 @@ jobs:
               lua_setglobal(L, "serfix");
           }
 
+          __attribute__((visibility("default")))
           void SRFXLuaExecute(const char *script) {
               pthread_mutex_lock(&lua_mutex);
               if (!L) SRFXLuaInit();
@@ -551,12 +553,14 @@ jobs:
               pthread_mutex_unlock(&lua_mutex);
           }
 
+          __attribute__((visibility("default")))
           void SRFXLuaRegister(const char *name, int (*func)(lua_State*)) {
               pthread_mutex_lock(&lua_mutex);
               if (L) lua_register(L, name, func);
               pthread_mutex_unlock(&lua_mutex);
           }
 
+          __attribute__((visibility("default")))
           lua_State* SRFXLuaState(void) {
               return L;
           }
@@ -867,7 +871,6 @@ jobs:
             -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
             -L$LUA_LIB -llua \
             -Wl,-export_dynamic \
-            -Wl,-U,_SRFXLuaInit \
             -undefined dynamic_lookup \
             -o build/serfix.dylib build/*.o \
             -lc++ -target arm64-apple-ios15.0

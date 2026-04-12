@@ -1,69 +1,40 @@
-// At the top, add static storage for Roblox Lua state
-static lua_State *robloxLuaState = NULL;
+#import "xzx_hooks.h"
+#import "xzx_core.h"
+#import <mach/mach.h>
+#import <mach-o/dyld.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
-// Find Roblox's main Lua state. 
-// One reliable method: hook a function that is called with the Lua state as an argument,
-// such as the function that executes scripts. For demonstration, we'll assume we have a known address.
-lua_State* getRobloxLuaState(void) {
-    // This is a placeholder. In a real executor, you would find the Lua state by:
-    // - Hooking lua_newstate or luaL_newstate and capturing the returned state
-    // - Or scanning memory for known patterns
-    // For now, we'll try to retrieve it from the shared instance of the script context.
-    @try {
-        Class scriptContextClass = NSClassFromString(@"RBXScriptContext");
-        if (scriptContextClass) {
-            SEL sharedSel = NSSelectorFromString(@"sharedContext");
-            if ([scriptContextClass respondsToSelector:sharedSel]) {
-                id context = ((id(*)(id, SEL))objc_msgSend)((id)scriptContextClass, sharedSel);
-                if (context) {
-                    SEL luaStateSel = NSSelectorFromString(@"luaState");
-                    if ([context respondsToSelector:luaStateSel]) {
-                        void *state = ((void*(*)(id, SEL))objc_msgSend)(context, luaStateSel);
-                        if (state) {
-                            robloxLuaState = (lua_State *)state;
-                            return robloxLuaState;
-                        }
-                    }
-                }
-            }
-        }
-    } @catch (NSException *e) {
-        NSLog(@"[XZX] Failed to get Roblox Lua state: %@", e);
-    }
-    return robloxLuaState;
+static void *original_methods[128];
+static int   method_count = 0;
+static BOOL  hooks_active = NO;
+
+void notify_game_joined(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (![[XZXCore shared] isInGame]) [[XZXCore shared] showOverlay];
+    });
 }
 
-// Hook the RemoteEvent's OnServerEvent to receive script submissions from our UI
-void setupRemoteEventBridge(void) {
-    const char *luaScript =
-    "local remote = game.CoreGui:FindFirstChild('XZX_ExecutorUI'):FindFirstChild('XZX_ExecutorBridge')\n"
-    "if remote then\n"
-    "    remote.OnServerEvent:Connect(function(player, scriptText)\n"
-    "        -- Call back into our dylib – we can use a custom C function registered in Lua\n"
-    "        if _G.xzx_execute_script then\n"
-    "            _G.xzx_execute_script(scriptText)\n"
-    "        end\n"
-    "    end)\n"
-    "end\n";
-    
-    lua_State *L = getRobloxLuaState();
-    if (L) {
-        // Register a C function that our Lua can call to execute scripts
-        lua_register(L, "xzx_execute_script_c", [](lua_State *L) -> int {
-            const char *script = luaL_checkstring(L, 1);
-            [[XZXUIBridge shared] onScriptSubmitted:[NSString stringWithUTF8String:script]];
-            return 0;
-        });
-        // Make it available globally as _G.xzx_execute_script
-        lua_getglobal(L, "xzx_execute_script_c");
-        lua_setglobal(L, "xzx_execute_script");
-        
-        // Now run the setup script
-        if (luaL_dostring(L, luaScript) != LUA_OK) {
-            NSLog(@"[XZX] RemoteEvent bridge setup failed: %s", lua_tostring(L, -1));
-            lua_pop(L, 1);
-        } else {
-            NSLog(@"[XZX] RemoteEvent bridge established");
-        }
-    }
+void install_hook(void *target, void *replacement, void **original) {
+    if (!target || !replacement) return;
+    if (original) *original = target;
+    original_methods[method_count++] = target;
+    vm_address_t addr = (vm_address_t)target;
+    vm_protect(mach_task_self(), addr & ~(PAGE_SIZE-1), PAGE_SIZE, 0,
+               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+    uint32_t branch = 0x14000000 |
+        (((uint32_t)((uintptr_t)replacement - (uintptr_t)target) >> 2) & 0x03FFFFFF);
+    memcpy(target, &branch, 4);
+    __builtin___clear_cache((char *)target, (char *)target + 4);
+    vm_protect(mach_task_self(), addr & ~(PAGE_SIZE-1), PAGE_SIZE, 0,
+               VM_PROT_READ | VM_PROT_EXECUTE);
 }
+
+void hook_roblox_functions(void) {
+    if (hooks_active) return;
+    hooks_active = YES;
+}
+
+void unhook_roblox_functions(void) { hooks_active = NO; }
+
+bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }

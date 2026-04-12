@@ -51,6 +51,41 @@ jobs:
           echo "LUA_INCLUDE=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "LUA_LIB=$HOME/lua-ios" >> $GITHUB_ENV
 
+      - name: Create missing headers
+        run: |
+          cd injector/dylib
+          cat > SRFXSecurity.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXSecurity : NSObject
+          + (NSString *)spoofedHWID;
+          @end
+          EOF
+          cat > SRFXObfuscator.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXObfuscator : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > SRFXEditor.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXEditor : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > SRFXUIBridge.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXUIBridge : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > SRFXMemory.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXMemory : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cd ../..
+
       - name: Compile Objective-C
         run: |
           mkdir -p build

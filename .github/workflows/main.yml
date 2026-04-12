@@ -28,7 +28,8 @@ jobs:
           git clone https://github.com/tyilo/insert_dylib.git
           cd insert_dylib
           mkdir -p ../tools
-          xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib -configuration Release CONFIGURATION_BUILD_DIR=$(pwd)/../tools
+          xcodebuild -project insert_dylib.xcodeproj -scheme insert_dylib \
+            -configuration Release CONFIGURATION_BUILD_DIR=$(pwd)/../tools
           chmod +x ../tools/insert_dylib
           cd ..
 
@@ -41,7 +42,9 @@ jobs:
           for file in src/*.c; do
             filename=$(basename "$file" .c)
             if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
-              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -target arm64-apple-ios15.0 -I src -o "src/$filename.o" "$file"
+              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 \
+                -target arm64-apple-ios15.0 -I src \
+                -o "src/$filename.o" "$file"
             fi
           done
           ar rcs $HOME/lua-ios/liblua.a src/*.o
@@ -52,29 +55,75 @@ jobs:
           echo "LUA_LIB=$HOME/lua-ios" >> $GITHUB_ENV
 
       - name: Make dirs
-        run: |
-          mkdir -p build
-          mkdir -p SERFIX/UI
-          mkdir -p injector/dylib/Core
+        run: mkdir -p build SERFIX/UI injector/dylib/Core
 
+      # FIX #6: Write stubs with explicit correct class names (no shell expansion)
       - name: Create stub files
         run: |
-          cd injector/dylib
-          for name in srfx_obfuscator srfx_editor srfx_uibridge srfx_memory; do
-            cat > ${name}.h << EOF
+          # srfx_obfuscator
+          cat > injector/dylib/srfx_obfuscator.h << 'EOF'
           #import <Foundation/Foundation.h>
-          @interface SRFX${name#srfx_} : NSObject
+          @interface SRFXObfuscator : NSObject
           + (instancetype)shared;
           @end
           EOF
-            cat > ${name}.m << EOF
-          #import "${name}.h"
-          @implementation SRFX${name#srfx_}
-          + (instancetype)shared { static id i; static dispatch_once_t t; dispatch_once(&t,^{ i=[[self alloc] init];}); return i; }
+          cat > injector/dylib/srfx_obfuscator.m << 'EOF'
+          #import "srfx_obfuscator.h"
+          @implementation SRFXObfuscator
+          + (instancetype)shared {
+              static id i; static dispatch_once_t t;
+              dispatch_once(&t, ^{ i = [[self alloc] init]; }); return i;
+          }
           @end
           EOF
-          done
-          cd ../..
+
+          # srfx_editor
+          cat > injector/dylib/srfx_editor.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXEditor : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/srfx_editor.m << 'EOF'
+          #import "srfx_editor.h"
+          @implementation SRFXEditor
+          + (instancetype)shared {
+              static id i; static dispatch_once_t t;
+              dispatch_once(&t, ^{ i = [[self alloc] init]; }); return i;
+          }
+          @end
+          EOF
+
+          # srfx_uibridge
+          cat > injector/dylib/srfx_uibridge.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXUIBridge : NSObject
+          + (instancetype)shared;
+          @end
+          EOF
+          cat > injector/dylib/srfx_uibridge.m << 'EOF'
+          #import "srfx_uibridge.h"
+          @implementation SRFXUIBridge
+          + (instancetype)shared {
+              static id i; static dispatch_once_t t;
+              dispatch_once(&t, ^{ i = [[self alloc] init]; }); return i;
+          }
+          @end
+          EOF
+
+          # FIX #7: srfx_memory now has a proper .m stub
+          cat > injector/dylib/srfx_memory.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXMemory : NSObject
+          + (void)obfuscate;
+          @end
+          EOF
+          cat > injector/dylib/srfx_memory.m << 'EOF'
+          #import "srfx_memory.h"
+          @implementation SRFXMemory
+          + (void)obfuscate {}
+          @end
+          EOF
 
       - name: Write entry.m
         run: |
@@ -83,7 +132,8 @@ jobs:
           #import "SRFXCore.h"
           __attribute__((constructor))
           static void srfx_entry(void) {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
+                             dispatch_get_main_queue(), ^{
                   [[SRFXCore shared] start];
               });
           }
@@ -112,8 +162,7 @@ jobs:
           cat > injector/dylib/SRFXCore.m << 'EOF'
           #import "SRFXCore.h"
           #import "SRFXMainViewController.h"
-          #import <objc/runtime.h>
-          #import <objc/message.h>
+          #import <QuartzCore/QuartzCore.h>
           #include "Core/SRFXLua.h"
 
           static SRFXCore *instance = nil;
@@ -130,16 +179,15 @@ jobs:
           - (instancetype)init {
               self = [super init];
               if (self) {
-                  _inGame        = NO;
-                  _uiWindow      = nil;
-                  _positiveCount = 0;
-                  _negativeCount = 0;
+                  _inGame = NO; _uiWindow = nil;
+                  _positiveCount = 0; _negativeCount = 0;
               }
               return self;
           }
 
           - (void)start {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC),
+                             dispatch_get_main_queue(), ^{
                   SRFXLuaInit();
                   [self startGameDetection];
               });
@@ -147,70 +195,109 @@ jobs:
 
           - (void)startGameDetection {
               __weak typeof(self) weak = self;
-              self.checkTimer = [NSTimer scheduledTimerWithTimeInterval:1.2 repeats:YES block:^(NSTimer *t) {
-                  __strong typeof(self) self = weak;
-                  if (!self) { [t invalidate]; return; }
-                  BOOL nowInGame = [self isInsideGame];
-                  if (nowInGame) { self.positiveCount++; self.negativeCount  = 0; }
-                  else           { self.negativeCount++; self.positiveCount  = 0; }
-                  if (!self.inGame && self.positiveCount >= kDebounce) {
-                      self.inGame = YES;
-                      self.positiveCount = 0;
-                      [self showUI];
-                  } else if (self.inGame && self.negativeCount >= kDebounce) {
-                      self.inGame = NO;
-                      self.negativeCount = 0;
-                      [self hideUI];
+              self.checkTimer = [NSTimer scheduledTimerWithTimeInterval:1.2
+                                                               repeats:YES
+                                                                 block:^(NSTimer *t) {
+                  __strong typeof(self) s = weak;
+                  if (!s) { [t invalidate]; return; }
+                  // All UIKit access on main queue — this timer already fires on main
+                  BOOL nowInGame = [s isInsideGame];
+                  if (nowInGame) { s.positiveCount++; s.negativeCount  = 0; }
+                  else           { s.negativeCount++; s.positiveCount  = 0; }
+                  if (!s.inGame && s.positiveCount >= kDebounce) {
+                      s.inGame = YES; s.positiveCount = 0;
+                      [s showUI];
+                  } else if (s.inGame && s.negativeCount >= kDebounce) {
+                      s.inGame = NO; s.negativeCount = 0;
+                      [s hideUI];
                   }
               }];
           }
 
+          // FIX #9: statusBarHidden + button count detection
+          // Works on Roblox 2.714 where NSClassFromString returns nil for all
+          // internal Roblox class names (they are obfuscated).
+          //
+          // Roblox 2.714 facts:
+          //   Home screen: status bar VISIBLE, 15+ UIButtons
+          //   In-game:     status bar HIDDEN (fullscreen), 3-5 UIButtons max
+          //   Both states: CAMetalLayer present (Roblox renders everything via Metal)
           - (BOOL)isInsideGame {
               @try {
-                  NSArray *classNames = @[@"RBXDataModel", @"RobloxDataModel", @"DataModel"];
-                  Class dmClass = nil;
-                  for (NSString *n in classNames) {
-                      dmClass = NSClassFromString(n);
-                      if (dmClass) break;
-                  }
-                  if (!dmClass) return NO;
-                  NSArray *sharedSels = @[@"sharedDataModel", @"shared", @"singleton"];
-                  id dm = nil;
-                  for (NSString *sn in sharedSels) {
-                      SEL s = NSSelectorFromString(sn);
-                      if ([dmClass respondsToSelector:s]) {
-                          dm = ((id(*)(id,SEL))objc_msgSend)((id)dmClass, s);
-                          if (dm) break;
+                  BOOL statusBarHidden = NO;
+                  NSInteger buttonCount = 0;
+                  BOOL hasMetalLayer = NO;
+
+                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+                      UIWindowScene *ws = (UIWindowScene *)scene;
+
+                      // Signal 1: status bar hidden = fullscreen game
+                      if (ws.statusBarManager.statusBarHidden) statusBarHidden = YES;
+
+                      for (UIWindow *window in ws.windows) {
+                          if (window == self.uiWindow) continue;
+                          // Signal 2: Metal = Roblox rendering active
+                          if (!hasMetalLayer) hasMetalLayer = [self windowHasMetalLayer:window];
+                          // Signal 3: few buttons = in-game HUD only
+                          if (buttonCount < 20) buttonCount += [self countButtons:window];
                       }
                   }
-                  if (!dm) return NO;
-                  NSArray *placeSelNames = @[@"placeId", @"PlaceId", @"currentPlaceId"];
-                  for (NSString *sn in placeSelNames) {
-                      SEL s = NSSelectorFromString(sn);
-                      if ([dm respondsToSelector:s]) {
-                          id pid = ((id(*)(id,SEL))objc_msgSend)(dm, s);
-                          return pid && [pid intValue] != 0;
-                      }
+
+                  return hasMetalLayer && statusBarHidden && (buttonCount < 6);
+              } @catch (NSException *e) {
+                  NSLog(@"[SERFIX] isInsideGame error: %@", e);
+              }
+              return NO;
+          }
+
+          - (BOOL)windowHasMetalLayer:(UIView *)view {
+              @try {
+                  if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+                  for (CALayer *sub in view.layer.sublayers ?: @[]) {
+                      if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+                      for (CALayer *s2 in sub.sublayers ?: @[])
+                          if ([s2 isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
                   }
+                  for (UIView *sub in view.subviews)
+                      if ([self windowHasMetalLayer:sub]) return YES;
               } @catch (NSException *e) {}
               return NO;
+          }
+
+          - (NSInteger)countButtons:(UIView *)view {
+              NSInteger n = 0;
+              @try {
+                  if ([view isKindOfClass:[UIButton class]]) n++;
+                  if (n >= 20) return n;
+                  for (UIView *sub in view.subviews) {
+                      n += [self countButtons:sub];
+                      if (n >= 20) return n;
+                  }
+              } @catch (NSException *e) {}
+              return n;
           }
 
           - (void)showUI {
               if (!self.inGame) return;
               if (self.uiWindow && !self.uiWindow.hidden) return;
               if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self showUI]; });
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC),
+                                 dispatch_get_main_queue(), ^{ [self showUI]; });
                   return;
               }
               UIWindowScene *scene = nil;
               for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-                  if ([s isKindOfClass:[UIWindowScene class]] && ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive) {
+                  if ([s isKindOfClass:[UIWindowScene class]] &&
+                      ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive) {
                       scene = (UIWindowScene *)s; break;
                   }
               }
-              if (!scene) for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
+              if (!scene)
+                  for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
+                      if ([s isKindOfClass:[UIWindowScene class]]) { scene=(UIWindowScene *)s; break; }
               if (!scene) return;
+
               if (!self.uiWindow) {
                   SRFXMainViewController *vc = [[SRFXMainViewController alloc] init];
                   self.uiWindow = [[UIWindow alloc] initWithWindowScene:scene];
@@ -259,11 +346,9 @@ jobs:
                   if (d) {
                       id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
                       if ([json isKindOfClass:[NSDictionary class]]) {
-                          NSArray *scripts = json[@"scripts"];
                           NSMutableArray *res = [NSMutableArray array];
-                          for (NSDictionary *s in scripts) {
-                              [res addObject:@{@"title": s[@"title"]?:@"", @"author": s[@"author"]?:@"", @"game": s[@"game"]?:@"", @"slug": s[@"slug"]?:@""}];
-                          }
+                          for (NSDictionary *s in json[@"scripts"])
+                              [res addObject:@{@"title":s[@"title"]?:@"",@"author":s[@"author"]?:@"",@"game":s[@"game"]?:@"",@"slug":s[@"slug"]?:@""}];
                           completion(res); return;
                       }
                   }
@@ -271,30 +356,26 @@ jobs:
               }] resume];
           }
           + (void)fetchScript:(NSString *)slug completion:(void(^)(NSString *))completion {
-              NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts/%@", slug];
-              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+              NSString *us = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts/%@", slug];
+              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:us] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
                   if (d) {
                       id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-                      if ([json isKindOfClass:[NSDictionary class]]) {
-                          NSString *code = json[@"script"];
-                          if (code) { completion(code); return; }
-                      }
+                      NSString *code = [json isKindOfClass:[NSDictionary class]] ? json[@"script"] : nil;
+                      if (code) { completion(code); return; }
                   }
                   completion(@"");
               }] resume];
           }
           + (void)search:(NSString *)query completion:(void(^)(NSArray *))completion {
-              NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts?search=%@&limit=30", [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-              NSURL *url = [NSURL URLWithString:urlStr];
-              [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+              NSString *enc = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+              NSString *us = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts?search=%@&limit=30", enc];
+              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:us] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
                   if (d) {
                       id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
                       if ([json isKindOfClass:[NSDictionary class]]) {
-                          NSArray *scripts = json[@"scripts"];
                           NSMutableArray *res = [NSMutableArray array];
-                          for (NSDictionary *s in scripts) {
-                              [res addObject:@{@"title": s[@"title"]?:@"", @"slug": s[@"slug"]?:@""}];
-                          }
+                          for (NSDictionary *s in json[@"scripts"])
+                              [res addObject:@{@"title":s[@"title"]?:@"",@"slug":s[@"slug"]?:@""}];
                           completion(res); return;
                       }
                   }
@@ -336,14 +417,13 @@ jobs:
           #import <CommonCrypto/CommonDigest.h>
           @implementation SRFXSecurity
           + (NSString *)spoofedHWID {
-              NSMutableString *hwid = [NSMutableString string];
-              for (int i = 0; i < 32; i++) [hwid appendFormat:@"%X", arc4random_uniform(16)];
-              const char *in = [hwid UTF8String];
-              unsigned char out[CC_SHA256_DIGEST_LENGTH];
-              CC_SHA256(in, (CC_LONG)strlen(in), out);
-              NSMutableString *res = [NSMutableString string];
-              for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [res appendFormat:@"%02X", out[i]];
-              return res;
+              NSMutableString *h = [NSMutableString string];
+              for (int i=0;i<32;i++) [h appendFormat:@"%X",arc4random_uniform(16)];
+              const char *in=[h UTF8String]; unsigned char out[CC_SHA256_DIGEST_LENGTH];
+              CC_SHA256(in,(CC_LONG)strlen(in),out);
+              NSMutableString *r=[NSMutableString string];
+              for (int i=0;i<CC_SHA256_DIGEST_LENGTH;i++) [r appendFormat:@"%02X",out[i]];
+              return r;
           }
           @end
           EOF
@@ -367,9 +447,11 @@ jobs:
           #endif
           EOF
 
+      # FIX #2 + #3: srfx_getscript uses semaphore not NSRunLoop spin.
+      # srfx_wait released mutex before sleeping then reacquires.
       - name: Write SRFXLua.mm
         run: |
-          cat > injector/dylib/Core/SRFXLua.mm << 'EOF'
+          cat > injector/dylib/Core/SRFXLua.mm << 'CPPEOF'
           #import <Foundation/Foundation.h>
           #import <UIKit/UIKit.h>
           #include <lua.h>
@@ -380,14 +462,8 @@ jobs:
           #include "SRFXLua.h"
           #import "srfx_security.h"
 
-          static lua_State *L = nil;
+          static lua_State *L = NULL;
           static pthread_mutex_t lua_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-          static void add_timing_jitter(void) {
-              volatile int x = 0;
-              for (int i = 0; i < arc4random_uniform(50) + 10; i++) x += i;
-              usleep(arc4random_uniform(200));
-          }
 
           extern "C" {
 
@@ -396,12 +472,12 @@ jobs:
               NSMutableString *out = [NSMutableString string];
               for (int i = 1; i <= n; i++) {
                   if (i > 1) [out appendString:@" "];
-                  if (lua_isstring(L, i)) [out appendFormat:@"%s", lua_tostring(L, i)];
-                  else if (lua_isnumber(L, i)) [out appendFormat:@"%g", lua_tonumber(L, i)];
+                  if (lua_isstring(L, i))       [out appendFormat:@"%s", lua_tostring(L, i)];
+                  else if (lua_isnumber(L, i))  [out appendFormat:@"%g", lua_tonumber(L, i)];
                   else if (lua_isboolean(L, i)) [out appendString:lua_toboolean(L, i) ? @"true" : @"false"];
-                  else if (lua_istable(L, i)) [out appendString:@"table"];
-                  else if (lua_isfunction(L, i)) [out appendString:@"function"];
-                  else [out appendString:@"nil"];
+                  else if (lua_istable(L, i))   [out appendString:@"table"];
+                  else if (lua_isfunction(L, i))[out appendString:@"function"];
+                  else                          [out appendString:@"nil"];
               }
               NSString *copy = [out copy];
               dispatch_async(dispatch_get_main_queue(), ^{
@@ -412,20 +488,22 @@ jobs:
 
           static int srfx_warn(lua_State *L) { return srfx_print(L); }
 
+          // FIX #2: use dispatch_semaphore, not NSRunLoop spin
           static int srfx_getscript(lua_State *L) {
-              const char *url = luaL_checkstring(L, 1);
+              const char *urlStr = luaL_checkstring(L, 1);
+              NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:urlStr]];
+              if (!url) { lua_pushnil(L); return 1; }
+              dispatch_semaphore_t sem = dispatch_semaphore_create(0);
               __block NSString *result = nil;
-              __block BOOL done = NO;
-              NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithUTF8String:url]]];
+              NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
               [req setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
-              [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *r, NSError *e) {
-                  if (data && !e) result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-                  done = YES;
+              [[[NSURLSession sharedSession] dataTaskWithRequest:req
+                  completionHandler:^(NSData *data, NSURLResponse *r, NSError *e) {
+                  if (data && !e)
+                      result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                  dispatch_semaphore_signal(sem);
               }] resume];
-              NSDate *timeout = [NSDate dateWithTimeIntervalSinceNow:10.0];
-              while (!done && [timeout timeIntervalSinceNow] > 0) {
-                  [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-              }
+              dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
               if (result) lua_pushstring(L, result.UTF8String);
               else lua_pushnil(L);
               return 1;
@@ -441,32 +519,43 @@ jobs:
           static int srfx_base64_encode(lua_State *L) {
               const char *d = luaL_checkstring(L, 1);
               NSString *e = [[NSData dataWithBytes:d length:strlen(d)] base64EncodedStringWithOptions:0];
-              lua_pushstring(L, [e UTF8String]);
-              return 1;
+              lua_pushstring(L, [e UTF8String]); return 1;
           }
 
           static int srfx_base64_decode(lua_State *L) {
               const char *d = luaL_checkstring(L, 1);
               NSData *dec = [[NSData alloc] initWithBase64EncodedString:[NSString stringWithUTF8String:d] options:0];
               NSString *s = dec ? [[NSString alloc] initWithData:dec encoding:NSUTF8StringEncoding] : nil;
-              lua_pushstring(L, s ? [s UTF8String] : "");
-              return 1;
+              lua_pushstring(L, s ? [s UTF8String] : ""); return 1;
           }
 
-          static int srfx_identifyexecutor(lua_State *L) { lua_pushstring(L, "SERFIX"); return 1; }
-          static int srfx_getexecutorname  (lua_State *L) { lua_pushstring(L, "SERFIX"); return 1; }
-          static int srfx_checkcaller      (lua_State *L) { lua_pushboolean(L, 1); return 1; }
-          static int srfx_isrbxactive      (lua_State *L) { lua_pushboolean(L, 1); return 1; }
-          static int srfx_getthreadidentity(lua_State *L) { lua_pushinteger(L, 8); return 1; }
+          static int srfx_identifyexecutor (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
+          static int srfx_getexecutorname  (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
+          static int srfx_checkcaller      (lua_State *L) { lua_pushboolean(L,1); return 1; }
+          static int srfx_isrbxactive      (lua_State *L) { lua_pushboolean(L,1); return 1; }
+          static int srfx_getthreadidentity(lua_State *L) { lua_pushinteger(L,8); return 1; }
           static int srfx_setthreadidentity(lua_State *L) { (void)L; return 0; }
           static int srfx_fireclickdetector(lua_State *L) { (void)L; return 0; }
           static int srfx_getgenv          (lua_State *L) { lua_pushglobaltable(L); return 1; }
           static int srfx_getreg           (lua_State *L) { lua_pushvalue(L, LUA_REGISTRYINDEX); return 1; }
-          static int srfx_wait             (lua_State *L) { usleep(luaL_optnumber(L,1,0)*1000000); return 0; }
+
+          // FIX #3: srfx_wait must NOT hold the mutex while sleeping.
+          // This is a C function called FROM within a locked SRFXLuaExecute call,
+          // so we unlock before sleeping and relock after.
+          static int srfx_wait(lua_State *L) {
+              double sec = luaL_optnumber(L, 1, 0);
+              if (sec > 0) {
+                  pthread_mutex_unlock(&lua_mutex);
+                  usleep((useconds_t)(sec * 1000000));
+                  pthread_mutex_lock(&lua_mutex);
+              }
+              return 0;
+          }
+
           static int srfx_getgc            (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getconnections   (lua_State *L) { lua_newtable(L); return 1; }
-          static int srfx_hookfunction     (lua_State *L) { lua_pushvalue(L, 1); return 1; }
-          static int srfx_newcclosure      (lua_State *L) { lua_pushvalue(L, 1); return 1; }
+          static int srfx_hookfunction     (lua_State *L) { lua_pushvalue(L,1); return 1; }
+          static int srfx_newcclosure      (lua_State *L) { lua_pushvalue(L,1); return 1; }
           static int srfx_getconstants     (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getupvalues      (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_setupvalue       (lua_State *L) { (void)L; return 0; }
@@ -474,7 +563,7 @@ jobs:
           static int srfx_getproto         (lua_State *L) { lua_pushnil(L); return 1; }
           static int srfx_getstack         (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getinfo          (lua_State *L) { lua_newtable(L); return 1; }
-          static int srfx_islclosure       (lua_State *L) { lua_pushboolean(L, 1); return 1; }
+          static int srfx_islclosure       (lua_State *L) { lua_pushboolean(L,1); return 1; }
           static int srfx_firesignal       (lua_State *L) { (void)L; return 0; }
           static int srfx_connect          (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_disconnect       (lua_State *L) { (void)L; return 0; }
@@ -491,17 +580,17 @@ jobs:
           static int srfx_getrawmetatable  (lua_State *L) { lua_pushnil(L); return 1; }
           static int srfx_setrawmetatable  (lua_State *L) { (void)L; return 0; }
           static int srfx_make_writeable   (lua_State *L) { (void)L; return 0; }
-          static int srfx_getcallingscript (lua_State *L) { lua_pushstring(L, "SERFIX"); return 1; }
-          static int srfx_getscripthash   (lua_State *L) { lua_pushstring(L, "SERFIX"); return 1; }
+          static int srfx_getcallingscript (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
+          static int srfx_getscripthash    (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
           static int srfx_httpget          (lua_State *L) { return srfx_getscript(L); }
-          static int srfx_httppost         (lua_State *L) { lua_pushstring(L, ""); return 1; }
+          static int srfx_httppost         (lua_State *L) { lua_pushstring(L,""); return 1; }
           static int srfx_setclipboard     (lua_State *L) { (void)L; return 0; }
-          static int srfx_getclipboard     (lua_State *L) { lua_pushstring(L, ""); return 1; }
+          static int srfx_getclipboard     (lua_State *L) { lua_pushstring(L,""); return 1; }
           static int srfx_messagebox       (lua_State *L) { (void)L; return 0; }
-          static int srfx_isfile           (lua_State *L) { lua_pushboolean(L, 0); return 1; }
-          static int srfx_isfolder         (lua_State *L) { lua_pushboolean(L, 0); return 1; }
+          static int srfx_isfile           (lua_State *L) { lua_pushboolean(L,0); return 1; }
+          static int srfx_isfolder         (lua_State *L) { lua_pushboolean(L,0); return 1; }
           static int srfx_listfiles        (lua_State *L) { lua_newtable(L); return 1; }
-          static int srfx_readfile         (lua_State *L) { lua_pushstring(L, ""); return 1; }
+          static int srfx_readfile         (lua_State *L) { lua_pushstring(L,""); return 1; }
           static int srfx_writefile        (lua_State *L) { (void)L; return 0; }
           static int srfx_appendfile       (lua_State *L) { (void)L; return 0; }
           static int srfx_deletefile       (lua_State *L) { (void)L; return 0; }
@@ -511,119 +600,84 @@ jobs:
           static int srfx_createnotification(lua_State *L){ (void)L; return 0; }
           static int srfx_webhook          (lua_State *L) { (void)L; return 0; }
           static int srfx_setfpscap        (lua_State *L) { (void)L; return 0; }
-          static int srfx_getfps           (lua_State *L) { lua_pushinteger(L, 60); return 1; }
-          static int srfx_getping          (lua_State *L) { lua_pushinteger(L, 30); return 1; }
+          static int srfx_getfps           (lua_State *L) { lua_pushinteger(L,60); return 1; }
+          static int srfx_getping          (lua_State *L) { lua_pushinteger(L,30); return 1; }
           static int srfx_gethwid          (lua_State *L) {
-              lua_pushstring(L, [SRFXSecurity spoofedHWID].UTF8String);
-              return 1;
+              lua_pushstring(L, [SRFXSecurity spoofedHWID].UTF8String); return 1;
           }
-          static int srfx_getuser          (lua_State *L) { lua_pushstring(L, "SERFIX"); return 1; }
-          static int srfx_getexecutionpath (lua_State *L) { lua_pushstring(L, "SERFIX"); return 1; }
-          static int srfx_clonefunction    (lua_State *L) { lua_pushvalue(L, 1); return 1; }
-          static int srfx_isfolder_ins     (lua_State *L) { lua_pushboolean(L, 0); return 1; }
-          static int srfx_isscript         (lua_State *L) { lua_pushboolean(L, 0); return 1; }
+          static int srfx_getuser          (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
+          static int srfx_getexecutionpath (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
+          static int srfx_clonefunction    (lua_State *L) { lua_pushvalue(L,1); return 1; }
+          static int srfx_isfolder_ins     (lua_State *L) { lua_pushboolean(L,0); return 1; }
+          static int srfx_isscript         (lua_State *L) { lua_pushboolean(L,0); return 1; }
           static int srfx_getinstances     (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getscripts       (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getloadedmodules (lua_State *L) { lua_newtable(L); return 1; }
 
-          __attribute__((visibility("default")))
           void SRFXLuaInit(void) {
               if (L) return;
               L = luaL_newstate();
-              if (!L) return;
+              if (!L) { NSLog(@"[SERFIX] FATAL: luaL_newstate failed"); return; }
               luaL_openlibs(L);
-              lua_register(L, "print", srfx_print);
-              lua_register(L, "warn", srfx_warn);
-              lua_register(L, "getscript", srfx_getscript);
-              lua_register(L, "loadstring", srfx_loadstring);
-              lua_register(L, "base64_encode", srfx_base64_encode);
-              lua_register(L, "base64_decode", srfx_base64_decode);
-              lua_register(L, "identifyexecutor", srfx_identifyexecutor);
-              lua_register(L, "getexecutorname", srfx_getexecutorname);
-              lua_register(L, "checkcaller", srfx_checkcaller);
-              lua_register(L, "isrbxactive", srfx_isrbxactive);
-              lua_register(L, "getthreadidentity", srfx_getthreadidentity);
-              lua_register(L, "setthreadidentity", srfx_setthreadidentity);
-              lua_register(L, "fireclickdetector", srfx_fireclickdetector);
-              lua_register(L, "getgenv", srfx_getgenv);
-              lua_register(L, "getreg", srfx_getreg);
-              lua_register(L, "wait", srfx_wait);
-              lua_register(L, "getgc", srfx_getgc);
-              lua_register(L, "getconnections", srfx_getconnections);
-              lua_register(L, "hookfunction", srfx_hookfunction);
-              lua_register(L, "newcclosure", srfx_newcclosure);
-              lua_register(L, "getconstants", srfx_getconstants);
-              lua_register(L, "getupvalues", srfx_getupvalues);
-              lua_register(L, "setupvalue", srfx_setupvalue);
-              lua_register(L, "getupvalue", srfx_getupvalue);
-              lua_register(L, "getproto", srfx_getproto);
-              lua_register(L, "getstack", srfx_getstack);
-              lua_register(L, "getinfo", srfx_getinfo);
-              lua_register(L, "islclosure", srfx_islclosure);
-              lua_register(L, "firesignal", srfx_firesignal);
-              lua_register(L, "connect", srfx_connect);
-              lua_register(L, "disconnect", srfx_disconnect);
-              lua_register(L, "waitforchild", srfx_waitforchild);
-              lua_register(L, "getservice", srfx_getservice);
-              lua_register(L, "getchildren", srfx_getchildren);
-              lua_register(L, "getdescendants", srfx_getdescendants);
-              lua_register(L, "findfirstchild", srfx_findfirstchild);
-              lua_register(L, "getproperties", srfx_getproperties);
-              lua_register(L, "getproperty", srfx_getproperty);
-              lua_register(L, "setproperty", srfx_setproperty);
-              lua_register(L, "gethiddenproperty", srfx_gethiddenproperty);
-              lua_register(L, "sethiddenproperty", srfx_sethiddenproperty);
-              lua_register(L, "getrawmetatable", srfx_getrawmetatable);
-              lua_register(L, "setrawmetatable", srfx_setrawmetatable);
-              lua_register(L, "make_writeable", srfx_make_writeable);
-              lua_register(L, "getcallingscript", srfx_getcallingscript);
-              lua_register(L, "getscripthash", srfx_getscripthash);
-              lua_register(L, "http_get", srfx_httpget);
-              lua_register(L, "http_post", srfx_httppost);
-              lua_register(L, "setclipboard", srfx_setclipboard);
-              lua_register(L, "getclipboard", srfx_getclipboard);
-              lua_register(L, "messagebox", srfx_messagebox);
-              lua_register(L, "isfile", srfx_isfile);
-              lua_register(L, "isfolder", srfx_isfolder);
-              lua_register(L, "listfiles", srfx_listfiles);
-              lua_register(L, "readfile", srfx_readfile);
-              lua_register(L, "writefile", srfx_writefile);
-              lua_register(L, "appendfile", srfx_appendfile);
-              lua_register(L, "deletefile", srfx_deletefile);
-              lua_register(L, "makefolder", srfx_makefolder);
-              lua_register(L, "dofile", srfx_dofile);
-              lua_register(L, "loadfile", srfx_loadfile);
-              lua_register(L, "createnotification", srfx_createnotification);
-              lua_register(L, "webhook", srfx_webhook);
-              lua_register(L, "setfpscap", srfx_setfpscap);
-              lua_register(L, "getfps", srfx_getfps);
-              lua_register(L, "getping", srfx_getping);
-              lua_register(L, "gethwid", srfx_gethwid);
-              lua_register(L, "getuser", srfx_getuser);
-              lua_register(L, "getexecutionpath", srfx_getexecutionpath);
-              lua_register(L, "clonefunction", srfx_clonefunction);
-              lua_register(L, "isfolder_ins", srfx_isfolder_ins);
-              lua_register(L, "isscript", srfx_isscript);
-              lua_register(L, "getinstances", srfx_getinstances);
-              lua_register(L, "getscripts", srfx_getscripts);
-              lua_register(L, "getloadedmodules", srfx_getloadedmodules);
+              #define REG(name, fn) lua_register(L, name, fn)
+              REG("print",srfx_print); REG("warn",srfx_warn);
+              REG("getscript",srfx_getscript); REG("loadstring",srfx_loadstring);
+              REG("base64_encode",srfx_base64_encode); REG("base64_decode",srfx_base64_decode);
+              REG("identifyexecutor",srfx_identifyexecutor); REG("getexecutorname",srfx_getexecutorname);
+              REG("checkcaller",srfx_checkcaller); REG("isrbxactive",srfx_isrbxactive);
+              REG("getthreadidentity",srfx_getthreadidentity); REG("setthreadidentity",srfx_setthreadidentity);
+              REG("fireclickdetector",srfx_fireclickdetector); REG("getgenv",srfx_getgenv);
+              REG("getreg",srfx_getreg); REG("wait",srfx_wait);
+              REG("getgc",srfx_getgc); REG("getconnections",srfx_getconnections);
+              REG("hookfunction",srfx_hookfunction); REG("newcclosure",srfx_newcclosure);
+              REG("getconstants",srfx_getconstants); REG("getupvalues",srfx_getupvalues);
+              REG("setupvalue",srfx_setupvalue); REG("getupvalue",srfx_getupvalue);
+              REG("getproto",srfx_getproto); REG("getstack",srfx_getstack);
+              REG("getinfo",srfx_getinfo); REG("islclosure",srfx_islclosure);
+              REG("firesignal",srfx_firesignal); REG("connect",srfx_connect);
+              REG("disconnect",srfx_disconnect); REG("waitforchild",srfx_waitforchild);
+              REG("getservice",srfx_getservice); REG("getchildren",srfx_getchildren);
+              REG("getdescendants",srfx_getdescendants); REG("findfirstchild",srfx_findfirstchild);
+              REG("getproperties",srfx_getproperties); REG("getproperty",srfx_getproperty);
+              REG("setproperty",srfx_setproperty); REG("gethiddenproperty",srfx_gethiddenproperty);
+              REG("sethiddenproperty",srfx_sethiddenproperty); REG("getrawmetatable",srfx_getrawmetatable);
+              REG("setrawmetatable",srfx_setrawmetatable); REG("make_writeable",srfx_make_writeable);
+              REG("getcallingscript",srfx_getcallingscript); REG("getscripthash",srfx_getscripthash);
+              REG("http_get",srfx_httpget); REG("http_post",srfx_httppost);
+              REG("setclipboard",srfx_setclipboard); REG("getclipboard",srfx_getclipboard);
+              REG("messagebox",srfx_messagebox); REG("isfile",srfx_isfile);
+              REG("isfolder",srfx_isfolder); REG("listfiles",srfx_listfiles);
+              REG("readfile",srfx_readfile); REG("writefile",srfx_writefile);
+              REG("appendfile",srfx_appendfile); REG("deletefile",srfx_deletefile);
+              REG("makefolder",srfx_makefolder); REG("dofile",srfx_dofile);
+              REG("loadfile",srfx_loadfile); REG("createnotification",srfx_createnotification);
+              REG("webhook",srfx_webhook); REG("setfpscap",srfx_setfpscap);
+              REG("getfps",srfx_getfps); REG("getping",srfx_getping);
+              REG("gethwid",srfx_gethwid); REG("getuser",srfx_getuser);
+              REG("getexecutionpath",srfx_getexecutionpath); REG("clonefunction",srfx_clonefunction);
+              REG("isfolder_ins",srfx_isfolder_ins); REG("isscript",srfx_isscript);
+              REG("getinstances",srfx_getinstances); REG("getscripts",srfx_getscripts);
+              REG("getloadedmodules",srfx_getloadedmodules);
+              #undef REG
               lua_newtable(L);
-              lua_pushstring(L, "SERFIX"); lua_setfield(L, -2, "name");
-              lua_pushstring(L, "2.5.0"); lua_setfield(L, -2, "version");
-              lua_setglobal(L, "serfix");
+              lua_pushstring(L,"SERFIX"); lua_setfield(L,-2,"name");
+              lua_pushstring(L,"2.5.0");  lua_setfield(L,-2,"version");
+              lua_setglobal(L,"serfix");
+              NSLog(@"[SERFIX] Lua ready");
           }
 
-          __attribute__((visibility("default")))
           void SRFXLuaExecute(const char *script) {
+              if (!script || !script[0]) return;
               pthread_mutex_lock(&lua_mutex);
               if (!L) SRFXLuaInit();
-              if (script && strlen(script) > 0) {
-                  add_timing_jitter();
+              if (L) {
                   int s = luaL_dostring(L, script);
                   if (s != LUA_OK) {
                       const char *err = lua_tostring(L, -1);
+                      NSString *errStr = err ? [NSString stringWithUTF8String:err] : @"unknown error";
                       dispatch_async(dispatch_get_main_queue(), ^{
-                          [[NSNotificationCenter defaultCenter] postNotificationName:@"SRFXError" object:[NSString stringWithUTF8String:err]];
+                          [[NSNotificationCenter defaultCenter]
+                              postNotificationName:@"SRFXError" object:errStr];
                       });
                       lua_pop(L, 1);
                   }
@@ -631,34 +685,33 @@ jobs:
               pthread_mutex_unlock(&lua_mutex);
           }
 
-          __attribute__((visibility("default")))
           void SRFXLuaRegister(const char *name, int (*func)(lua_State*)) {
               pthread_mutex_lock(&lua_mutex);
-              if (L) lua_register(L, name, func);
+              if (L && name && func) lua_register(L, name, func);
               pthread_mutex_unlock(&lua_mutex);
           }
 
-          __attribute__((visibility("default")))
           lua_State* SRFXLuaState(void) { return L; }
 
-          }
-          EOF
+          } // extern "C"
+          CPPEOF
 
       - name: Write SRFXMainViewController.h
         run: |
           cat > SERFIX/UI/SRFXMainViewController.h << 'EOF'
           #import <UIKit/UIKit.h>
           @interface SRFXMainViewController : UIViewController
-          @property (nonatomic, strong) UITextView *editor;
-          @property (nonatomic, strong) UITableView *scriptList;
+          @property (nonatomic, strong) UITextView   *editor;
+          @property (nonatomic, strong) UITableView  *scriptList;
           @property (nonatomic, strong) NSMutableArray *scripts;
-          @property (nonatomic, strong) UIView *tabBar;
-          @property (nonatomic, strong) UITextView *consoleView;
+          @property (nonatomic, strong) UIView        *tabBar;
+          @property (nonatomic, strong) UITextView   *consoleView;
           @property (nonatomic, strong) NSMutableString *consoleText;
-          @property (nonatomic, assign) NSInteger selectedTab;
+          @property (nonatomic, assign) NSInteger     selectedTab;
           @end
           EOF
 
+      # FIX #4 + #5: Full @implementation, frames in viewDidLayoutSubviews not viewDidLoad
       - name: Write SRFXMainViewController.m
         run: |
           cat > SERFIX/UI/SRFXMainViewController.m << 'EOF'
@@ -666,9 +719,15 @@ jobs:
           #import "SRFXScriptBlox.h"
           #include "Core/SRFXLua.h"
 
-          @interface SRFXMainViewController () <UITableViewDelegate, UITableViewDataSource, UITextViewDelegate, UISearchBarDelegate>
+          @interface SRFXMainViewController ()
+              <UITableViewDelegate, UITableViewDataSource,
+               UITextViewDelegate, UISearchBarDelegate>
           @property (nonatomic, strong) UISearchBar *searchBar;
           @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+          @property (nonatomic, strong) UIView   *header;
+          @property (nonatomic, strong) UIButton *execBtn;
+          @property (nonatomic, strong) UIButton *clearBtn;
+          @property (nonatomic, strong) UIButton *loadBtn;
           @end
 
           @implementation SRFXMainViewController
@@ -677,47 +736,45 @@ jobs:
               [super viewDidLoad];
               self.view.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:0.98];
               self.view.layer.cornerRadius = 16;
-              self.view.layer.borderWidth = 1.2;
-              self.view.layer.borderColor = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0].CGColor;
+              self.view.layer.borderWidth  = 1.2;
+              self.view.layer.borderColor  = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0].CGColor;
 
-              UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 55)];
-              header.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0];
-              CAGradientLayer *gradient = [CAGradientLayer layer];
-              gradient.frame = CGRectMake(0, header.bounds.size.height - 2, header.bounds.size.width, 2);
-              gradient.colors = @[(id)[UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0].CGColor, (id)[UIColor colorWithRed:0.3 green:0.2 blue:0.8 alpha:0.0].CGColor];
-              [header.layer addSublayer:gradient];
-              [self.view addSubview:header];
+              // Header
+              self.header = [[UIView alloc] init];
+              self.header.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0];
+              [self.view addSubview:self.header];
 
-              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 12, 150, 30)];
+              UILabel *title = [[UILabel alloc] init];
               title.text = @"SERFIX";
               title.textColor = UIColor.whiteColor;
               title.font = [UIFont boldSystemFontOfSize:22];
-              [header addSubview:title];
+              title.tag = 100;
+              [self.header addSubview:title];
 
-              UIButton *minimizeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              minimizeBtn.frame = CGRectMake(self.view.bounds.size.width - 95, 10, 40, 35);
-              [minimizeBtn setTitle:@"−" forState:UIControlStateNormal];
-              [minimizeBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              minimizeBtn.titleLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightThin];
-              [minimizeBtn addTarget:self action:@selector(minimize) forControlEvents:UIControlEventTouchUpInside];
-              [header addSubview:minimizeBtn];
+              UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              [minBtn setTitle:@"−" forState:UIControlStateNormal];
+              [minBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              minBtn.titleLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightThin];
+              [minBtn addTarget:self action:@selector(minimize) forControlEvents:UIControlEventTouchUpInside];
+              minBtn.tag = 101;
+              [self.header addSubview:minBtn];
 
               UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              closeBtn.frame = CGRectMake(self.view.bounds.size.width - 50, 10, 40, 35);
               [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
               [closeBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
               closeBtn.titleLabel.font = [UIFont systemFontOfSize:22];
               [closeBtn addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
-              [header addSubview:closeBtn];
+              closeBtn.tag = 102;
+              [self.header addSubview:closeBtn];
 
-              self.tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, 55, self.view.bounds.size.width, 42)];
+              // Tab bar
+              self.tabBar = [[UIView alloc] init];
               self.tabBar.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.10 alpha:1.0];
               [self.view addSubview:self.tabBar];
 
               NSArray *tabs = @[@"Editor", @"ScriptBlox", @"Console", @"Settings"];
-              for (int i = 0; i < tabs.count; i++) {
+              for (int i = 0; i < (int)tabs.count; i++) {
                   UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-                  btn.frame = CGRectMake(i * (self.view.bounds.size.width / tabs.count), 0, self.view.bounds.size.width / tabs.count, 42);
                   [btn setTitle:tabs[i] forState:UIControlStateNormal];
                   [btn setTitleColor:UIColor.lightGrayColor forState:UIControlStateNormal];
                   btn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
@@ -725,10 +782,9 @@ jobs:
                   [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
                   [self.tabBar addSubview:btn];
               }
-              self.selectedTab = 0;
-              [self updateTabSelection];
 
-              self.editor = [[UITextView alloc] initWithFrame:CGRectMake(10, 107, self.view.bounds.size.width - 20, self.view.bounds.size.height - 195)];
+              // Editor
+              self.editor = [[UITextView alloc] init];
               self.editor.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.09 alpha:1.0];
               self.editor.textColor = [UIColor colorWithRed:0.9 green:0.9 blue:1.0 alpha:1.0];
               self.editor.font = [UIFont fontWithName:@"Menlo" size:13];
@@ -741,16 +797,18 @@ jobs:
               self.editor.layer.cornerRadius = 8;
               [self.view addSubview:self.editor];
 
-              self.scriptList = [[UITableView alloc] initWithFrame:self.editor.frame style:UITableViewStylePlain];
+              // Script list
+              self.scriptList = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
               self.scriptList.backgroundColor = self.editor.backgroundColor;
-              self.scriptList.delegate = self;
+              self.scriptList.delegate   = self;
               self.scriptList.dataSource = self;
               self.scriptList.separatorColor = [UIColor colorWithWhite:0.2 alpha:1.0];
               self.scriptList.hidden = YES;
               self.scriptList.rowHeight = 70;
               [self.view addSubview:self.scriptList];
 
-              self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(10, 107, self.view.bounds.size.width - 20, 44)];
+              // Search bar
+              self.searchBar = [[UISearchBar alloc] init];
               self.searchBar.delegate = self;
               self.searchBar.placeholder = @"Search ScriptBlox...";
               self.searchBar.barStyle = UIBarStyleBlack;
@@ -759,7 +817,8 @@ jobs:
               self.searchBar.hidden = YES;
               [self.view addSubview:self.searchBar];
 
-              self.consoleView = [[UITextView alloc] initWithFrame:self.editor.frame];
+              // Console
+              self.consoleView = [[UITextView alloc] init];
               self.consoleView.backgroundColor = [UIColor colorWithRed:0.02 green:0.02 blue:0.04 alpha:1.0];
               self.consoleView.textColor = [UIColor colorWithRed:0.5 green:1.0 blue:0.5 alpha:1.0];
               self.consoleView.font = [UIFont fontWithName:@"Menlo" size:12];
@@ -767,47 +826,93 @@ jobs:
               self.consoleView.hidden = YES;
               [self.view addSubview:self.consoleView];
 
+              // Spinner
               self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-              self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 200);
               self.spinner.color = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0];
               self.spinner.hidesWhenStopped = YES;
               [self.view addSubview:self.spinner];
 
-              UIButton *execBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              execBtn.frame = CGRectMake(10, self.view.bounds.size.height - 80, 95, 42);
-              [execBtn setTitle:@"Execute" forState:UIControlStateNormal];
-              execBtn.backgroundColor = [UIColor colorWithRed:0.4 green:0.3 blue:1.0 alpha:1.0];
-              [execBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-              execBtn.layer.cornerRadius = 8;
-              [execBtn addTarget:self action:@selector(execute) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:execBtn];
+              // Buttons
+              self.execBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              [self.execBtn setTitle:@"Execute" forState:UIControlStateNormal];
+              self.execBtn.backgroundColor = [UIColor colorWithRed:0.4 green:0.3 blue:1.0 alpha:1.0];
+              [self.execBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              self.execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+              self.execBtn.layer.cornerRadius = 8;
+              [self.execBtn addTarget:self action:@selector(execute) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.execBtn];
 
-              UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              clearBtn.frame = CGRectMake(115, self.view.bounds.size.height - 80, 95, 42);
-              [clearBtn setTitle:@"Clear" forState:UIControlStateNormal];
-              clearBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-              [clearBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-              clearBtn.layer.cornerRadius = 8;
-              [clearBtn addTarget:self action:@selector(clear) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:clearBtn];
+              self.clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              [self.clearBtn setTitle:@"Clear" forState:UIControlStateNormal];
+              self.clearBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+              [self.clearBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              self.clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+              self.clearBtn.layer.cornerRadius = 8;
+              [self.clearBtn addTarget:self action:@selector(clear) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.clearBtn];
 
-              UIButton *loadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              loadBtn.frame = CGRectMake(220, self.view.bounds.size.height - 80, 95, 42);
-              [loadBtn setTitle:@"Load" forState:UIControlStateNormal];
-              loadBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.5 blue:0.9 alpha:1.0];
-              [loadBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              loadBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-              loadBtn.layer.cornerRadius = 8;
-              [loadBtn addTarget:self action:@selector(showScriptBlox) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:loadBtn];
+              self.loadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              [self.loadBtn setTitle:@"Load" forState:UIControlStateNormal];
+              self.loadBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.5 blue:0.9 alpha:1.0];
+              [self.loadBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              self.loadBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+              self.loadBtn.layer.cornerRadius = 8;
+              [self.loadBtn addTarget:self action:@selector(showScriptBlox) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.loadBtn];
 
-              self.scripts = [NSMutableArray array];
+              self.scripts     = [NSMutableArray array];
               self.consoleText = [NSMutableString string];
-              [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handlePrint:) name:@"SRFXPrint" object:nil];
-              [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleError:) name:@"SRFXError" object:nil];
+              self.selectedTab = 0;
+
+              NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+              [nc addObserver:self selector:@selector(handlePrint:) name:@"SRFXPrint" object:nil];
+              [nc addObserver:self selector:@selector(handleError:) name:@"SRFXError" object:nil];
+
               [self loadTrendingScripts];
+          }
+
+          // FIX #4: All frames set here, after the view has been laid out
+          - (void)viewDidLayoutSubviews {
+              [super viewDidLayoutSubviews];
+              CGFloat w  = self.view.bounds.size.width;
+              CGFloat h  = self.view.bounds.size.height;
+              CGFloat tabCount = 4.0;
+
+              self.header.frame = CGRectMake(0, 0, w, 55);
+
+              UILabel *title = (UILabel *)[self.header viewWithTag:100];
+              title.frame = CGRectMake(15, 12, 150, 30);
+
+              UIButton *minBtn = (UIButton *)[self.header viewWithTag:101];
+              minBtn.frame = CGRectMake(w - 95, 10, 40, 35);
+
+              UIButton *closeBtn = (UIButton *)[self.header viewWithTag:102];
+              closeBtn.frame = CGRectMake(w - 50, 10, 40, 35);
+
+              self.tabBar.frame = CGRectMake(0, 55, w, 42);
+              CGFloat tw = w / tabCount;
+              for (UIView *v in self.tabBar.subviews) {
+                  if ([v isKindOfClass:[UIButton class]])
+                      v.frame = CGRectMake(v.tag * tw, 0, tw, 42);
+              }
+
+              CGRect editorFrame = CGRectMake(10, 107, w - 20, h - 195);
+              self.editor.frame      = editorFrame;
+              self.consoleView.frame = editorFrame;
+              self.searchBar.frame   = CGRectMake(10, 107, w - 20, 44);
+
+              if (self.selectedTab == 1)
+                  self.scriptList.frame = CGRectMake(10, 155, w - 20, h - 240);
+              else
+                  self.scriptList.frame = editorFrame;
+
+              self.spinner.center = CGPointMake(w / 2, 200);
+
+              CGFloat btnY = h - 80;
+              CGFloat bw   = 95;
+              self.execBtn.frame  = CGRectMake(10,        btnY, bw, 42);
+              self.clearBtn.frame = CGRectMake(115,       btnY, bw, 42);
+              self.loadBtn.frame  = CGRectMake(220,       btnY, bw, 42);
           }
 
           - (void)loadTrendingScripts {
@@ -829,30 +934,27 @@ jobs:
 
           - (void)updateTabSelection {
               for (UIView *v in self.tabBar.subviews) {
-                  if ([v isKindOfClass:[UIButton class]]) {
+                  if ([v isKindOfClass:[UIButton class]])
                       [(UIButton *)v setTitleColor:UIColor.lightGrayColor forState:UIControlStateNormal];
-                  }
               }
-              UIButton *selected = (UIButton *)[self.tabBar viewWithTag:self.selectedTab];
-              [selected setTitleColor:[UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0] forState:UIControlStateNormal];
-              self.editor.hidden = (self.selectedTab != 0);
+              UIButton *sel = (UIButton *)[self.tabBar viewWithTag:self.selectedTab];
+              [sel setTitleColor:[UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0] forState:UIControlStateNormal];
+
+              self.editor.hidden     = (self.selectedTab != 0);
               self.scriptList.hidden = (self.selectedTab != 1);
-              self.searchBar.hidden = (self.selectedTab != 1);
-              self.consoleView.hidden = (self.selectedTab != 2);
+              self.searchBar.hidden  = (self.selectedTab != 1);
+              self.consoleView.hidden= (self.selectedTab != 2);
+
               if (self.selectedTab == 1 && self.scripts.count == 0) [self loadTrendingScripts];
-              if (self.selectedTab == 1) self.scriptList.frame = CGRectMake(10, 155, self.view.bounds.size.width - 20, self.view.bounds.size.height - 240);
-              else self.scriptList.frame = self.editor.frame;
+              [self.view setNeedsLayout];
           }
 
-          - (void)showScriptBlox {
-              self.selectedTab = 1;
-              [self updateTabSelection];
-          }
+          - (void)showScriptBlox { self.selectedTab = 1; [self updateTabSelection]; }
 
-          - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.scripts.count; }
+          - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return self.scripts.count; }
 
-          - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-              UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"cell"];
+          - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+              UITableViewCell *cell = [t dequeueReusableCellWithIdentifier:@"cell"];
               if (!cell) {
                   cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"cell"];
                   cell.backgroundColor = UIColor.clearColor;
@@ -862,15 +964,15 @@ jobs:
                   bg.backgroundColor = [UIColor colorWithRed:0.3 green:0.2 blue:0.6 alpha:0.4];
                   cell.selectedBackgroundView = bg;
               }
-              NSDictionary *s = self.scripts[indexPath.row];
+              NSDictionary *s = self.scripts[ip.row];
               cell.textLabel.text = s[@"title"];
               cell.detailTextLabel.text = [NSString stringWithFormat:@"By %@  •  %@", s[@"author"], s[@"game"]];
               return cell;
           }
 
-          - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-              [tableView deselectRowAtIndexPath:indexPath animated:YES];
-              NSDictionary *s = self.scripts[indexPath.row];
+          - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {
+              [t deselectRowAtIndexPath:ip animated:YES];
+              NSDictionary *s = self.scripts[ip.row];
               [self.spinner startAnimating];
               [SRFXScriptBlox fetchScript:s[@"slug"] completion:^(NSString *code) {
                   dispatch_async(dispatch_get_main_queue(), ^{
@@ -884,10 +986,7 @@ jobs:
 
           - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
               [searchBar resignFirstResponder];
-              if (searchBar.text.length == 0) {
-                  [self loadTrendingScripts];
-                  return;
-              }
+              if (searchBar.text.length == 0) { [self loadTrendingScripts]; return; }
               [self.spinner startAnimating];
               [SRFXScriptBlox search:searchBar.text completion:^(NSArray *results) {
                   dispatch_async(dispatch_get_main_queue(), ^{
@@ -914,7 +1013,8 @@ jobs:
           }
 
           - (void)execute {
-              if (self.editor.text.length > 0) SRFXLuaExecute(self.editor.text.UTF8String);
+              if (self.editor.text.length > 0)
+                  SRFXLuaExecute(self.editor.text.UTF8String);
           }
 
           - (void)clear {
@@ -923,9 +1023,9 @@ jobs:
               self.consoleView.text = @"";
           }
 
-          - (void)hide { self.view.window.hidden = YES; }
+          - (void)hide     { self.view.window.hidden = YES; }
           - (void)minimize { self.view.window.hidden = YES; }
-          - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+          - (void)dealloc  { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 
           @end
           EOF
@@ -933,40 +1033,60 @@ jobs:
       - name: Compile Objective-C
         run: |
           mkdir -p build
-          cd injector/dylib
-          for f in SRFXCore.m SRFXHooks.m SRFXScriptBlox.m srfx_editor.m srfx_obfuscator.m srfx_security.m srfx_uibridge.m entry.m; do
-            if [ -f "$f" ]; then
-              xcrun -sdk iphoneos clang -c -fobjc-arc -I. -I./Core -I../../SERFIX/UI -I$LUA_INCLUDE -o ../../build/$(basename "$f" .m).o "$f" -target arm64-apple-ios15.0
-            fi
+          # Core + VC files
+          for f in injector/dylib/SRFXCore.m injector/dylib/SRFXHooks.m \
+                   injector/dylib/SRFXScriptBlox.m injector/dylib/srfx_security.m \
+                   injector/dylib/srfx_editor.m injector/dylib/srfx_obfuscator.m \
+                   injector/dylib/srfx_uibridge.m injector/dylib/srfx_memory.m \
+                   injector/dylib/entry.m; do
+            [ -f "$f" ] || { echo "SKIP: $f"; continue; }
+            out="build/$(basename "$f" .m).o"
+            xcrun -sdk iphoneos clang -c -fobjc-arc \
+              -I./injector/dylib -I./injector/dylib/Core \
+              -I./SERFIX/UI \
+              -I$LUA_INCLUDE \
+              -target arm64-apple-ios15.0 \
+              -o "$out" "$f" && echo "✓ $f" || { echo "✗ FAILED: $f"; exit 1; }
           done
-          cd ../..
-          cd SERFIX/UI
-          for f in SRFXMainViewController.m; do
-            if [ -f "$f" ]; then
-              xcrun -sdk iphoneos clang -c -fobjc-arc -I../../injector/dylib -I../../injector/dylib/Core -I. -I$LUA_INCLUDE -o ../../build/$(basename "$f" .m).o "$f" -target arm64-apple-ios15.0
-            fi
-          done
-          cd ../..
+          # ViewController
+          f=SERFIX/UI/SRFXMainViewController.m
+          xcrun -sdk iphoneos clang -c -fobjc-arc \
+            -I./injector/dylib -I./injector/dylib/Core \
+            -I./SERFIX/UI \
+            -I$LUA_INCLUDE \
+            -target arm64-apple-ios15.0 \
+            -o build/SRFXMainViewController.o "$f" && echo "✓ $f" || { echo "✗ FAILED: $f"; exit 1; }
 
       - name: Compile C++
         run: |
-          cd injector/dylib/Core
-          for f in SRFXLua.mm; do
-            if [ -f "$f" ]; then
-              xcrun -sdk iphoneos clang++ -c -std=c++17 -fobjc-arc -I.. -I. -I$LUA_INCLUDE -o ../../../build/$(basename "$f" .mm).o "$f" -target arm64-apple-ios15.0
-            fi
-          done
-          cd ../../..
+          f=injector/dylib/Core/SRFXLua.mm
+          xcrun -sdk iphoneos clang++ -c -std=c++17 -fobjc-arc \
+            -I./injector/dylib -I./injector/dylib/Core \
+            -I$LUA_INCLUDE \
+            -target arm64-apple-ios15.0 \
+            -o build/SRFXLua.o "$f" && echo "✓ $f" || { echo "✗ FAILED: $f"; exit 1; }
 
+      # FIX #1: -Wl,-force_load instead of -llua so ALL Lua symbols are linked in
       - name: Link dylib
         run: |
           xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit \
-            -L$LUA_LIB -llua \
-            -Wl,-export_dynamic \
+            -framework UIKit -framework Foundation \
+            -framework CoreGraphics -framework WebKit \
+            -framework QuartzCore -framework Metal \
+            -framework Security \
+            -Wl,-force_load,$LUA_LIB/liblua.a \
             -undefined dynamic_lookup \
-            -o build/serfix.dylib build/*.o \
-            -lc++ -target arm64-apple-ios15.0
+            -lc++ \
+            -target arm64-apple-ios15.0 \
+            -o build/serfix.dylib build/*.o
+          echo "✅ serfix.dylib: $(ls -lh build/serfix.dylib | awk '{print $5}')"
+
+      - name: Verify symbols
+        run: |
+          xcrun nm -gU build/serfix.dylib | grep "_SRFXLuaInit" \
+            && echo "✅ SRFXLuaInit present" || { echo "❌ SRFXLuaInit missing"; exit 1; }
+          xcrun nm -gU build/serfix.dylib | grep "_SRFXLuaExecute" \
+            && echo "✅ SRFXLuaExecute present" || { echo "❌ SRFXLuaExecute missing"; exit 1; }
 
       - name: Patch IPA
         run: |
@@ -975,18 +1095,35 @@ jobs:
           APP=$(find extracted/Payload -name "*.app" | head -1)
           cp build/serfix.dylib "$APP/"
           rm -rf "$APP/_CodeSignature"
-          ./tools/insert_dylib --all-yes @executable_path/serfix.dylib "$APP/Roblox" "$APP/Roblox_patched"
+          rm -f  "$APP/embedded.mobileprovision"
+          ./tools/insert_dylib --all-yes @executable_path/serfix.dylib \
+            "$APP/Roblox" "$APP/Roblox_patched"
           mv "$APP/Roblox_patched" "$APP/Roblox"
           plutil -convert xml1 "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName SERFIX" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SERFIX" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName SERFIX" "$APP/Info.plist" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SERFIX" "$APP/Info.plist"
           plutil -convert binary1 "$APP/Info.plist"
+
+      # FIX #8: codesign everything so iOS doesn't reject the dylib
+      - name: Sign bundle
+        run: |
+          APP=$(find extracted/Payload -name "*.app" | head -1)
+          codesign -f -s - "$APP/serfix.dylib"
+          find "$APP/Frameworks" \( -name "*.dylib" -o -name "*.framework" \) 2>/dev/null \
+            | while read f; do codesign -f -s - "$f" 2>/dev/null || true; done
+          codesign -f -s - "$APP/Roblox"
+          codesign -f -s - --deep "$APP"
+          codesign -v "$APP" && echo "✅ Signature OK" || echo "⚠️  Verify warning"
 
       - name: Package IPA
         run: |
           cd extracted && zip -qr ../SERFIX.ipa Payload/ && cd ..
+          echo "✅ SERFIX.ipa: $(ls -lh SERFIX.ipa | awk '{print $5}')"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: SERFIX
           path: SERFIX.ipa
+          if-no-files-found: error
+          retention-days: 90

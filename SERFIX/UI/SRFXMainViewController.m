@@ -2,55 +2,86 @@
 #import "SRFXScriptBlox.h"
 #include "Core/SRFXLua.h"
 
-@interface SRFXMainViewController () <UITableViewDelegate, UITableViewDataSource, UITextViewDelegate>
+@interface SRFXMainViewController () <UITableViewDelegate, UITableViewDataSource, UITextViewDelegate, UISearchBarDelegate>
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @end
 
 @implementation SRFXMainViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.08 alpha:0.98];
-    self.view.layer.cornerRadius = 16;
-    self.view.layer.borderWidth = 1;
-    self.view.layer.borderColor = [UIColor colorWithRed:0.3 green:0.2 blue:0.8 alpha:1.0].CGColor;
 
-    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 50)];
-    header.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.15 alpha:1.0];
+    self.view.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:0.98];
+    self.view.layer.cornerRadius = 16;
+    self.view.layer.borderWidth = 1.2;
+    self.view.layer.borderColor = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0].CGColor;
+
+    [self setupHeader];
+    [self setupTabBar];
+    [self setupEditor];
+    [self setupScriptList];
+    [self setupConsole];
+    [self setupButtons];
+
+    self.scripts = [NSMutableArray array];
+    self.consoleText = [NSMutableString string];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handlePrint:) name:@"SRFXPrint" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleError:) name:@"SRFXError" object:nil];
+
+    [self loadTrendingScripts];
+}
+
+- (void)setupHeader {
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 55)];
+    header.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0];
+
+    CAGradientLayer *gradient = [CAGradientLayer layer];
+    gradient.frame = CGRectMake(0, header.bounds.size.height - 2, header.bounds.size.width, 2);
+    gradient.colors = @[(id)[UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0].CGColor,
+                        (id)[UIColor colorWithRed:0.3 green:0.2 blue:0.8 alpha:0.0].CGColor];
+    gradient.startPoint = CGPointMake(0, 0.5);
+    gradient.endPoint = CGPointMake(1, 0.5);
+    [header.layer addSublayer:gradient];
     [self.view addSubview:header];
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 10, 200, 30)];
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 12, 150, 30)];
     title.text = @"SERFIX";
     title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:20];
+    title.font = [UIFont boldSystemFontOfSize:22];
     [header addSubview:title];
 
-    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.frame = CGRectMake(self.view.bounds.size.width - 50, 10, 40, 30);
-    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    closeBtn.titleLabel.font = [UIFont systemFontOfSize:24];
-    [closeBtn addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
-    [header addSubview:closeBtn];
-
     UIButton *minimizeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    minimizeBtn.frame = CGRectMake(self.view.bounds.size.width - 90, 10, 40, 30);
+    minimizeBtn.frame = CGRectMake(self.view.bounds.size.width - 95, 10, 40, 35);
     [minimizeBtn setTitle:@"−" forState:UIControlStateNormal];
     [minimizeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    minimizeBtn.titleLabel.font = [UIFont systemFontOfSize:30];
+    minimizeBtn.titleLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightThin];
     [minimizeBtn addTarget:self action:@selector(minimize) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:minimizeBtn];
 
-    self.tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, 50, self.view.bounds.size.width, 40)];
-    self.tabBar.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0];
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(self.view.bounds.size.width - 50, 10, 40, 35);
+    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeBtn.titleLabel.font = [UIFont systemFontOfSize:22];
+    [closeBtn addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:closeBtn];
+}
+
+- (void)setupTabBar {
+    self.tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, 55, self.view.bounds.size.width, 42)];
+    self.tabBar.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.10 alpha:1.0];
     [self.view addSubview:self.tabBar];
 
     NSArray *tabs = @[@"Editor", @"ScriptBlox", @"Console", @"Settings"];
     for (int i = 0; i < tabs.count; i++) {
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        btn.frame = CGRectMake(i * (self.view.bounds.size.width / tabs.count), 0, self.view.bounds.size.width / tabs.count, 40);
+        btn.frame = CGRectMake(i * (self.view.bounds.size.width / tabs.count), 0,
+                               self.view.bounds.size.width / tabs.count, 42);
         [btn setTitle:tabs[i] forState:UIControlStateNormal];
         [btn setTitleColor:[UIColor lightGrayColor] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont systemFontOfSize:14];
+        btn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
         btn.tag = i;
         [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
         [self.tabBar addSubview:btn];
@@ -58,64 +89,99 @@
 
     self.selectedTab = 0;
     [self updateTabSelection];
+}
 
-    self.editor = [[UITextView alloc] initWithFrame:CGRectMake(8, 98, self.view.bounds.size.width - 16, self.view.bounds.size.height - 180)];
-    self.editor.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.1 alpha:1.0];
-    self.editor.textColor = [UIColor whiteColor];
+- (void)setupEditor {
+    CGFloat y = 97;
+    self.editor = [[UITextView alloc] initWithFrame:CGRectMake(10, y, self.view.bounds.size.width - 20, self.view.bounds.size.height - y - 85)];
+    self.editor.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.09 alpha:1.0];
+    self.editor.textColor = [UIColor colorWithRed:0.9 green:0.9 blue:1.0 alpha:1.0];
     self.editor.font = [UIFont fontWithName:@"Menlo" size:13];
-    self.editor.text = @"print('Hello SERFIX')";
+    self.editor.text = @"-- SERFIX Executor\nprint('Hello World!')";
     self.editor.autocorrectionType = UITextAutocorrectionTypeNo;
     self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    self.editor.layer.borderColor = [UIColor colorWithRed:0.3 green:0.2 blue:0.8 alpha:0.5].CGColor;
+    self.editor.smartQuotesType = UITextSmartQuotesTypeNo;
+    self.editor.layer.borderColor = [UIColor colorWithRed:0.4 green:0.2 blue:0.9 alpha:0.5].CGColor;
     self.editor.layer.borderWidth = 1;
-    self.editor.layer.cornerRadius = 6;
+    self.editor.layer.cornerRadius = 8;
+    self.editor.delegate = self;
     [self.view addSubview:self.editor];
+}
 
+- (void)setupScriptList {
     self.scriptList = [[UITableView alloc] initWithFrame:self.editor.frame style:UITableViewStylePlain];
     self.scriptList.backgroundColor = self.editor.backgroundColor;
     self.scriptList.delegate = self;
     self.scriptList.dataSource = self;
-    self.scriptList.separatorColor = [UIColor darkGrayColor];
+    self.scriptList.separatorColor = [UIColor colorWithWhite:0.2 alpha:1.0];
     self.scriptList.hidden = YES;
+    self.scriptList.rowHeight = 70;
     [self.view addSubview:self.scriptList];
 
-    UIButton *execBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    execBtn.frame = CGRectMake(8, self.view.bounds.size.height - 75, 100, 40);
-    [execBtn setTitle:@"Execute" forState:UIControlStateNormal];
-    execBtn.backgroundColor = [UIColor colorWithRed:0.4 green:0.3 blue:0.9 alpha:1.0];
-    [execBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    execBtn.layer.cornerRadius = 6;
-    [execBtn addTarget:self action:@selector(execute) forControlEvents:UIControlEventTouchUpInside];
+    self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(10, 97, self.view.bounds.size.width - 20, 44)];
+    self.searchBar.delegate = self;
+    self.searchBar.placeholder = @"Search ScriptBlox...";
+    self.searchBar.barStyle = UIBarStyleBlack;
+    self.searchBar.searchTextField.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1.0];
+    self.searchBar.searchTextField.textColor = [UIColor whiteColor];
+    self.searchBar.hidden = YES;
+    [self.view addSubview:self.searchBar];
+
+    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 200);
+    self.spinner.color = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0];
+    self.spinner.hidesWhenStopped = YES;
+    [self.view addSubview:self.spinner];
+}
+
+- (void)setupConsole {
+    self.consoleView = [[UITextView alloc] initWithFrame:self.editor.frame];
+    self.consoleView.backgroundColor = [UIColor colorWithRed:0.02 green:0.02 blue:0.04 alpha:1.0];
+    self.consoleView.textColor = [UIColor colorWithRed:0.5 green:1.0 blue:0.5 alpha:1.0];
+    self.consoleView.font = [UIFont fontWithName:@"Menlo" size:12];
+    self.consoleView.editable = NO;
+    self.consoleView.hidden = YES;
+    self.consoleView.layer.cornerRadius = 8;
+    [self.view addSubview:self.consoleView];
+}
+
+- (void)setupButtons {
+    UIButton *execBtn = [self createButton:@"Execute" frame:CGRectMake(10, self.view.bounds.size.height - 75, 95, 42)
+                                     color:[UIColor colorWithRed:0.4 green:0.3 blue:1.0 alpha:1.0]
+                                     action:@selector(execute)];
     [self.view addSubview:execBtn];
 
-    UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    clearBtn.frame = CGRectMake(116, self.view.bounds.size.height - 75, 100, 40);
-    [clearBtn setTitle:@"Clear" forState:UIControlStateNormal];
-    clearBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-    [clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    clearBtn.layer.cornerRadius = 6;
-    [clearBtn addTarget:self action:@selector(clear) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *clearBtn = [self createButton:@"Clear" frame:CGRectMake(115, self.view.bounds.size.height - 75, 95, 42)
+                                      color:[UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0]
+                                      action:@selector(clear)];
     [self.view addSubview:clearBtn];
 
-    UIButton *loadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    loadBtn.frame = CGRectMake(224, self.view.bounds.size.height - 75, 100, 40);
-    [loadBtn setTitle:@"Load Script" forState:UIControlStateNormal];
-    loadBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.5 blue:0.8 alpha:1.0];
-    [loadBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    loadBtn.layer.cornerRadius = 6;
-    [loadBtn addTarget:self action:@selector(showScriptBlox) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *loadBtn = [self createButton:@"Load" frame:CGRectMake(220, self.view.bounds.size.height - 75, 95, 42)
+                                     color:[UIColor colorWithRed:0.2 green:0.5 blue:0.9 alpha:1.0]
+                                     action:@selector(showScriptBlox)];
     [self.view addSubview:loadBtn];
+}
 
-    self.scripts = [NSMutableArray array];
-    [self loadTrendingScripts];
+- (UIButton *)createButton:(NSString *)title frame:(CGRect)frame color:(UIColor *)color action:(SEL)action {
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.frame = frame;
+    [btn setTitle:title forState:UIControlStateNormal];
+    btn.backgroundColor = color;
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    btn.layer.cornerRadius = 8;
+    [btn addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return btn;
 }
 
 - (void)loadTrendingScripts {
+    [self.spinner startAnimating];
     [SRFXScriptBlox fetchTrending:^(NSArray *scripts) {
-        [self.scripts removeAllObjects];
-        [self.scripts addObjectsFromArray:scripts];
         dispatch_async(dispatch_get_main_queue(), ^{
+            [self.scripts removeAllObjects];
+            [self.scripts addObjectsFromArray:scripts];
             [self.scriptList reloadData];
+            [self.spinner stopAnimating];
         });
     }];
 }
@@ -133,18 +199,21 @@
         }
     }
     UIButton *selected = (UIButton *)[self.tabBar viewWithTag:self.selectedTab];
-    [selected setTitleColor:[UIColor colorWithRed:0.6 green:0.4 blue:1.0 alpha:1.0] forState:UIControlStateNormal];
+    [selected setTitleColor:[UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0] forState:UIControlStateNormal];
 
-    if (self.selectedTab == 0) {
-        self.editor.hidden = NO;
-        self.scriptList.hidden = YES;
-    } else if (self.selectedTab == 1) {
-        self.editor.hidden = YES;
-        self.scriptList.hidden = NO;
-        if (self.scripts.count == 0) [self loadTrendingScripts];
+    self.editor.hidden = (self.selectedTab != 0);
+    self.scriptList.hidden = (self.selectedTab != 1);
+    self.searchBar.hidden = (self.selectedTab != 1);
+    self.consoleView.hidden = (self.selectedTab != 2);
+
+    if (self.selectedTab == 1 && self.scripts.count == 0) {
+        [self loadTrendingScripts];
+    }
+
+    if (self.selectedTab == 1) {
+        self.scriptList.frame = CGRectMake(10, 145, self.view.bounds.size.width - 20, self.view.bounds.size.height - 230);
     } else {
-        self.editor.hidden = YES;
-        self.scriptList.hidden = YES;
+        self.scriptList.frame = self.editor.frame;
     }
 }
 
@@ -161,13 +230,19 @@
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"cell"];
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"cell"];
-        cell.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.1 alpha:1.0];
+        cell.backgroundColor = [UIColor clearColor];
         cell.textLabel.textColor = [UIColor whiteColor];
         cell.detailTextLabel.textColor = [UIColor lightGrayColor];
+
+        UIView *bg = [[UIView alloc] init];
+        bg.backgroundColor = [UIColor colorWithRed:0.3 green:0.2 blue:0.6 alpha:0.4];
+        cell.selectedBackgroundView = bg;
     }
+
     NSDictionary *s = self.scripts[indexPath.row];
     cell.textLabel.text = s[@"title"];
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"By %@ • %@", s[@"author"], s[@"game"]];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"By %@  •  %@", s[@"author"], s[@"game"]];
+
     return cell;
 }
 
@@ -175,13 +250,51 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSDictionary *s = self.scripts[indexPath.row];
     NSString *slug = s[@"slug"];
+    [self.spinner startAnimating];
     [SRFXScriptBlox fetchScript:slug completion:^(NSString *code) {
         dispatch_async(dispatch_get_main_queue(), ^{
             self.editor.text = code;
             self.selectedTab = 0;
             [self updateTabSelection];
+            [self.spinner stopAnimating];
         });
     }];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+    [searchBar resignFirstResponder];
+    [self.spinner startAnimating];
+    [SRFXScriptBlox search:searchBar.text completion:^(NSArray *results) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.scripts removeAllObjects];
+            [self.scripts addObjectsFromArray:results];
+            [self.scriptList reloadData];
+            [self.spinner stopAnimating];
+        });
+    }];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+    searchBar.text = @"";
+    [searchBar resignFirstResponder];
+    [self loadTrendingScripts];
+}
+
+- (void)handlePrint:(NSNotification *)note {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.consoleText appendFormat:@"%@\n", note.object];
+        self.consoleView.text = self.consoleText;
+        if (self.consoleText.length > 10000) {
+            self.consoleText = [[self.consoleText substringFromIndex:self.consoleText.length - 5000] mutableCopy];
+        }
+    });
+}
+
+- (void)handleError:(NSNotification *)note {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.consoleText appendFormat:@"[ERROR] %@\n", note.object];
+        self.consoleView.text = self.consoleText;
+    });
 }
 
 - (void)execute {
@@ -192,6 +305,8 @@
 
 - (void)clear {
     self.editor.text = @"";
+    self.consoleText = [NSMutableString string];
+    self.consoleView.text = @"";
 }
 
 - (void)hide {
@@ -201,7 +316,11 @@
 - (void)minimize {
     self.view.window.frame = CGRectMake(self.view.window.frame.origin.x,
                                          self.view.window.frame.origin.y,
-                                         60, 60);
+                                         55, 55);
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 @end

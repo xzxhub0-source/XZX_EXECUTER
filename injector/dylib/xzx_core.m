@@ -2,13 +2,13 @@
 #import "Core/LuaExecutor.h"
 #import "XZXMainViewController.h"
 #import <UIKit/UIKit.h>
-#import <WebKit/WebKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 static XZXCore *sharedCore = nil;
-static dispatch_queue_t monitorQueue = nil;
-static BOOL monitorActive = NO;
-static const NSInteger kDebounce = 2;
+static const NSTimeInterval kStartupDelay     = 8.0;
+static const NSTimeInterval kPollInterval     = 1.5;
+static const NSInteger      kDebounce         = 3;
 
 @interface XZXCore ()
 @property (nonatomic, strong) UIWindow *overlayWindow;
@@ -27,141 +27,81 @@ static const NSInteger kDebounce = 2;
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _overlayWindow  = nil;
-        _isInitialized  = NO;
-        _inGame         = NO;
-        _positiveCount  = 0;
-        _negativeCount  = 0;
-        monitorQueue = dispatch_queue_create("com.xzx.monitor", DISPATCH_QUEUE_SERIAL);
+        _overlayWindow = nil;
+        _isInitialized = NO;
+        _inGame = NO;
+        _positiveCount = 0;
+        _negativeCount = 0;
     }
     return self;
 }
 
-- (void)initialize {
+- (void)xzxStart {
     if (_isInitialized) return;
     _isInitialized = YES;
     InitLua();
-    NSLog(@"[XZX] Lua initialized");
-    [self startPolling];
+    NSLog(@"[XZX] Lua initialized. First poll in %.0fs.", kStartupDelay);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kStartupDelay * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{ [self schedulePoll]; });
 }
 
-- (void)startPolling {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        [self pollOnce];
-    });
+- (void)schedulePoll {
+    if (_inGame) return;
+    [self pollOnce];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kPollInterval * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{ [self schedulePoll]; });
 }
 
 - (void)pollOnce {
-    BOOL inGame = [self isInGameCheck];
+    BOOL gameActive = [self isPlayerInGame];
+    if (gameActive) { _positiveCount++; _negativeCount = 0; }
+    else            { _negativeCount++; _positiveCount = 0; }
 
-    if (inGame) {
-        self.positiveCount++;
-        self.negativeCount = 0;
-    } else {
-        self.negativeCount++;
-        self.positiveCount = 0;
-    }
-
-    if (!self.inGame && self.positiveCount >= kDebounce) {
-        self.inGame = YES;
-        self.positiveCount = 0;
+    if (!_inGame && _positiveCount >= kDebounce) {
+        _inGame = YES; _positiveCount = 0; _negativeCount = 0;
         NSLog(@"[XZX] In-game confirmed — showing UI");
         [self showOverlay];
-    } else if (self.inGame && self.negativeCount >= kDebounce) {
-        self.inGame = NO;
-        self.negativeCount = 0;
+    } else if (_inGame && _negativeCount >= kDebounce) {
+        _inGame = NO; _positiveCount = 0; _negativeCount = 0;
         NSLog(@"[XZX] Left game — hiding UI");
         [self hideOverlay];
+        [self schedulePoll];
     }
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        [self pollOnce];
-    });
 }
 
-// FIXED: Use WKWebView detection (menu has webview, game doesn't)
-// Also uses iterative BFS with a node cap to avoid stack overflow (BUG 3)
-- (BOOL)isInGameCheck {
+- (BOOL)isPlayerInGame {
     @try {
-        __block BOOL hasWebView = NO;
+        Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+        if (!dataModelClass) dataModelClass = NSClassFromString(@"RBXDataModel");
+        if (!dataModelClass) return NO;
 
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            for (UIWindow *window in ws.windows) {
-                if (window == _overlayWindow) continue;
-                if ([self hasVisibleWebView:window]) {
-                    hasWebView = YES;
-                    break;
-                }
-            }
-            if (hasWebView) break;
-        }
+        SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
+        if (![dataModelClass respondsToSelector:sharedSel]) return NO;
+        id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
+        if (!dataModel) return NO;
 
-        // In-game = no visible WKWebView (menu always has one)
-        return !hasWebView;
+        SEL placeIdSel = NSSelectorFromString(@"placeId");
+        if (![dataModel respondsToSelector:placeIdSel]) return NO;
+        id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
+        return placeId && [placeId intValue] != 0;
     } @catch (NSException *e) {
-        NSLog(@"[XZX] isInGameCheck error: %@", e);
+        return NO;
     }
-    return NO;
-}
-
-- (BOOL)hasVisibleWebView:(UIView *)root {
-    if (!root) return NO;
-    NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
-    NSUInteger maxNodes = 2000;
-    NSUInteger index = 0;
-
-    while (index < queue.count && index < maxNodes) {
-        UIView *view = queue[index];
-        index++;
-
-        @try {
-            if (view.isHidden || view.alpha < 0.01) continue;
-            if ([view isKindOfClass:[WKWebView class]] &&
-                view.bounds.size.width > 50 && view.bounds.size.height > 50) {
-                NSLog(@"[XZX] Found visible WKWebView: %@", NSStringFromCGRect(view.frame));
-                return YES;
-            }
-            NSString *className = NSStringFromClass([view class]);
-            if (([className containsString:@"WKWeb"] || [className containsString:@"WebView"]) &&
-                view.bounds.size.width > 50) {
-                NSLog(@"[XZX] Found WebView subclass: %@", className);
-                return YES;
-            }
-            for (UIView *sub in view.subviews) {
-                if (queue.count < maxNodes) [queue addObject:sub];
-            }
-        } @catch (NSException *e) {}
-    }
-    return NO;
 }
 
 - (void)showOverlay {
     if (_overlayWindow && !_overlayWindow.hidden) return;
-
     UIWindowScene *scene = nil;
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
         if ([s isKindOfClass:[UIWindowScene class]] &&
-            s.activationState == UISceneActivationStateForegroundActive) {
-            scene = (UIWindowScene *)s; break;
-        }
+            ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive)
+        { scene = (UIWindowScene *)s; break; }
     }
-    if (!scene) {
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                scene = (UIWindowScene *)s; break;
-            }
-        }
-    }
+    if (!scene)
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
+            if ([s isKindOfClass:[UIWindowScene class]]) { scene=(UIWindowScene *)s; break; }
     if (!scene) { NSLog(@"[XZX] showOverlay: no scene"); return; }
-
-    if (_overlayWindow && _overlayWindow.windowScene != scene) {
-        _overlayWindow = nil;
-    }
-
+    if (_overlayWindow && _overlayWindow.windowScene != scene) _overlayWindow = nil;
     if (!_overlayWindow) {
         XZXMainViewController *vc = [[XZXMainViewController alloc] init];
         _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
@@ -169,18 +109,13 @@ static const NSInteger kDebounce = 2;
         _overlayWindow.backgroundColor = [UIColor clearColor];
         _overlayWindow.rootViewController = vc;
     }
-
     _overlayWindow.hidden = NO;
     [_overlayWindow makeKeyAndVisible];
     NSLog(@"[XZX] Overlay shown");
 }
 
-- (void)hideOverlay {
-    _overlayWindow.hidden = YES;
-    NSLog(@"[XZX] Overlay hidden");
-}
-
+- (void)hideOverlay { if (_overlayWindow) _overlayWindow.hidden = YES; NSLog(@"[XZX] Overlay hidden"); }
 - (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
-- (BOOL)isInGame         { return _inGame; }
+- (BOOL)isInGame { return _inGame; }
 
 @end

@@ -3,6 +3,7 @@
 
 __attribute__((constructor))
 static void entry() {
+    NSLog(@"[XZX] Dylib loaded");
     dispatch_async(dispatch_get_main_queue(), ^{
         [[XZXCore shared] initialize];
     });

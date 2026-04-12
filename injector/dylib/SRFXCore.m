@@ -1,13 +1,10 @@
 #import "SRFXCore.h"
 #import "SRFXMainViewController.h"
+#import "SRFXMemory.h"
+#import "SRFXSecurity.h"
 #include "Core/SRFXLua.h"
 
 static SRFXCore *instance = nil;
-
-@interface SRFXCore ()
-@property (nonatomic, assign) BOOL inGame;
-@property (nonatomic, strong) NSTimer *checkTimer;
-@end
 
 @implementation SRFXCore
 
@@ -19,19 +16,26 @@ static SRFXCore *instance = nil;
 
 - (instancetype)init {
     self = [super init];
-    self.inGame = NO;
+    if (self) {
+        _inGame = NO;
+        _uiWindow = nil;
+    }
     return self;
 }
 
 - (void)start {
+    [SRFXMemory obfuscate];
     SRFXLuaInit();
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
         [self startGameDetection];
     });
 }
 
 - (void)startGameDetection {
-    self.checkTimer = [NSTimer scheduledTimerWithTimeInterval:1.5 repeats:YES block:^(NSTimer *t) {
+    self.checkTimer = [NSTimer scheduledTimerWithTimeInterval:1.2
+                                                      repeats:YES
+                                                        block:^(NSTimer *timer) {
         BOOL nowInGame = [self isInsideGame];
         if (nowInGame != self.inGame) {
             self.inGame = nowInGame;
@@ -46,49 +50,64 @@ static SRFXCore *instance = nil;
 
 - (BOOL)isInsideGame {
     UIWindow *keyWindow = nil;
-    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+    for (UIWindowScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (scene.activationState == UISceneActivationStateForegroundActive) {
-            for (UIWindow *w in scene.windows) {
-                if (w.isKeyWindow) {
-                    keyWindow = w;
+            for (UIWindow *window in scene.windows) {
+                if (window.isKeyWindow) {
+                    keyWindow = window;
                     break;
                 }
             }
         }
     }
     if (!keyWindow) return NO;
-    NSString *className = NSStringFromClass([keyWindow.rootViewController class]);
-    NSArray *gameVCs = @[@"RBXGameViewController", @"GameViewController", @"RobloxGameController", @"RBXViewController"];
-    for (NSString *vcName in gameVCs) {
-        if ([className containsString:vcName]) return YES;
+
+    NSString *rootClass = NSStringFromClass([keyWindow.rootViewController class]);
+    NSArray *gameSignatures = @[
+        @"RBXGameViewController",
+        @"GameViewController",
+        @"RobloxGameController",
+        @"RBXViewController",
+        @"UIRemoteKeyboardWindow"
+    ];
+
+    for (NSString *sig in gameSignatures) {
+        if ([rootClass containsString:sig]) return YES;
     }
-    NSString *title = keyWindow.rootViewController.title ?: @"";
-    if ([title containsString:@"Place"] || [title containsString:@"Game"]) return YES;
-    if ([keyWindow.rootViewController respondsToSelector:@selector(childViewControllers)]) {
-        for (UIViewController *child in keyWindow.rootViewController.childViewControllers) {
-            NSString *childClass = NSStringFromClass([child class]);
-            if ([childClass containsString:@"Game"] || [childClass containsString:@"RBX"]) {
-                return YES;
-            }
+
+    for (UIViewController *child in keyWindow.rootViewController.childViewControllers) {
+        NSString *childClass = NSStringFromClass([child class]);
+        if ([childClass containsString:@"Game"] ||
+            [childClass containsString:@"RBX"] ||
+            [childClass containsString:@"Place"]) {
+            return YES;
         }
     }
+
     return NO;
 }
 
 - (void)showUI {
     if (self.uiWindow && !self.uiWindow.hidden) return;
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{ [self showUI]; });
+        return;
+    }
+
     UIWindowScene *scene = nil;
-    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+    for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
         if ([s isKindOfClass:[UIWindowScene class]]) {
             scene = (UIWindowScene *)s;
             break;
         }
     }
     if (!scene) return;
+
     SRFXMainViewController *vc = [[SRFXMainViewController alloc] init];
     self.uiWindow = [[UIWindow alloc] initWithWindowScene:scene];
-    self.uiWindow.windowLevel = UIWindowLevelAlert + 2;
-    self.uiWindow.backgroundColor = [UIColor clearColor];
+    self.uiWindow.windowLevel = UIWindowLevelAlert + 5;
+    self.uiWindow.backgroundColor = UIColor.clearColor;
     self.uiWindow.rootViewController = vc;
     self.uiWindow.hidden = NO;
     [self.uiWindow makeKeyAndVisible];

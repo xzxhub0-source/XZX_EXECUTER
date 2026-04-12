@@ -1,16 +1,13 @@
 #import <UIKit/UIKit.h>
 #import "SRFXCore.h"
 
-static uint32_t random_delay(void) {
-    return (arc4random_uniform(4) + 3) * NSEC_PER_SEC;
-}
-
 __attribute__((constructor))
-static void initialize(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, random_delay()),
+// FIXED: renamed from "initialize" — that symbol name is intercepted by the
+// ObjC runtime on iOS 26 (+initialize is a class-method selector), causing
+// the runtime to branch to a null stub → crash at PC=0.
+static void srfx_entry(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        if (@available(iOS 15.0, *)) {
-            [[SRFXCore shared] start];
-        }
+        [[SRFXCore shared] start];
     });
 }

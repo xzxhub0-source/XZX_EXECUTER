@@ -1,4 +1,4 @@
-name: Build XZX Executor
+name: Build XZX Executor (unsigned for ksign)
 
 on:
   workflow_dispatch:
@@ -507,9 +507,6 @@ jobs:
             -o build/executor.dylib build/*.o -lc++ -target arm64-apple-ios15.0
           echo "✅ Dylib linked"
 
-      - name: Sign dylib
-        run: codesign -f -s - build/executor.dylib
-
       - name: Extract and patch IPA
         run: |
           unzip -q Roblox.ipa -d extracted/
@@ -524,9 +521,6 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName X" extracted/Payload/Roblox.app/Info.plist 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string X" extracted/Payload/Roblox.app/Info.plist
           plutil -convert binary1 extracted/Payload/Roblox.app/Info.plist
-
-      - name: Resign app
-        run: codesign -f -s - extracted/Payload/Roblox.app
 
       - name: Create IPA
         run: cd extracted && zip -qr ../XZX.ipa Payload/ && cd ..

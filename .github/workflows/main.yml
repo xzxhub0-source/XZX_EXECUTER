@@ -32,15 +32,16 @@ jobs:
           chmod +x ../tools/insert_dylib
           cd ..
 
-      - name: Build Lua
+      - name: Build Lua for iOS
         run: |
+          mkdir -p $HOME/lua-ios
           curl -L -o lua-5.4.6.tar.gz https://www.lua.org/ftp/lua-5.4.6.tar.gz
           tar -xzf lua-5.4.6.tar.gz
           cd lua-5.4.6
-          for f in src/*.c; do
-            n=$(basename "$f" .c)
-            if [ "$n" != "lua" ] && [ "$n" != "luac" ]; then
-              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -target arm64-apple-ios15.0 -I src -o "src/$n.o" "$f"
+          for file in src/*.c; do
+            filename=$(basename "$file" .c)
+            if [ "$filename" != "lua" ] && [ "$filename" != "luac" ]; then
+              xcrun -sdk iphoneos clang -c -O2 -DLUA_USE_IOS -arch arm64 -target arm64-apple-ios15.0 -I src -o "src/$filename.o" "$file"
             fi
           done
           ar rcs $HOME/lua-ios/liblua.a src/*.o
@@ -50,29 +51,20 @@ jobs:
           echo "LUA_INCLUDE=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "LUA_LIB=$HOME/lua-ios" >> $GITHUB_ENV
 
-      - name: Make dirs
-        run: mkdir -p build SERFIX/UI injector/dylib/Core
-
-      - name: Write all source files
-        run: |
-          # All source files are written here
-          # (Include all the files from above)
-          echo "Source files written"
-
       - name: Compile ObjC
         run: |
           mkdir -p build
-          for f in injector/dylib/entry.m injector/dylib/SRFXCore.m injector/dylib/SRFXHooks.m injector/dylib/SRFXScriptBlox.m injector/dylib/SRFXMemory.m injector/dylib/SRFXSecurity.m SERFIX/UI/SRFXMainViewController.m; do
-            if [ -f "$f" ]; then
-              xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o "build/$(basename "$f" .m).o" "$f" -target arm64-apple-ios15.0 || exit 1
-            fi
-          done
+          find injector/dylib -name "*.m" -not -name "*Core*" -exec xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/$(basename {} .m).o {} -target arm64-apple-ios15.0 \;
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXCore.o injector/dylib/SRFXCore.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/entry.o injector/dylib/entry.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXMainViewController.o SERFIX/UI/SRFXMainViewController.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXScriptBlox.o injector/dylib/SRFXScriptBlox.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXSecurity.o injector/dylib/SRFXSecurity.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXHooks.o injector/dylib/SRFXHooks.m -target arm64-apple-ios15.0
 
       - name: Compile C++
         run: |
-          for f in injector/dylib/Core/*.mm; do
-            xcrun -sdk iphoneos clang++ -c -std=c++17 -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I$LUA_INCLUDE -o "build/$(basename "$f" .mm).o" "$f" -target arm64-apple-ios15.0 || exit 1
-          done
+          xcrun -sdk iphoneos clang++ -c -std=c++17 -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I$LUA_INCLUDE -o build/SRFXLua.o injector/dylib/Core/SRFXLua.mm -target arm64-apple-ios15.0
 
       - name: Link dylib
         run: |
@@ -92,7 +84,8 @@ jobs:
           plutil -convert binary1 "$APP/Info.plist"
 
       - name: Package IPA
-        run: cd extracted && zip -qr ../SERFIX.ipa Payload/ && cd ..
+        run: |
+          cd extracted && zip -qr ../SERFIX.ipa Payload/ && cd ..
 
       - name: Upload
         uses: actions/upload-artifact@v4

@@ -6,14 +6,15 @@
 #import <objc/message.h>
 
 static XZXCore *sharedCore = nil;
-static const NSTimeInterval kStartupDelay     = 8.0;
-static const NSTimeInterval kPollInterval     = 1.5;
-static const NSInteger      kDebounce         = 3;
+static const NSTimeInterval kStartupDelay = 5.0;
+static const NSTimeInterval kPollInterval = 1.0;
+static const NSInteger kDebounce = 2;
 
 @interface XZXCore ()
-@property (nonatomic, strong) UIWindow *overlayWindow;
+// DO NOT redeclare overlayWindow - it's already in the header
 @property (nonatomic, assign) NSInteger positiveCount;
 @property (nonatomic, assign) NSInteger negativeCount;
+@property (nonatomic, assign) BOOL inGame;
 @end
 
 @implementation XZXCore
@@ -36,36 +37,38 @@ static const NSInteger      kDebounce         = 3;
     return self;
 }
 
-- (void)xzxStart {
+- (void)startEngine {
     if (_isInitialized) return;
     _isInitialized = YES;
     InitLua();
-    NSLog(@"[XZX] Lua initialized. First poll in %.0fs.", kStartupDelay);
+    NSLog(@"[XZX] Lua initialized. Starting detection in %.0fs.", kStartupDelay);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kStartupDelay * NSEC_PER_SEC)),
-        dispatch_get_main_queue(), ^{ [self schedulePoll]; });
+                   dispatch_get_main_queue(), ^{ [self schedulePoll]; });
 }
 
 - (void)schedulePoll {
-    if (_inGame) return;
     [self pollOnce];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kPollInterval * NSEC_PER_SEC)),
-        dispatch_get_main_queue(), ^{ [self schedulePoll]; });
+                   dispatch_get_main_queue(), ^{ [self schedulePoll]; });
 }
 
 - (void)pollOnce {
-    BOOL gameActive = [self isPlayerInGame];
-    if (gameActive) { _positiveCount++; _negativeCount = 0; }
-    else            { _negativeCount++; _positiveCount = 0; }
+    BOOL isInGameNow = [self isPlayerInGame];
+    if (isInGameNow) { _positiveCount++; _negativeCount = 0; }
+    else             { _negativeCount++; _positiveCount = 0; }
 
     if (!_inGame && _positiveCount >= kDebounce) {
-        _inGame = YES; _positiveCount = 0; _negativeCount = 0;
-        NSLog(@"[XZX] In-game confirmed — showing UI");
+        _inGame = YES;
+        _positiveCount = 0;
+        _negativeCount = 0;
+        NSLog(@"[XZX] In-game detected — showing overlay");
         [self showOverlay];
     } else if (_inGame && _negativeCount >= kDebounce) {
-        _inGame = NO; _positiveCount = 0; _negativeCount = 0;
-        NSLog(@"[XZX] Left game — hiding UI");
+        _inGame = NO;
+        _positiveCount = 0;
+        _negativeCount = 0;
+        NSLog(@"[XZX] Left game — hiding overlay");
         [self hideOverlay];
-        [self schedulePoll];
     }
 }
 
@@ -83,7 +86,7 @@ static const NSInteger      kDebounce         = 3;
         SEL placeIdSel = NSSelectorFromString(@"placeId");
         if (![dataModel respondsToSelector:placeIdSel]) return NO;
         id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
-        return placeId && [placeId intValue] != 0;
+        return (placeId && [placeId intValue] != 0);
     } @catch (NSException *e) {
         return NO;
     }
@@ -93,29 +96,19 @@ static const NSInteger      kDebounce         = 3;
     if (_overlayWindow && !_overlayWindow.hidden) return;
     UIWindowScene *scene = nil;
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-        if ([s isKindOfClass:[UIWindowScene class]] &&
-            ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive)
-        { scene = (UIWindowScene *)s; break; }
+        if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
     }
-    if (!scene)
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
-            if ([s isKindOfClass:[UIWindowScene class]]) { scene=(UIWindowScene *)s; break; }
-    if (!scene) { NSLog(@"[XZX] showOverlay: no scene"); return; }
-    if (_overlayWindow && _overlayWindow.windowScene != scene) _overlayWindow = nil;
-    if (!_overlayWindow) {
-        XZXMainViewController *vc = [[XZXMainViewController alloc] init];
-        _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
-        _overlayWindow.windowLevel = UIWindowLevelAlert + 1;
-        _overlayWindow.backgroundColor = [UIColor clearColor];
-        _overlayWindow.rootViewController = vc;
-    }
+    if (!scene) return;
+    XZXMainViewController *vc = [[XZXMainViewController alloc] init];
+    _overlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+    _overlayWindow.windowLevel = UIWindowLevelAlert + 1;
+    _overlayWindow.backgroundColor = [UIColor clearColor];
+    _overlayWindow.rootViewController = vc;
     _overlayWindow.hidden = NO;
     [_overlayWindow makeKeyAndVisible];
     NSLog(@"[XZX] Overlay shown");
 }
 
-- (void)hideOverlay { if (_overlayWindow) _overlayWindow.hidden = YES; NSLog(@"[XZX] Overlay hidden"); }
-- (BOOL)isOverlayVisible { return _overlayWindow && !_overlayWindow.hidden; }
-- (BOOL)isInGame { return _inGame; }
+- (void)hideOverlay { if (_overlayWindow) _overlayWindow.hidden = YES; }
 
 @end

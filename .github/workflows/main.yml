@@ -57,7 +57,7 @@ jobs:
           cp src/lua.h src/luaconf.h src/lauxlib.h src/lualib.h $HOME/lua-ios/include/
           cd ..
           echo "LUA_INCLUDE_DIR=$HOME/lua-ios/include" >> $GITHUB_ENV
-          echo "LUA_LIB_DIR=$HOME/lua-ios"             >> $GITHUB_ENV
+          echo "LUA_LIB_DIR=$HOME/lua-ios" >> $GITHUB_ENV
 
       - name: Create build directories
         run: mkdir -p build XZX/UI injector/dylib/Core
@@ -452,7 +452,7 @@ jobs:
           @end
           EOF
 
-      - name: Write xzx_core.h
+      - name: Write xzx_core.h (renamed initialize → xzxStart)
         run: |
           cat > injector/dylib/xzx_core.h << 'EOF'
           #ifndef XZX_CORE_H
@@ -461,7 +461,7 @@ jobs:
           #import <UIKit/UIKit.h>
           @interface XZXCore : NSObject
           + (instancetype)shared;
-          - (void)initialize;
+          - (void)xzxStart;   // renamed to avoid reserved selector -initialize
           - (void)showOverlay;
           - (void)hideOverlay;
           - (BOOL)isOverlayVisible;
@@ -472,25 +472,23 @@ jobs:
           #endif
           EOF
 
-      - name: Write xzx_core.m
+      - name: Write xzx_core.m (placeId detection, no circular isPlayerInGame)
         run: |
           cat > injector/dylib/xzx_core.m << 'HEREDOC'
           #import "xzx_core.h"
           #import "Core/LuaExecutor.h"
           #import "XZXMainViewController.h"
           #import <UIKit/UIKit.h>
-          #import <WebKit/WebKit.h>
           #import <objc/runtime.h>
+          #import <objc/message.h>
 
           static XZXCore *sharedCore = nil;
           static const NSTimeInterval kStartupDelay     = 8.0;
           static const NSTimeInterval kPollInterval     = 1.5;
           static const NSInteger      kDebounce         = 3;
-          static const NSTimeInterval kWatchdogInterval = 3.0;
 
           @interface XZXCore ()
           @property (nonatomic, strong) UIWindow *overlayWindow;
-          @property (nonatomic, strong) NSTimer  *watchdogTimer;
           @property (nonatomic, assign) NSInteger positiveCount;
           @property (nonatomic, assign) NSInteger negativeCount;
           @end
@@ -505,11 +503,17 @@ jobs:
 
           - (instancetype)init {
               self = [super init];
-              if (self) { _overlayWindow=nil; _watchdogTimer=nil; _isInitialized=NO; _inGame=NO; _positiveCount=0; _negativeCount=0; }
+              if (self) {
+                  _overlayWindow = nil;
+                  _isInitialized = NO;
+                  _inGame = NO;
+                  _positiveCount = 0;
+                  _negativeCount = 0;
+              }
               return self;
           }
 
-          - (void)initialize {
+          - (void)xzxStart {
               if (_isInitialized) return;
               _isInitialized = YES;
               InitLua();
@@ -526,7 +530,7 @@ jobs:
           }
 
           - (void)pollOnce {
-              BOOL gameActive = [self isInGameState];
+              BOOL gameActive = [self isPlayerInGame];   // direct DataModel check
               if (gameActive) { _positiveCount++; _negativeCount = 0; }
               else            { _negativeCount++; _positiveCount = 0; }
 
@@ -534,77 +538,32 @@ jobs:
                   _inGame = YES; _positiveCount = 0; _negativeCount = 0;
                   NSLog(@"[XZX] In-game confirmed — showing UI");
                   [self showOverlay];
-                  [self startWatchdog];
               } else if (_inGame && _negativeCount >= kDebounce) {
                   _inGame = NO; _positiveCount = 0; _negativeCount = 0;
                   NSLog(@"[XZX] Left game — hiding UI");
                   [self hideOverlay];
-                  [self stopWatchdog];
                   [self schedulePoll];
               }
           }
 
-          - (BOOL)isInGameState {
+          // Direct check using RobloxDataModel.placeId (0 = menu, >0 = in-game)
+          - (BOOL)isPlayerInGame {
               @try {
-                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                      for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                          if (window == _overlayWindow) continue;
-                          if ([self windowHasVisibleWebView:window]) return NO;
-                      }
-                  }
-                  return YES;
-              } @catch (NSException *e) { NSLog(@"[XZX] isInGameState error: %@", e); return NO; }
-          }
+                  Class dataModelClass = NSClassFromString(@"RobloxDataModel");
+                  if (!dataModelClass) dataModelClass = NSClassFromString(@"RBXDataModel");
+                  if (!dataModelClass) return NO;
 
-          - (BOOL)windowHasVisibleWebView:(UIWindow *)window {
-              NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithCapacity:128];
-              [queue addObject:window];
-              NSUInteger limit = 2000, idx = 0;
-              while (idx < queue.count && idx < limit) {
-                  UIView *v = queue[idx++];
-                  if (v.isHidden || v.alpha < 0.01f) continue;
-                  NSString *cn = NSStringFromClass(v.class);
-                  BOOL isWebView = [v isKindOfClass:[WKWebView class]] ||
-                                   [cn hasPrefix:@"WKWeb"] ||
-                                   [cn containsString:@"WebView"];
-                  if (isWebView) {
-                      CGSize sz = v.bounds.size;
-                      if (sz.width > 80 && sz.height > 80) {
-                          NSLog(@"[XZX] WebView (%@ %.0fx%.0f) → menu", cn, sz.width, sz.height);
-                          return YES;
-                      }
-                  }
-                  for (UIView *child in v.subviews)
-                      if (queue.count < limit) [queue addObject:child];
-              }
-              return NO;
-          }
+                  SEL sharedSel = NSSelectorFromString(@"sharedDataModel");
+                  if (![dataModelClass respondsToSelector:sharedSel]) return NO;
+                  id dataModel = ((id(*)(id, SEL))objc_msgSend)((id)dataModelClass, sharedSel);
+                  if (!dataModel) return NO;
 
-          - (void)startWatchdog {
-              [_watchdogTimer invalidate];
-              _watchdogTimer = [NSTimer scheduledTimerWithTimeInterval:kWatchdogInterval
-                  target:self selector:@selector(watchdogTick) userInfo:nil repeats:YES];
-          }
-
-          - (void)stopWatchdog { [_watchdogTimer invalidate]; _watchdogTimer = nil; }
-
-          - (void)watchdogTick {
-              if (!_inGame) return;
-              if (![self isInGameState]) {
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                      dispatch_get_main_queue(), ^{
-                      if (![self isInGameState]) {
-                          NSLog(@"[XZX] Watchdog: menu reappeared");
-                          self->_inGame = NO; self->_positiveCount = 0; self->_negativeCount = 0;
-                          [self hideOverlay]; [self stopWatchdog]; [self schedulePoll];
-                      }
-                  });
-                  return;
-              }
-              if (!_overlayWindow || _overlayWindow.hidden) {
-                  NSLog(@"[XZX] Watchdog: overlay gone — rebuilding");
-                  _overlayWindow = nil; [self showOverlay];
+                  SEL placeIdSel = NSSelectorFromString(@"placeId");
+                  if (![dataModel respondsToSelector:placeIdSel]) return NO;
+                  id placeId = ((id(*)(id, SEL))objc_msgSend)(dataModel, placeIdSel);
+                  return placeId && [placeId intValue] != 0;
+              } @catch (NSException *e) {
+                  return NO;
               }
           }
 
@@ -640,6 +599,17 @@ jobs:
           @end
           HEREDOC
 
+      - name: Write entry.m (calls xzxStart instead of initialize)
+        run: |
+          cat > injector/dylib/entry.m << 'EOF'
+          #import <UIKit/UIKit.h>
+          #import "xzx_core.h"
+          __attribute__((constructor))
+          static void xzx_entry(void) {
+              dispatch_async(dispatch_get_main_queue(), ^{ [[XZXCore shared] xzxStart]; });
+          }
+          EOF
+
       - name: Write xzx_hooks.h
         run: |
           cat > injector/dylib/xzx_hooks.h << 'EOF'
@@ -666,17 +636,6 @@ jobs:
           void hook_roblox_functions(void)   {}
           void unhook_roblox_functions(void) {}
           bool isPlayerInGame(void) { return [[XZXCore shared] isInGame]; }
-          EOF
-
-      - name: Write entry.m
-        run: |
-          cat > injector/dylib/entry.m << 'EOF'
-          #import <UIKit/UIKit.h>
-          #import "xzx_core.h"
-          __attribute__((constructor))
-          static void xzx_entry(void) {
-              dispatch_async(dispatch_get_main_queue(), ^{ [[XZXCore shared] initialize]; });
-          }
           EOF
 
       - name: Write stub files

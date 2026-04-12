@@ -51,16 +51,6 @@ jobs:
           echo "LUA_INCLUDE=$HOME/lua-ios/include" >> $GITHUB_ENV
           echo "LUA_LIB=$HOME/lua-ios" >> $GITHUB_ENV
 
-      - name: Fix header names
-        run: |
-          cd injector/dylib
-          mv srfx_security.h SRFXSecurity.h 2>/dev/null || true
-          mv srfx_obfuscator.h SRFXObfuscator.h 2>/dev/null || true
-          mv srfx_editor.h SRFXEditor.h 2>/dev/null || true
-          mv srfx_uibridge.h SRFXUIBridge.h 2>/dev/null || true
-          mv srfx_memory.h SRFXMemory.h 2>/dev/null || true
-          cd ../..
-
       - name: Compile Objective-C
         run: |
           mkdir -p build

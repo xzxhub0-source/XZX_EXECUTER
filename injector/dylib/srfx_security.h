@@ -1,4 +1,7 @@
 #import <Foundation/Foundation.h>
+
 @interface SRFXSecurity : NSObject
-+ (instancetype)shared;
++ (NSString *)spoofedHWID;
++ (void)installAntiDebug;
++ (BOOL)isDebuggerAttached;
 @end

@@ -52,7 +52,7 @@ jobs:
           echo "LUA_LIB=$HOME/lua-ios" >> $GITHUB_ENV
 
       - name: Make dirs
-        run: mkdir -p build SERFIX/UI injector/dylib/Core
+        run: mkdir -p build SERFIX/UI injector/dylib
 
       - name: Write entry.m
         run: |
@@ -88,244 +88,20 @@ jobs:
           cat > injector/dylib/SRFXCore.m << 'EOF'
           #import "SRFXCore.h"
           #import "SRFXMainViewController.h"
-          #import <dlfcn.h>
           #import <QuartzCore/QuartzCore.h>
+          #include <lua.h>
+          #include <lauxlib.h>
+          #include <lualib.h>
+          #include <pthread.h>
+          #include <unistd.h>
 
           static SRFXCore *instance = nil;
           static const NSInteger kDebounce = 3;
           static NSInteger positiveCount = 0;
           static NSInteger negativeCount = 0;
 
-          @implementation SRFXCore
-
-          + (instancetype)shared {
-              static dispatch_once_t once;
-              dispatch_once(&once, ^{ instance = [[self alloc] init]; });
-              return instance;
-          }
-
-          - (instancetype)init {
-              self = [super init];
-              if (self) {
-                  _inGame = NO;
-                  _uiWindow = nil;
-              }
-              return self;
-          }
-
-          - (void)start {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                  void (*luaInit)(void) = dlsym(RTLD_SELF, "SRFXLuaInit");
-                  if (luaInit) luaInit();
-                  [self startGameDetection];
-              });
-          }
-
-          - (void)startGameDetection {
-              __weak typeof(self) weak = self;
-              self.checkTimer = [NSTimer scheduledTimerWithTimeInterval:1.2 repeats:YES block:^(NSTimer *t) {
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      __strong typeof(self) strong = weak;
-                      if (!strong) { [t invalidate]; return; }
-                      [strong pollGameState];
-                  });
-              }];
-          }
-
-          - (void)pollGameState {
-              BOOL nowInGame = [self isInsideGame];
-              if (nowInGame) { positiveCount++; negativeCount = 0; }
-              else           { negativeCount++; positiveCount = 0; }
-              if (!self.inGame && positiveCount >= kDebounce) {
-                  self.inGame = YES;
-                  positiveCount = 0;
-                  [self showUI];
-              } else if (self.inGame && negativeCount >= kDebounce) {
-                  self.inGame = NO;
-                  negativeCount = 0;
-                  [self hideUI];
-              }
-          }
-
-          - (BOOL)isInsideGame {
-              @try {
-                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                      UIWindowScene *windowScene = (UIWindowScene *)scene;
-                      if (windowScene.activationState != UISceneActivationStateForegroundActive) continue;
-                      if (windowScene.statusBarManager.statusBarHidden) {
-                          for (UIWindow *window in windowScene.windows) {
-                              if (window == self.uiWindow) continue;
-                              if ([self viewHasMetalLayer:window]) return YES;
-                          }
-                      }
-                  }
-              } @catch (NSException *e) {}
-              return NO;
-          }
-
-          - (BOOL)viewHasMetalLayer:(UIView *)view {
-              @try {
-                  if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-                  for (CALayer *sub in view.layer.sublayers ?: @[]) {
-                      if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-                  }
-                  for (UIView *sub in view.subviews) {
-                      if ([self viewHasMetalLayer:sub]) return YES;
-                  }
-              } @catch (NSException *e) {}
-              return NO;
-          }
-
-          - (void)showUI {
-              if (!self.inGame) return;
-              if (self.uiWindow && !self.uiWindow.hidden) return;
-              if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self showUI]; });
-                  return;
-              }
-              UIWindowScene *scene = nil;
-              for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-                  if ([s isKindOfClass:[UIWindowScene class]] && ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive) {
-                      scene = (UIWindowScene *)s; break;
-                  }
-              }
-              if (!scene) for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
-              if (!scene) return;
-              if (!self.uiWindow) {
-                  SRFXMainViewController *vc = [[SRFXMainViewController alloc] init];
-                  self.uiWindow = [[UIWindow alloc] initWithWindowScene:scene];
-                  self.uiWindow.windowLevel = UIWindowLevelAlert + 5;
-                  self.uiWindow.backgroundColor = UIColor.clearColor;
-                  self.uiWindow.rootViewController = vc;
-                  self.uiWindow.hidden = YES;
-              }
-              self.uiWindow.hidden = NO;
-              [self.uiWindow makeKeyAndVisible];
-          }
-
-          - (void)hideUI {
-              if (!self.uiWindow) return;
-              self.uiWindow.hidden = YES;
-              for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-                  if ([s isKindOfClass:[UIWindowScene class]]) {
-                      for (UIWindow *w in ((UIWindowScene *)s).windows) {
-                          if (w != self.uiWindow && !w.isKeyWindow) { [w makeKeyWindow]; return; }
-                      }
-                  }
-              }
-          }
-
-          - (void)dealloc {
-              [self.checkTimer invalidate];
-              self.checkTimer = nil;
-          }
-
-          @end
-          EOF
-
-      - name: Write SRFXScriptBlox.h
-        run: |
-          cat > injector/dylib/SRFXScriptBlox.h << 'EOF'
-          #import <Foundation/Foundation.h>
-          @interface SRFXScriptBlox : NSObject
-          + (void)fetchTrending:(void(^)(NSArray *))completion;
-          + (void)fetchScript:(NSString *)slug completion:(void(^)(NSString *))completion;
-          + (void)search:(NSString *)query completion:(void(^)(NSArray *))completion;
-          @end
-          EOF
-
-      - name: Write SRFXScriptBlox.m
-        run: |
-          cat > injector/dylib/SRFXScriptBlox.m << 'EOF'
-          #import "SRFXScriptBlox.h"
-          @implementation SRFXScriptBlox
-          + (void)fetchTrending:(void(^)(NSArray *))completion {
-              NSURL *url = [NSURL URLWithString:@"https://scriptblox.com/api/scripts?sort=trending&limit=50"];
-              [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-                  if (d) {
-                      id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-                      if ([json isKindOfClass:[NSDictionary class]]) {
-                          NSArray *scripts = json[@"scripts"];
-                          NSMutableArray *res = [NSMutableArray array];
-                          for (NSDictionary *s in scripts) {
-                              [res addObject:@{@"title": s[@"title"]?:@"", @"author": s[@"author"]?:@"", @"game": s[@"game"]?:@"", @"slug": s[@"slug"]?:@""}];
-                          }
-                          completion(res); return;
-                      }
-                  }
-                  completion(@[]);
-              }] resume];
-          }
-          + (void)fetchScript:(NSString *)slug completion:(void(^)(NSString *))completion {
-              NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts/%@", slug];
-              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-                  if (d) {
-                      id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-                      if ([json isKindOfClass:[NSDictionary class]]) {
-                          NSString *code = json[@"script"];
-                          if (code) { completion(code); return; }
-                      }
-                  }
-                  completion(@"");
-              }] resume];
-          }
-          + (void)search:(NSString *)query completion:(void(^)(NSArray *))completion {
-              NSString *enc = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-              NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts?search=%@&limit=30", enc];
-              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-                  if (d) {
-                      id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-                      if ([json isKindOfClass:[NSDictionary class]]) {
-                          NSArray *scripts = json[@"scripts"];
-                          NSMutableArray *res = [NSMutableArray array];
-                          for (NSDictionary *s in scripts) {
-                              [res addObject:@{@"title": s[@"title"]?:@"", @"slug": s[@"slug"]?:@""}];
-                          }
-                          completion(res); return;
-                      }
-                  }
-                  completion(@[]);
-              }] resume];
-          }
-          @end
-          EOF
-
-      - name: Write SRFXLua.h
-        run: |
-          cat > injector/dylib/Core/SRFXLua.h << 'EOF'
-          #ifndef SRFXLua_h
-          #define SRFXLua_h
-          struct lua_State;
-          #ifdef __cplusplus
-          extern "C" {
-          #endif
-          void SRFXLuaInit(void);
-          void SRFXLuaExecute(const char *script);
-          void SRFXLuaRegister(const char *name, int (*func)(struct lua_State*));
-          struct lua_State* SRFXLuaState(void);
-          #ifdef __cplusplus
-          }
-          #endif
-          #endif
-          EOF
-
-      - name: Write SRFXLua.mm
-        run: |
-          cat > injector/dylib/Core/SRFXLua.mm << 'CPPEOF'
-          #import <Foundation/Foundation.h>
-          #import <UIKit/UIKit.h>
-          #include <lua.h>
-          #include <lauxlib.h>
-          #include <lualib.h>
-          #include <pthread.h>
-          #include <unistd.h>
-          #include "SRFXLua.h"
-
           static lua_State *L = NULL;
           static pthread_mutex_t lua_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-          extern "C" {
 
           static int srfx_print(lua_State *L) {
               int n = lua_gettop(L);
@@ -395,17 +171,11 @@ jobs:
           static int srfx_fireclickdetector(lua_State *L) { (void)L; return 0; }
           static int srfx_getgenv          (lua_State *L) { lua_pushglobaltable(L); return 1; }
           static int srfx_getreg           (lua_State *L) { lua_pushvalue(L, LUA_REGISTRYINDEX); return 1; }
-
           static int srfx_wait(lua_State *L) {
               double sec = luaL_optnumber(L, 1, 0);
-              if (sec > 0) {
-                  pthread_mutex_unlock(&lua_mutex);
-                  usleep((useconds_t)(sec * 1000000));
-                  pthread_mutex_lock(&lua_mutex);
-              }
+              if (sec > 0) { pthread_mutex_unlock(&lua_mutex); usleep(sec * 1000000); pthread_mutex_lock(&lua_mutex); }
               return 0;
           }
-
           static int srfx_getgc            (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getconnections   (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_hookfunction     (lua_State *L) { lua_pushvalue(L,1); return 1; }
@@ -456,13 +226,11 @@ jobs:
           static int srfx_setfpscap        (lua_State *L) { (void)L; return 0; }
           static int srfx_getfps           (lua_State *L) { lua_pushinteger(L,60); return 1; }
           static int srfx_getping          (lua_State *L) { lua_pushinteger(L,30); return 1; }
-
           static int srfx_getinstances     (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getscripts       (lua_State *L) { lua_newtable(L); return 1; }
           static int srfx_getloadedmodules (lua_State *L) { lua_newtable(L); return 1; }
 
-          __attribute__((visibility("default")))
-          void SRFXLuaInit(void) {
+          static void SRFXLuaInit(void) {
               if (L) return;
               L = luaL_newstate();
               if (!L) return;
@@ -510,7 +278,6 @@ jobs:
               lua_setglobal(L,"serfix");
           }
 
-          __attribute__((visibility("default")))
           void SRFXLuaExecute(const char *script) {
               if (!script || !script[0]) return;
               pthread_mutex_lock(&lua_mutex);
@@ -529,18 +296,180 @@ jobs:
               pthread_mutex_unlock(&lua_mutex);
           }
 
-          __attribute__((visibility("default")))
-          void SRFXLuaRegister(const char *name, int (*func)(lua_State*)) {
-              pthread_mutex_lock(&lua_mutex);
-              if (L && name && func) lua_register(L, name, func);
-              pthread_mutex_unlock(&lua_mutex);
+          @implementation SRFXCore
+
+          + (instancetype)shared {
+              static dispatch_once_t once;
+              dispatch_once(&once, ^{ instance = [[self alloc] init]; });
+              return instance;
           }
 
-          __attribute__((visibility("default")))
-          lua_State* SRFXLuaState(void) { return L; }
-
+          - (instancetype)init {
+              self = [super init];
+              if (self) { _inGame = NO; _uiWindow = nil; }
+              return self;
           }
-          CPPEOF
+
+          - (void)start {
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                  SRFXLuaInit();
+                  [self startGameDetection];
+              });
+          }
+
+          - (void)startGameDetection {
+              __weak typeof(self) weak = self;
+              self.checkTimer = [NSTimer scheduledTimerWithTimeInterval:1.2 repeats:YES block:^(NSTimer *t) {
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      __strong typeof(self) strong = weak;
+                      if (!strong) { [t invalidate]; return; }
+                      [strong pollGameState];
+                  });
+              }];
+          }
+
+          - (void)pollGameState {
+              BOOL nowInGame = [self isInsideGame];
+              if (nowInGame) { positiveCount++; negativeCount = 0; }
+              else           { negativeCount++; positiveCount = 0; }
+              if (!self.inGame && positiveCount >= kDebounce) {
+                  self.inGame = YES; positiveCount = 0; [self showUI];
+              } else if (self.inGame && negativeCount >= kDebounce) {
+                  self.inGame = NO; negativeCount = 0; [self hideUI];
+              }
+          }
+
+          - (BOOL)isInsideGame {
+              @try {
+                  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+                      UIWindowScene *ws = (UIWindowScene *)scene;
+                      if (ws.activationState != UISceneActivationStateForegroundActive) continue;
+                      if (ws.statusBarManager.statusBarHidden) {
+                          for (UIWindow *w in ws.windows) {
+                              if (w == self.uiWindow) continue;
+                              if ([self viewHasMetalLayer:w]) return YES;
+                          }
+                      }
+                  }
+              } @catch (NSException *e) {}
+              return NO;
+          }
+
+          - (BOOL)viewHasMetalLayer:(UIView *)view {
+              if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+              for (CALayer *sub in view.layer.sublayers) {
+                  if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+              }
+              for (UIView *sub in view.subviews) {
+                  if ([self viewHasMetalLayer:sub]) return YES;
+              }
+              return NO;
+          }
+
+          - (void)showUI {
+              if (!self.inGame) return;
+              if (self.uiWindow && !self.uiWindow.hidden) return;
+              if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self showUI]; });
+                  return;
+              }
+              UIWindowScene *scene = nil;
+              for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+                  if ([s isKindOfClass:[UIWindowScene class]] && ((UIWindowScene *)s).activationState == UISceneActivationStateForegroundActive) {
+                      scene = (UIWindowScene *)s; break;
+                  }
+              }
+              if (!scene) for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
+              if (!scene) return;
+              if (!self.uiWindow) {
+                  SRFXMainViewController *vc = [[SRFXMainViewController alloc] init];
+                  self.uiWindow = [[UIWindow alloc] initWithWindowScene:scene];
+                  self.uiWindow.windowLevel = UIWindowLevelAlert + 5;
+                  self.uiWindow.backgroundColor = UIColor.clearColor;
+                  self.uiWindow.rootViewController = vc;
+                  self.uiWindow.hidden = YES;
+              }
+              self.uiWindow.hidden = NO;
+              [self.uiWindow makeKeyAndVisible];
+          }
+
+          - (void)hideUI {
+              if (!self.uiWindow) return;
+              self.uiWindow.hidden = YES;
+              for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+                  if ([s isKindOfClass:[UIWindowScene class]]) {
+                      for (UIWindow *w in ((UIWindowScene *)s).windows) {
+                          if (w != self.uiWindow && !w.isKeyWindow) { [w makeKeyWindow]; return; }
+                      }
+                  }
+              }
+          }
+
+          - (void)dealloc { [self.checkTimer invalidate]; self.checkTimer = nil; }
+
+          @end
+          EOF
+
+      - name: Write SRFXScriptBlox.h
+        run: |
+          cat > injector/dylib/SRFXScriptBlox.h << 'EOF'
+          #import <Foundation/Foundation.h>
+          @interface SRFXScriptBlox : NSObject
+          + (void)fetchTrending:(void(^)(NSArray *))completion;
+          + (void)fetchScript:(NSString *)slug completion:(void(^)(NSString *))completion;
+          + (void)search:(NSString *)query completion:(void(^)(NSArray *))completion;
+          @end
+          EOF
+
+      - name: Write SRFXScriptBlox.m
+        run: |
+          cat > injector/dylib/SRFXScriptBlox.m << 'EOF'
+          #import "SRFXScriptBlox.h"
+          @implementation SRFXScriptBlox
+          + (void)fetchTrending:(void(^)(NSArray *))completion {
+              NSURL *url = [NSURL URLWithString:@"https://scriptblox.com/api/scripts?sort=trending&limit=50"];
+              [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+                  if (d) {
+                      id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+                      if ([json isKindOfClass:[NSDictionary class]]) {
+                          NSArray *scripts = json[@"scripts"];
+                          NSMutableArray *res = [NSMutableArray array];
+                          for (NSDictionary *s in scripts) [res addObject:@{@"title":s[@"title"]?:@"",@"author":s[@"author"]?:@"",@"game":s[@"game"]?:@"",@"slug":s[@"slug"]?:@""}];
+                          completion(res); return;
+                      }
+                  }
+                  completion(@[]);
+              }] resume];
+          }
+          + (void)fetchScript:(NSString *)slug completion:(void(^)(NSString *))completion {
+              NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts/%@", slug];
+              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+                  if (d) {
+                      id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+                      if ([json isKindOfClass:[NSDictionary class]]) { NSString *code = json[@"script"]; if (code) { completion(code); return; } }
+                  }
+                  completion(@"");
+              }] resume];
+          }
+          + (void)search:(NSString *)query completion:(void(^)(NSArray *))completion {
+              NSString *enc = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+              NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts?search=%@&limit=30", enc];
+              [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+                  if (d) {
+                      id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+                      if ([json isKindOfClass:[NSDictionary class]]) {
+                          NSArray *scripts = json[@"scripts"];
+                          NSMutableArray *res = [NSMutableArray array];
+                          for (NSDictionary *s in scripts) [res addObject:@{@"title":s[@"title"]?:@"",@"slug":s[@"slug"]?:@""}];
+                          completion(res); return;
+                      }
+                  }
+                  completion(@[]);
+              }] resume];
+          }
+          @end
+          EOF
 
       - name: Write SRFXMainViewController.h
         run: |
@@ -562,278 +491,106 @@ jobs:
           cat > SERFIX/UI/SRFXMainViewController.m << 'EOF'
           #import "SRFXMainViewController.h"
           #import "SRFXScriptBlox.h"
-          #include "Core/SRFXLua.h"
-
+          void SRFXLuaExecute(const char *script);
           @interface SRFXMainViewController () <UITableViewDelegate, UITableViewDataSource, UITextViewDelegate, UISearchBarDelegate>
           @property (nonatomic, strong) UISearchBar *searchBar;
           @property (nonatomic, strong) UIActivityIndicatorView *spinner;
           @end
-
           @implementation SRFXMainViewController
-
           - (void)viewDidLoad {
               [super viewDidLoad];
               self.view.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:0.98];
-              self.view.layer.cornerRadius = 16;
-              self.view.layer.borderWidth = 1.2;
+              self.view.layer.cornerRadius = 16; self.view.layer.borderWidth = 1.2;
               self.view.layer.borderColor = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0].CGColor;
-
-              UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 55)];
-              header.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0];
-              [self.view addSubview:header];
-
-              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 12, 150, 30)];
-              title.text = @"SERFIX";
-              title.textColor = UIColor.whiteColor;
-              title.font = [UIFont boldSystemFontOfSize:22];
-              [header addSubview:title];
-
-              UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              minBtn.frame = CGRectMake(self.view.bounds.size.width - 95, 10, 40, 35);
-              [minBtn setTitle:@"−" forState:UIControlStateNormal];
-              [minBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              minBtn.titleLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightThin];
-              [minBtn addTarget:self action:@selector(minimize) forControlEvents:UIControlEventTouchUpInside];
-              [header addSubview:minBtn];
-
-              UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              closeBtn.frame = CGRectMake(self.view.bounds.size.width - 50, 10, 40, 35);
-              [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-              [closeBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              closeBtn.titleLabel.font = [UIFont systemFontOfSize:22];
-              [closeBtn addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
-              [header addSubview:closeBtn];
-
-              self.tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, 55, self.view.bounds.size.width, 42)];
-              self.tabBar.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.10 alpha:1.0];
-              [self.view addSubview:self.tabBar];
-
-              NSArray *tabs = @[@"Editor", @"ScriptBlox", @"Console", @"Settings"];
-              for (int i = 0; i < 4; i++) {
-                  UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-                  btn.frame = CGRectMake(i * (self.view.bounds.size.width / 4), 0, self.view.bounds.size.width / 4, 42);
-                  [btn setTitle:tabs[i] forState:UIControlStateNormal];
-                  [btn setTitleColor:UIColor.lightGrayColor forState:UIControlStateNormal];
-                  btn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-                  btn.tag = i;
-                  [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
-                  [self.tabBar addSubview:btn];
+              UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0,0,self.view.bounds.size.width,55)];
+              header.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:1.0]; [self.view addSubview:header];
+              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15,12,150,30)];
+              title.text = @"SERFIX"; title.textColor = UIColor.whiteColor; title.font = [UIFont boldSystemFontOfSize:22]; [header addSubview:title];
+              UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem]; minBtn.frame = CGRectMake(self.view.bounds.size.width-95,10,40,35);
+              [minBtn setTitle:@"−" forState:UIControlStateNormal]; [minBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              minBtn.titleLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightThin]; [minBtn addTarget:self action:@selector(minimize) forControlEvents:UIControlEventTouchUpInside]; [header addSubview:minBtn];
+              UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem]; closeBtn.frame = CGRectMake(self.view.bounds.size.width-50,10,40,35);
+              [closeBtn setTitle:@"✕" forState:UIControlStateNormal]; [closeBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              closeBtn.titleLabel.font = [UIFont systemFontOfSize:22]; [closeBtn addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside]; [header addSubview:closeBtn];
+              self.tabBar = [[UIView alloc] initWithFrame:CGRectMake(0,55,self.view.bounds.size.width,42)];
+              self.tabBar.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.10 alpha:1.0]; [self.view addSubview:self.tabBar];
+              NSArray *tabs = @[@"Editor",@"ScriptBlox",@"Console",@"Settings"];
+              for (int i=0;i<4;i++) {
+                  UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem]; btn.frame = CGRectMake(i*(self.view.bounds.size.width/4),0,self.view.bounds.size.width/4,42);
+                  [btn setTitle:tabs[i] forState:UIControlStateNormal]; [btn setTitleColor:UIColor.lightGrayColor forState:UIControlStateNormal];
+                  btn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; btn.tag = i;
+                  [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside]; [self.tabBar addSubview:btn];
               }
-
-              self.editor = [[UITextView alloc] initWithFrame:CGRectMake(10, 107, self.view.bounds.size.width - 20, self.view.bounds.size.height - 195)];
-              self.editor.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.09 alpha:1.0];
-              self.editor.textColor = [UIColor colorWithRed:0.9 green:0.9 blue:1.0 alpha:1.0];
-              self.editor.font = [UIFont fontWithName:@"Menlo" size:13];
-              self.editor.text = @"print('Hello SERFIX')";
-              self.editor.autocorrectionType = UITextAutocorrectionTypeNo;
-              self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
-              self.editor.layer.borderColor = [UIColor colorWithRed:0.4 green:0.2 blue:0.9 alpha:0.5].CGColor;
-              self.editor.layer.borderWidth = 1;
-              self.editor.layer.cornerRadius = 8;
+              self.editor = [[UITextView alloc] initWithFrame:CGRectMake(10,107,self.view.bounds.size.width-20,self.view.bounds.size.height-195)];
+              self.editor.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.09 alpha:1.0]; self.editor.textColor = [UIColor colorWithRed:0.9 green:0.9 blue:1.0 alpha:1.0];
+              self.editor.font = [UIFont fontWithName:@"Menlo" size:13]; self.editor.text = @"print('Hello SERFIX')";
+              self.editor.autocorrectionType = UITextAutocorrectionTypeNo; self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
+              self.editor.layer.borderColor = [UIColor colorWithRed:0.4 green:0.2 blue:0.9 alpha:0.5].CGColor; self.editor.layer.borderWidth = 1; self.editor.layer.cornerRadius = 8;
               [self.view addSubview:self.editor];
-
               self.scriptList = [[UITableView alloc] initWithFrame:self.editor.frame style:UITableViewStylePlain];
-              self.scriptList.backgroundColor = self.editor.backgroundColor;
-              self.scriptList.delegate = self;
-              self.scriptList.dataSource = self;
-              self.scriptList.separatorColor = [UIColor colorWithWhite:0.2 alpha:1.0];
-              self.scriptList.hidden = YES;
-              self.scriptList.rowHeight = 70;
+              self.scriptList.backgroundColor = self.editor.backgroundColor; self.scriptList.delegate = self; self.scriptList.dataSource = self;
+              self.scriptList.separatorColor = [UIColor colorWithWhite:0.2 alpha:1.0]; self.scriptList.hidden = YES; self.scriptList.rowHeight = 70;
               [self.view addSubview:self.scriptList];
-
-              self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(10, 107, self.view.bounds.size.width - 20, 44)];
-              self.searchBar.delegate = self;
-              self.searchBar.placeholder = @"Search ScriptBlox...";
-              self.searchBar.barStyle = UIBarStyleBlack;
-              self.searchBar.searchTextField.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1.0];
-              self.searchBar.searchTextField.textColor = UIColor.whiteColor;
-              self.searchBar.hidden = YES;
+              self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(10,107,self.view.bounds.size.width-20,44)];
+              self.searchBar.delegate = self; self.searchBar.placeholder = @"Search ScriptBlox..."; self.searchBar.barStyle = UIBarStyleBlack;
+              self.searchBar.searchTextField.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1.0]; self.searchBar.searchTextField.textColor = UIColor.whiteColor; self.searchBar.hidden = YES;
               [self.view addSubview:self.searchBar];
-
               self.consoleView = [[UITextView alloc] initWithFrame:self.editor.frame];
-              self.consoleView.backgroundColor = [UIColor colorWithRed:0.02 green:0.02 blue:0.04 alpha:1.0];
-              self.consoleView.textColor = [UIColor colorWithRed:0.5 green:1.0 blue:0.5 alpha:1.0];
-              self.consoleView.font = [UIFont fontWithName:@"Menlo" size:12];
-              self.consoleView.editable = NO;
-              self.consoleView.hidden = YES;
+              self.consoleView.backgroundColor = [UIColor colorWithRed:0.02 green:0.02 blue:0.04 alpha:1.0]; self.consoleView.textColor = [UIColor colorWithRed:0.5 green:1.0 blue:0.5 alpha:1.0];
+              self.consoleView.font = [UIFont fontWithName:@"Menlo" size:12]; self.consoleView.editable = NO; self.consoleView.hidden = YES;
               [self.view addSubview:self.consoleView];
-
               self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-              self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 200);
-              self.spinner.color = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0];
-              self.spinner.hidesWhenStopped = YES;
+              self.spinner.center = CGPointMake(self.view.bounds.size.width/2,200); self.spinner.color = [UIColor colorWithRed:0.5 green:0.3 blue:1.0 alpha:1.0]; self.spinner.hidesWhenStopped = YES;
               [self.view addSubview:self.spinner];
-
-              UIButton *execBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              execBtn.frame = CGRectMake(10, self.view.bounds.size.height - 80, 95, 42);
-              [execBtn setTitle:@"Execute" forState:UIControlStateNormal];
-              execBtn.backgroundColor = [UIColor colorWithRed:0.4 green:0.3 blue:1.0 alpha:1.0];
-              [execBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-              execBtn.layer.cornerRadius = 8;
-              [execBtn addTarget:self action:@selector(execute) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:execBtn];
-
-              UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              clearBtn.frame = CGRectMake(115, self.view.bounds.size.height - 80, 95, 42);
-              [clearBtn setTitle:@"Clear" forState:UIControlStateNormal];
-              clearBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-              [clearBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-              clearBtn.layer.cornerRadius = 8;
-              [clearBtn addTarget:self action:@selector(clear) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:clearBtn];
-
-              UIButton *loadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              loadBtn.frame = CGRectMake(220, self.view.bounds.size.height - 80, 95, 42);
-              [loadBtn setTitle:@"Load" forState:UIControlStateNormal];
-              loadBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.5 blue:0.9 alpha:1.0];
-              [loadBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-              loadBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-              loadBtn.layer.cornerRadius = 8;
-              [loadBtn addTarget:self action:@selector(showScriptBlox) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:loadBtn];
-
-              self.scripts = [NSMutableArray array];
-              self.consoleText = [NSMutableString string];
-              self.selectedTab = 0;
-
+              UIButton *execBtn = [UIButton buttonWithType:UIButtonTypeSystem]; execBtn.frame = CGRectMake(10,self.view.bounds.size.height-80,95,42);
+              [execBtn setTitle:@"Execute" forState:UIControlStateNormal]; execBtn.backgroundColor = [UIColor colorWithRed:0.4 green:0.3 blue:1.0 alpha:1.0];
+              [execBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15]; execBtn.layer.cornerRadius = 8;
+              [execBtn addTarget:self action:@selector(execute) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:execBtn];
+              UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem]; clearBtn.frame = CGRectMake(115,self.view.bounds.size.height-80,95,42);
+              [clearBtn setTitle:@"Clear" forState:UIControlStateNormal]; clearBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+              [clearBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15]; clearBtn.layer.cornerRadius = 8;
+              [clearBtn addTarget:self action:@selector(clear) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:clearBtn];
+              UIButton *loadBtn = [UIButton buttonWithType:UIButtonTypeSystem]; loadBtn.frame = CGRectMake(220,self.view.bounds.size.height-80,95,42);
+              [loadBtn setTitle:@"Load" forState:UIControlStateNormal]; loadBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.5 blue:0.9 alpha:1.0];
+              [loadBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; loadBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15]; loadBtn.layer.cornerRadius = 8;
+              [loadBtn addTarget:self action:@selector(showScriptBlox) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:loadBtn];
+              self.scripts = [NSMutableArray array]; self.consoleText = [NSMutableString string]; self.selectedTab = 0;
               [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handlePrint:) name:@"SRFXPrint" object:nil];
               [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleError:) name:@"SRFXError" object:nil];
-
               [self loadTrendingScripts];
           }
-
-          - (void)loadTrendingScripts {
-              [self.spinner startAnimating];
-              [SRFXScriptBlox fetchTrending:^(NSArray *scripts) {
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      [self.scripts removeAllObjects];
-                      [self.scripts addObjectsFromArray:scripts];
-                      [self.scriptList reloadData];
-                      [self.spinner stopAnimating];
-                  });
-              }];
+          - (void)loadTrendingScripts { [self.spinner startAnimating]; [SRFXScriptBlox fetchTrending:^(NSArray *s){ dispatch_async(dispatch_get_main_queue(), ^{ [self.scripts removeAllObjects]; [self.scripts addObjectsFromArray:s]; [self.scriptList reloadData]; [self.spinner stopAnimating]; }); }]; }
+          - (void)tabTapped:(UIButton *)s { self.selectedTab = s.tag; self.editor.hidden = (self.selectedTab!=0); self.scriptList.hidden = (self.selectedTab!=1); self.searchBar.hidden = (self.selectedTab!=1); self.consoleView.hidden = (self.selectedTab!=2); if (self.selectedTab==1 && self.scripts.count==0) [self loadTrendingScripts]; }
+          - (void)showScriptBlox { self.selectedTab = 1; self.editor.hidden = YES; self.scriptList.hidden = NO; self.searchBar.hidden = NO; self.consoleView.hidden = YES; }
+          - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return self.scripts.count; }
+          - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+              UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c"]; if (!c) { c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"c"]; c.backgroundColor = UIColor.clearColor; c.textLabel.textColor = UIColor.whiteColor; c.detailTextLabel.textColor = UIColor.lightGrayColor; }
+              NSDictionary *s = self.scripts[ip.row]; c.textLabel.text = s[@"title"]; c.detailTextLabel.text = [NSString stringWithFormat:@"By %@  •  %@", s[@"author"], s[@"game"]]; return c;
           }
-
-          - (void)tabTapped:(UIButton *)sender {
-              self.selectedTab = sender.tag;
-              self.editor.hidden = (self.selectedTab != 0);
-              self.scriptList.hidden = (self.selectedTab != 1);
-              self.searchBar.hidden = (self.selectedTab != 1);
-              self.consoleView.hidden = (self.selectedTab != 2);
-              if (self.selectedTab == 1 && self.scripts.count == 0) [self loadTrendingScripts];
-          }
-
-          - (void)showScriptBlox {
-              self.selectedTab = 1;
-              self.editor.hidden = YES;
-              self.scriptList.hidden = NO;
-              self.searchBar.hidden = NO;
-              self.consoleView.hidden = YES;
-          }
-
-          - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.scripts.count; }
-
-          - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-              UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"cell"];
-              if (!cell) {
-                  cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"cell"];
-                  cell.backgroundColor = UIColor.clearColor;
-                  cell.textLabel.textColor = UIColor.whiteColor;
-                  cell.detailTextLabel.textColor = UIColor.lightGrayColor;
-              }
-              NSDictionary *s = self.scripts[indexPath.row];
-              cell.textLabel.text = s[@"title"];
-              cell.detailTextLabel.text = [NSString stringWithFormat:@"By %@  •  %@", s[@"author"], s[@"game"]];
-              return cell;
-          }
-
-          - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-              [tableView deselectRowAtIndexPath:indexPath animated:YES];
-              NSDictionary *s = self.scripts[indexPath.row];
-              [self.spinner startAnimating];
-              [SRFXScriptBlox fetchScript:s[@"slug"] completion:^(NSString *code) {
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      self.editor.text = code;
-                      self.selectedTab = 0;
-                      self.editor.hidden = NO;
-                      self.scriptList.hidden = YES;
-                      self.searchBar.hidden = YES;
-                      [self.spinner stopAnimating];
-                  });
-              }];
-          }
-
-          - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
-              [searchBar resignFirstResponder];
-              if (searchBar.text.length == 0) return;
-              [self.spinner startAnimating];
-              [SRFXScriptBlox search:searchBar.text completion:^(NSArray *results) {
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      [self.scripts removeAllObjects];
-                      [self.scripts addObjectsFromArray:results];
-                      [self.scriptList reloadData];
-                      [self.spinner stopAnimating];
-                  });
-              }];
-          }
-
-          - (void)handlePrint:(NSNotification *)note {
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [self.consoleText appendFormat:@"%@\n", note.object];
-                  self.consoleView.text = self.consoleText;
-              });
-          }
-
-          - (void)handleError:(NSNotification *)note {
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [self.consoleText appendFormat:@"[ERROR] %@\n", note.object];
-                  self.consoleView.text = self.consoleText;
-              });
-          }
-
-          - (void)execute {
-              if (self.editor.text.length > 0) SRFXLuaExecute(self.editor.text.UTF8String);
-          }
-
-          - (void)clear {
-              self.editor.text = @"";
-              self.consoleText = [NSMutableString string];
-              self.consoleView.text = @"";
-          }
-
+          - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip { [t deselectRowAtIndexPath:ip animated:YES]; NSDictionary *s = self.scripts[ip.row]; [self.spinner startAnimating]; [SRFXScriptBlox fetchScript:s[@"slug"] completion:^(NSString *code){ dispatch_async(dispatch_get_main_queue(), ^{ self.editor.text = code; self.selectedTab = 0; self.editor.hidden = NO; self.scriptList.hidden = YES; self.searchBar.hidden = YES; [self.spinner stopAnimating]; }); }]; }
+          - (void)searchBarSearchButtonClicked:(UISearchBar *)b { [b resignFirstResponder]; if (b.text.length==0) return; [self.spinner startAnimating]; [SRFXScriptBlox search:b.text completion:^(NSArray *r){ dispatch_async(dispatch_get_main_queue(), ^{ [self.scripts removeAllObjects]; [self.scripts addObjectsFromArray:r]; [self.scriptList reloadData]; [self.spinner stopAnimating]; }); }]; }
+          - (void)handlePrint:(NSNotification *)n { dispatch_async(dispatch_get_main_queue(), ^{ [self.consoleText appendFormat:@"%@\n", n.object]; self.consoleView.text = self.consoleText; }); }
+          - (void)handleError:(NSNotification *)n { dispatch_async(dispatch_get_main_queue(), ^{ [self.consoleText appendFormat:@"[ERROR] %@\n", n.object]; self.consoleView.text = self.consoleText; }); }
+          - (void)execute { if (self.editor.text.length>0) SRFXLuaExecute(self.editor.text.UTF8String); }
+          - (void)clear { self.editor.text = @""; self.consoleText = [NSMutableString string]; self.consoleView.text = @""; }
           - (void)hide { self.view.window.hidden = YES; }
           - (void)minimize { self.view.window.hidden = YES; }
-
           @end
           EOF
 
-      - name: Compile Objective-C
+      - name: Compile
         run: |
           mkdir -p build
-          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/entry.o injector/dylib/entry.m -target arm64-apple-ios15.0
-          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXCore.o injector/dylib/SRFXCore.m -target arm64-apple-ios15.0
-          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXScriptBlox.o injector/dylib/SRFXScriptBlox.m -target arm64-apple-ios15.0
-          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXMainViewController.o SERFIX/UI/SRFXMainViewController.m -target arm64-apple-ios15.0
-
-      - name: Compile C++
-        run: |
-          xcrun -sdk iphoneos clang++ -c -std=c++17 -fobjc-arc -I./injector/dylib -I./injector/dylib/Core -I$LUA_INCLUDE -o build/SRFXLua.o injector/dylib/Core/SRFXLua.mm -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./SERFIX/UI -I$LUA_INCLUDE -o build/entry.o injector/dylib/entry.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXCore.o injector/dylib/SRFXCore.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXScriptBlox.o injector/dylib/SRFXScriptBlox.m -target arm64-apple-ios15.0
+          xcrun -sdk iphoneos clang -c -fobjc-arc -I./injector/dylib -I./SERFIX/UI -I$LUA_INCLUDE -o build/SRFXMainViewController.o SERFIX/UI/SRFXMainViewController.m -target arm64-apple-ios15.0
 
       - name: Link dylib
         run: |
-          xcrun -sdk iphoneos clang++ -shared \
-            -framework UIKit -framework Foundation \
-            -framework CoreGraphics -framework WebKit \
-            -framework QuartzCore -framework Metal \
-            -Wl,-force_load,$LUA_LIB/liblua.a \
-            -undefined dynamic_lookup \
-            -lc++ \
-            -target arm64-apple-ios15.0 \
-            -o build/serfix.dylib build/*.o
+          xcrun -sdk iphoneos clang++ -shared -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit -framework QuartzCore -framework Metal -Wl,-force_load,$LUA_LIB/liblua.a -undefined dynamic_lookup -lc++ -target arm64-apple-ios15.0 -o build/serfix.dylib build/*.o
 
-      - name: Patch IPA
+      - name: Patch and sign IPA
         run: |
           mkdir -p extracted
           unzip -q Roblox.ipa -d extracted/
@@ -845,18 +602,13 @@ jobs:
           plutil -convert xml1 "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName SERFIX" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SERFIX" "$APP/Info.plist"
           plutil -convert binary1 "$APP/Info.plist"
-
-      - name: Sign bundle
-        run: |
-          APP=$(find extracted/Payload -name "*.app" | head -1)
           codesign -f -s - "$APP/serfix.dylib"
           find "$APP/Frameworks" \( -name "*.dylib" -o -name "*.framework" \) 2>/dev/null | while read f; do codesign -f -s - "$f" 2>/dev/null || true; done
           codesign -f -s - "$APP/Roblox"
           codesign -f -s - --deep "$APP"
 
       - name: Package IPA
-        run: |
-          cd extracted && zip -qr ../SERFIX.ipa Payload/ && cd ..
+        run: cd extracted && zip -qr ../SERFIX.ipa Payload/ && cd ..
 
       - name: Upload
         uses: actions/upload-artifact@v4

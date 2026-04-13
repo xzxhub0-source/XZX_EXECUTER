@@ -1,10 +1,7 @@
 #import "SRFXMainViewController.h"
 #import "SRFXScriptBlox.h"
-#include "Core/SRFXLua.h"
+void SRFXLuaExecute(const char *script);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SERFIX Design Tokens
-// ─────────────────────────────────────────────────────────────────────────────
 #define SRFX_BG       [UIColor colorWithRed:0.04 green:0.04 blue:0.09 alpha:0.97]
 #define SRFX_SURFACE  [UIColor colorWithRed:0.08 green:0.07 blue:0.14 alpha:1.0]
 #define SRFX_SURFACE2 [UIColor colorWithRed:0.11 green:0.10 blue:0.18 alpha:1.0]
@@ -14,20 +11,17 @@
 #define SRFX_TEXT     [UIColor colorWithRed:0.92 green:0.88 blue:1.00 alpha:1.0]
 #define SRFX_MUTED    [UIColor colorWithRed:0.55 green:0.50 blue:0.68 alpha:1.0]
 
-// Panel size
 #define PANEL_W  MIN(UIScreen.mainScreen.bounds.size.width  - 24, 640.0)
 #define PANEL_H  MIN(UIScreen.mainScreen.bounds.size.height - 80, 480.0)
 #define SIDEBAR_W 52.0
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Script Card Cell (thumbnail grid)
-// ─────────────────────────────────────────────────────────────────────────────
 @interface SRFXScriptCell : UITableViewCell
 @property (nonatomic, strong) UIView   *thumb;
 @property (nonatomic, strong) UILabel  *titleLbl;
 @property (nonatomic, strong) UILabel  *gameLbl;
 @property (nonatomic, strong) UILabel  *viewsLbl;
 @property (nonatomic, strong) UIButton *runBtn;
+- (void)configureWithData:(NSDictionary *)d gradientIndex:(NSInteger)idx;
 @end
 
 @implementation SRFXScriptCell
@@ -37,61 +31,45 @@
     if (!self) return nil;
     self.backgroundColor = UIColor.clearColor;
     self.selectionStyle  = UITableViewCellSelectionStyleNone;
-
-    // Card background
     self.contentView.backgroundColor = SRFX_SURFACE2;
     self.contentView.layer.cornerRadius = 12;
     self.contentView.layer.borderWidth  = 1;
     self.contentView.layer.borderColor  = SRFX_BORDER.CGColor;
     self.contentView.layer.masksToBounds = YES;
-
-    // Thumbnail area with gradient
     self.thumb = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 90, 72)];
     self.thumb.layer.masksToBounds = YES;
     [self.contentView addSubview:self.thumb];
-
     CAGradientLayer *g = [CAGradientLayer layer];
     g.frame  = CGRectMake(0, 0, 90, 72);
     g.colors = @[(id)SRFX_PURPLE.CGColor, (id)SRFX_PINK.CGColor];
     g.startPoint = CGPointMake(0, 0);
     g.endPoint   = CGPointMake(1, 1);
     [self.thumb.layer addSublayer:g];
-
     UILabel *iconLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 90, 72)];
     iconLbl.text          = @"</>";
     iconLbl.textColor     = [UIColor colorWithWhite:1 alpha:0.5];
     iconLbl.font          = [UIFont boldSystemFontOfSize:20];
     iconLbl.textAlignment = NSTextAlignmentCenter;
     [self.thumb addSubview:iconLbl];
-
-    // Title
     self.titleLbl = [[UILabel alloc] init];
     self.titleLbl.textColor     = SRFX_TEXT;
     self.titleLbl.font          = [UIFont boldSystemFontOfSize:13];
     self.titleLbl.numberOfLines = 2;
     [self.contentView addSubview:self.titleLbl];
-
-    // Game
     self.gameLbl = [[UILabel alloc] init];
     self.gameLbl.textColor = SRFX_MUTED;
     self.gameLbl.font      = [UIFont systemFontOfSize:11];
     [self.contentView addSubview:self.gameLbl];
-
-    // Views
     self.viewsLbl = [[UILabel alloc] init];
     self.viewsLbl.textColor = SRFX_MUTED;
     self.viewsLbl.font      = [UIFont systemFontOfSize:10];
     [self.contentView addSubview:self.viewsLbl];
-
-    // Load button
     self.runBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [self.runBtn setTitle:@"Load" forState:UIControlStateNormal];
     [self.runBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     self.runBtn.titleLabel.font    = [UIFont boldSystemFontOfSize:12];
     self.runBtn.layer.cornerRadius = 8;
     [self.contentView addSubview:self.runBtn];
-
-    // Gradient on button
     CAGradientLayer *bg = [CAGradientLayer layer];
     bg.colors     = @[(id)SRFX_PURPLE.CGColor, (id)SRFX_PINK.CGColor];
     bg.startPoint = CGPointMake(0, 0.5);
@@ -99,7 +77,6 @@
     bg.cornerRadius = 8;
     bg.frame = CGRectMake(0, 0, 58, 28);
     [self.runBtn.layer insertSublayer:bg atIndex:0];
-
     return self;
 }
 
@@ -122,8 +99,6 @@
     self.gameLbl.text  = d[@"game"]  ?: @"Universal";
     NSString *views    = d[@"views"] ? [NSString stringWithFormat:@"👁 %@", d[@"views"]] : @"";
     self.viewsLbl.text = views;
-
-    // Vary gradient per row for visual variety
     static NSArray *palettes = nil;
     if (!palettes) palettes = @[
         @[@"#8B2FC9",@"#FF1F8F"],
@@ -133,25 +108,23 @@
         @[@"#C92F4B",@"#FF2FBF"],
     ];
     NSArray *pair = palettes[idx % palettes.count];
-    auto hexToColor = ^UIColor *(NSString *hex) {
-        unsigned int rgb = 0;
-        [[NSScanner scannerWithString:[hex substringFromIndex:1]] scanHexInt:&rgb];
-        return [UIColor colorWithRed:((rgb>>16)&0xFF)/255.0
-                               green:((rgb>>8)&0xFF)/255.0
-                                blue:(rgb&0xFF)/255.0 alpha:1];
-    };
+    unsigned int rgb1 = 0, rgb2 = 0;
+    [[NSScanner scannerWithString:[pair[0] substringFromIndex:1]] scanHexInt:&rgb1];
+    [[NSScanner scannerWithString:[pair[1] substringFromIndex:1]] scanHexInt:&rgb2];
+    UIColor *color1 = [UIColor colorWithRed:((rgb1>>16)&0xFF)/255.0
+                                      green:((rgb1>>8)&0xFF)/255.0
+                                       blue:(rgb1&0xFF)/255.0 alpha:1];
+    UIColor *color2 = [UIColor colorWithRed:((rgb2>>16)&0xFF)/255.0
+                                      green:((rgb2>>8)&0xFF)/255.0
+                                       blue:(rgb2&0xFF)/255.0 alpha:1];
     for (CALayer *l in self.thumb.layer.sublayers) {
         if ([l isKindOfClass:[CAGradientLayer class]])
-            ((CAGradientLayer *)l).colors = @[(id)hexToColor(pair[0]).CGColor,
-                                              (id)hexToColor(pair[1]).CGColor];
+            ((CAGradientLayer *)l).colors = @[(id)color1.CGColor, (id)color2.CGColor];
     }
 }
 
 @end
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sidebar icon button
-// ─────────────────────────────────────────────────────────────────────────────
 @interface SRFXSidebarButton : UIButton
 @property (nonatomic, assign) BOOL srfxSelected;
 @end
@@ -172,46 +145,19 @@
 }
 @end
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main VC
-// ─────────────────────────────────────────────────────────────────────────────
-@interface SRFXMainViewController ()
-    <UITableViewDelegate, UITableViewDataSource, UISearchBarDelegate>
-
-// Layout containers
+@interface SRFXMainViewController () <UITableViewDelegate, UITableViewDataSource, UISearchBarDelegate>
 @property (nonatomic, strong) UIView        *panel;
 @property (nonatomic, strong) UIView        *sidebar;
 @property (nonatomic, strong) UIView        *contentArea;
-
-// Sidebar buttons
 @property (nonatomic, strong) NSArray<SRFXSidebarButton*> *sideBtns;
-
-// Header
 @property (nonatomic, strong) UIView        *header;
-
-// ScriptBlox
 @property (nonatomic, strong) UISearchBar   *searchBar;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
-
-// Editor extras
 @property (nonatomic, strong) UITextView    *lineNumbers;
-
-// Misc
 @property (nonatomic, assign) BOOL           panelVisible;
-@property (nonatomic, strong) UIView        *tabIndicator;
 @end
 
 @implementation SRFXMainViewController
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-+ (UIColor *)colorFromHex:(NSString *)hex {
-    unsigned int rgb = 0;
-    [[NSScanner scannerWithString:[hex substringFromIndex:1]] scanHexInt:&rgb];
-    return [UIColor colorWithRed:((rgb>>16)&0xFF)/255.0
-                           green:((rgb>>8) &0xFF)/255.0
-                            blue:( rgb     &0xFF)/255.0 alpha:1];
-}
 
 - (CAGradientLayer *)purplePinkGradientForFrame:(CGRect)f {
     CAGradientLayer *g = [CAGradientLayer layer];
@@ -222,12 +168,9 @@
     return g;
 }
 
-// ─── Lifecycle ───────────────────────────────────────────────────────────────
-
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.clearColor;
-
     [self buildFloatButton];
     [self buildPanel];
     [self buildSidebar];
@@ -235,16 +178,13 @@
     [self buildEditorTab];
     [self buildHubTab];
     [self buildConsoleTab];
-
     self.panelVisible = NO;
     self.panel.hidden  = YES;
     self.panel.alpha   = 0;
     self.selectedTab   = 0;
     [self switchToTab:0];
-
     self.scripts     = [NSMutableArray array];
     self.consoleText = [NSMutableString string];
-
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onPrint:)    name:@"SRFXPrint" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onError:)    name:@"SRFXError" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onLoadScript:) name:@"SRFXLoadScript" object:nil];
@@ -259,8 +199,6 @@
     [self relayoutContentArea];
 }
 
-// ─── Float Button ────────────────────────────────────────────────────────────
-
 - (void)buildFloatButton {
     self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     self.floatBtn.frame = CGRectMake(20, 100, 50, 50);
@@ -270,24 +208,16 @@
     self.floatBtn.layer.shadowOpacity = 0.7;
     self.floatBtn.layer.shadowRadius  = 12;
     self.floatBtn.layer.shadowOffset  = CGSizeZero;
-
-    // Gradient bg
     CAGradientLayer *g = [self purplePinkGradientForFrame:CGRectMake(0,0,50,50)];
     g.cornerRadius = 25;
     [self.floatBtn.layer insertSublayer:g atIndex:0];
-
     [self.floatBtn setTitle:@"S" forState:UIControlStateNormal];
     [self.floatBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     self.floatBtn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
-
     [self.floatBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFloatBtn:)];
     [self.floatBtn addGestureRecognizer:pan];
-
     [self.view addSubview:self.floatBtn];
-
-    // Pulse animation
     CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"shadowRadius"];
     pulse.fromValue = @8; pulse.toValue = @18;
     pulse.duration  = 1.4; pulse.autoreverses = YES;
@@ -297,12 +227,9 @@
 
 - (void)dragFloatBtn:(UIPanGestureRecognizer *)gr {
     CGPoint t = [gr translationInView:self.view];
-    self.floatBtn.center = CGPointMake(self.floatBtn.center.x + t.x,
-                                       self.floatBtn.center.y + t.y);
+    self.floatBtn.center = CGPointMake(self.floatBtn.center.x + t.x, self.floatBtn.center.y + t.y);
     [gr setTranslation:CGPointZero inView:self.view];
 }
-
-// ─── Panel ───────────────────────────────────────────────────────────────────
 
 - (void)buildPanel {
     CGFloat pw = PANEL_W, ph = PANEL_H;
@@ -311,56 +238,34 @@
     self.panel.layer.cornerRadius = 18;
     self.panel.layer.masksToBounds = YES;
     self.panel.layer.borderWidth  = 1.5;
-
-    // Animated gradient border via CAGradientLayer mask trick
-    CAGradientLayer *borderGrad = [CAGradientLayer layer];
-    borderGrad.frame  = CGRectMake(-1.5, -1.5, pw + 3, ph + 3);
-    borderGrad.colors = @[(id)SRFX_PURPLE.CGColor, (id)SRFX_PINK.CGColor,
-                          (id)SRFX_PURPLE.CGColor];
-    borderGrad.startPoint = CGPointMake(0, 0);
-    borderGrad.endPoint   = CGPointMake(1, 1);
-    borderGrad.cornerRadius = 18;
     self.panel.layer.borderColor = SRFX_PURPLE.CGColor;
-
-    // Drop shadow
     self.panel.layer.shadowColor   = SRFX_PURPLE.CGColor;
     self.panel.layer.shadowOpacity = 0.5;
     self.panel.layer.shadowRadius  = 24;
     self.panel.layer.shadowOffset  = CGSizeZero;
-
     [self.view addSubview:self.panel];
 }
-
-// ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 - (void)buildSidebar {
     CGFloat ph = PANEL_H;
     self.sidebar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, SIDEBAR_W, ph)];
     self.sidebar.backgroundColor = SRFX_SURFACE;
     [self.panel addSubview:self.sidebar];
-
-    // Right border
     UIView *border = [[UIView alloc] initWithFrame:CGRectMake(SIDEBAR_W-1, 0, 1, ph)];
     border.backgroundColor = SRFX_BORDER;
     [self.sidebar addSubview:border];
-
-    // Logo area
     UILabel *logo = [[UILabel alloc] initWithFrame:CGRectMake(0, 14, SIDEBAR_W, 26)];
     logo.text          = @"S";
     logo.textColor     = SRFX_PINK;
     logo.font          = [UIFont boldSystemFontOfSize:22];
     logo.textAlignment = NSTextAlignmentCenter;
     [self.sidebar addSubview:logo];
-
     UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(8, 46, SIDEBAR_W-16, 1)];
     sep.backgroundColor = SRFX_BORDER;
     [self.sidebar addSubview:sep];
-
-    // Tab buttons (icons as emoji/text)
     NSArray *icons = @[@"< >", @"◎", @"⌨", @"≡"];
     NSArray *tips  = @[@"Editor", @"ScriptBlox", @"Console", @"Settings"];
     NSMutableArray *btns = [NSMutableArray array];
-
     for (NSInteger i = 0; i < (NSInteger)icons.count; i++) {
         SRFXSidebarButton *btn = [SRFXSidebarButton buttonWithType:UIButtonTypeCustom];
         btn.frame = CGRectMake(6, 56 + i*52, SIDEBAR_W-12, 42);
@@ -374,8 +279,6 @@
         [btns addObject:btn];
     }
     self.sideBtns = [btns copy];
-
-    // Close button at bottom
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     closeBtn.frame = CGRectMake(6, ph - 52, SIDEBAR_W-12, 38);
     closeBtn.layer.cornerRadius = 10;
@@ -385,8 +288,6 @@
     closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [closeBtn addTarget:self action:@selector(closePanel) forControlEvents:UIControlEventTouchUpInside];
     [self.sidebar addSubview:closeBtn];
-
-    // Tip labels
     for (NSInteger i = 0; i < (NSInteger)tips.count; i++) {
         UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(6, 94 + i*52, SIDEBAR_W-12, 12)];
         tip.text          = tips[i];
@@ -397,45 +298,32 @@
     }
 }
 
-// ─── Header ──────────────────────────────────────────────────────────────────
-
 - (void)buildHeader {
     CGFloat pw = PANEL_W;
     self.header = [[UIView alloc] initWithFrame:CGRectMake(SIDEBAR_W, 0, pw - SIDEBAR_W, 44)];
     self.header.backgroundColor = SRFX_SURFACE;
     [self.panel addSubview:self.header];
-
-    // Gradient accent line at bottom of header
     CAGradientLayer *line = [self purplePinkGradientForFrame:CGRectMake(0, 43, pw - SIDEBAR_W, 1)];
     [self.header.layer addSublayer:line];
-
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 150, 44)];
     title.text      = @"SERFIX";
     title.textColor = SRFX_TEXT;
     title.font      = [UIFont boldSystemFontOfSize:16];
     [self.header addSubview:title];
-
     UILabel *version = [[UILabel alloc] initWithFrame:CGRectMake(80, 6, 60, 14)];
     version.text      = @"v2.5";
     version.font      = [UIFont systemFontOfSize:10];
     version.textColor = SRFX_MUTED;
     [self.header addSubview:version];
-
-    // Drag handle
     UIPanGestureRecognizer *drag = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPanel:)];
     [self.header addGestureRecognizer:drag];
-
-    // Content area (everything below header, right of sidebar)
     self.contentArea = [[UIView alloc] init];
     self.contentArea.backgroundColor = SRFX_BG;
     self.contentArea.clipsToBounds   = YES;
     [self.panel addSubview:self.contentArea];
 }
 
-// ─── Editor Tab ──────────────────────────────────────────────────────────────
-
 - (void)buildEditorTab {
-    // Line numbers + editor in contentArea (frames set in relayoutContentArea)
     self.lineNumbers = [[UITextView alloc] init];
     self.lineNumbers.backgroundColor   = SRFX_SURFACE;
     self.lineNumbers.textColor         = SRFX_MUTED;
@@ -447,7 +335,6 @@
     self.lineNumbers.text = @"1\n2";
     self.lineNumbers.tag  = 10;
     [self.contentArea addSubview:self.lineNumbers];
-
     self.editor = [[UITextView alloc] init];
     self.editor.backgroundColor        = SRFX_BG;
     self.editor.textColor              = SRFX_TEXT;
@@ -459,19 +346,13 @@
     self.editor.textContainerInset     = UIEdgeInsetsMake(10, 8, 10, 8);
     self.editor.tag  = 11;
     [self.contentArea addSubview:self.editor];
-
-    // Toolbar at bottom
     UIView *toolbar = [[UIView alloc] init];
     toolbar.backgroundColor = SRFX_SURFACE;
     toolbar.tag = 12;
     [self.contentArea addSubview:toolbar];
-
-    // Accent top border on toolbar
     UIView *tBorder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 1000, 1)];
     tBorder.backgroundColor = SRFX_BORDER;
     [toolbar addSubview:tBorder];
-
-    // Execute button
     UIButton *execBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     execBtn.tag = 20;
     execBtn.layer.cornerRadius = 8;
@@ -483,8 +364,6 @@
     [execBtn.layer insertSublayer:eg atIndex:0];
     [execBtn addTarget:self action:@selector(execute) forControlEvents:UIControlEventTouchUpInside];
     [toolbar addSubview:execBtn];
-
-    // Clear button
     UIButton *clrBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     clrBtn.tag = 21;
     clrBtn.layer.cornerRadius  = 8;
@@ -496,8 +375,6 @@
     clrBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
     [clrBtn addTarget:self action:@selector(clearEditor) forControlEvents:UIControlEventTouchUpInside];
     [toolbar addSubview:clrBtn];
-
-    // Save button
     UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     saveBtn.tag = 22;
     saveBtn.layer.cornerRadius = 8;
@@ -511,10 +388,7 @@
     [toolbar addSubview:saveBtn];
 }
 
-// ─── ScriptBlox Hub Tab ──────────────────────────────────────────────────────
-
 - (void)buildHubTab {
-    // Search bar
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.tag = 30;
     self.searchBar.placeholder  = @"Search scripts...";
@@ -527,16 +401,12 @@
     self.searchBar.searchTextField.font            = [UIFont systemFontOfSize:14];
     self.searchBar.hidden = YES;
     [self.contentArea addSubview:self.searchBar];
-
-    // Spinner
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     self.spinner.color = SRFX_PINK;
     self.spinner.hidesWhenStopped = YES;
     self.spinner.tag  = 31;
     self.spinner.hidden = YES;
     [self.contentArea addSubview:self.spinner];
-
-    // Section label
     UILabel *trending = [[UILabel alloc] init];
     trending.text      = @"TRENDING SCRIPTS";
     trending.font      = [UIFont boldSystemFontOfSize:10];
@@ -544,8 +414,6 @@
     trending.tag = 32;
     trending.hidden = YES;
     [self.contentArea addSubview:trending];
-
-    // Table
     self.scriptList = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.scriptList.tag = 33;
     self.scriptList.backgroundColor = UIColor.clearColor;
@@ -556,11 +424,8 @@
     self.scriptList.contentInset    = UIEdgeInsetsMake(4, 0, 4, 0);
     self.scriptList.hidden          = YES;
     [self.contentArea addSubview:self.scriptList];
-
     [self loadTrending];
 }
-
-// ─── Console Tab ─────────────────────────────────────────────────────────────
 
 - (void)buildConsoleTab {
     self.consoleView = [[UITextView alloc] init];
@@ -572,8 +437,6 @@
     self.consoleView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
     self.consoleView.hidden = YES;
     [self.contentArea addSubview:self.consoleView];
-
-    // Clear console button
     UIButton *clrConsole = [UIButton buttonWithType:UIButtonTypeCustom];
     clrConsole.tag = 41;
     clrConsole.layer.cornerRadius = 6;
@@ -588,19 +451,14 @@
     [self.contentArea addSubview:clrConsole];
 }
 
-// ─── Layout ──────────────────────────────────────────────────────────────────
-
 - (void)relayoutContentArea {
     CGFloat pw = self.panel.bounds.size.width;
     CGFloat ph = self.panel.bounds.size.height;
     CGFloat cw = pw - SIDEBAR_W;
-    CGFloat ch = ph - 44;  // below header
-
+    CGFloat ch = ph - 44;
     self.header.frame      = CGRectMake(SIDEBAR_W, 0, cw, 44);
     self.sidebar.frame     = CGRectMake(0, 0, SIDEBAR_W, ph);
     self.contentArea.frame = CGRectMake(SIDEBAR_W, 44, cw, ch);
-
-    // Line numbers + editor
     UIView *ln = [self.contentArea viewWithTag:10];
     UIView *ed = [self.contentArea viewWithTag:11];
     UIView *tb = [self.contentArea viewWithTag:12];
@@ -609,21 +467,17 @@
     ln.frame = CGRectMake(0, 0, lnW, ch - tbH);
     ed.frame = CGRectMake(lnW, 0, cw - lnW, ch - tbH);
     tb.frame = CGRectMake(0, ch - tbH, cw, tbH);
-
-    // Toolbar buttons
     UIView *execBtn = [tb viewWithTag:20];
     UIView *clrBtn  = [tb viewWithTag:21];
     UIView *saveBtn = [tb viewWithTag:22];
     CGFloat btnY = 8;
-    execBtn.frame = CGRectMake(10,       btnY, 110, 36);
-    clrBtn.frame  = CGRectMake(130,      btnY, 80,  36);
-    saveBtn.frame = CGRectMake(220,      btnY, 70,  36);
+    execBtn.frame = CGRectMake(10, btnY, 110, 36);
+    clrBtn.frame  = CGRectMake(130, btnY, 80, 36);
+    saveBtn.frame = CGRectMake(220, btnY, 70, 36);
     for (UIView *b in @[execBtn, clrBtn, saveBtn])
         for (CALayer *l in b.layer.sublayers)
             if ([l isKindOfClass:[CAGradientLayer class]])
                 l.frame = b.bounds;
-
-    // Hub elements
     UIView *sb  = [self.contentArea viewWithTag:30];
     UIView *sp  = [self.contentArea viewWithTag:31];
     UIView *tl  = [self.contentArea viewWithTag:32];
@@ -632,15 +486,11 @@
     sp.center = CGPointMake(cw/2, ch/2);
     tl.frame  = CGRectMake(12, 50, cw - 24, 14);
     lst.frame = CGRectMake(0, 66, cw, ch - 66);
-
-    // Console elements
     UIView *cv  = [self.contentArea viewWithTag:40];
     UIView *ccl = [self.contentArea viewWithTag:41];
     cv.frame  = CGRectMake(0, 0, cw, ch - 42);
     ccl.frame = CGRectMake(cw/2 - 60, ch - 36, 120, 28);
 }
-
-// ─── Tab switching ────────────────────────────────────────────────────────────
 
 - (void)sidebarTap:(UIButton *)sender { [self switchToTab:sender.tag]; }
 
@@ -648,8 +498,6 @@
     self.selectedTab = idx;
     for (SRFXSidebarButton *b in self.sideBtns)
         b.srfxSelected = (b.tag == idx);
-
-    // Hide all
     NSArray *editorViews  = @[[self.contentArea viewWithTag:10],
                               [self.contentArea viewWithTag:11],
                               [self.contentArea viewWithTag:12]];
@@ -659,18 +507,14 @@
                               [self.contentArea viewWithTag:33]];
     NSArray *consoleViews = @[[self.contentArea viewWithTag:40],
                               [self.contentArea viewWithTag:41]];
-
     for (UIView *v in editorViews)  v.hidden = (idx != 0);
     for (UIView *v in hubViews)     v.hidden = (idx != 1);
     for (UIView *v in consoleViews) v.hidden = (idx != 2);
 }
 
-// ─── Toggle / Drag panel ─────────────────────────────────────────────────────
-
 - (void)togglePanel {
     self.panelVisible = !self.panelVisible;
     self.panel.hidden = NO;
-
     [UIView animateWithDuration:0.28 delay:0
         usingSpringWithDamping:0.82 initialSpringVelocity:0.4
         options:UIViewAnimationOptionCurveEaseOut
@@ -679,7 +523,6 @@
             self.panel.transform = self.panelVisible
                 ? CGAffineTransformIdentity
                 : CGAffineTransformMakeScale(0.90, 0.90);
-            // Rotate float button S ↔ X
             self.floatBtn.transform = self.panelVisible
                 ? CGAffineTransformMakeRotation(M_PI_4)
                 : CGAffineTransformIdentity;
@@ -688,18 +531,13 @@
         }];
 }
 
-- (void)closePanel {
-    self.panelVisible = YES;
-    [self togglePanel];
-}
+- (void)closePanel { self.panelVisible = YES; [self togglePanel]; }
 
 - (void)dragPanel:(UIPanGestureRecognizer *)gr {
     CGPoint t = [gr translationInView:self.view];
     self.panel.center = CGPointMake(self.panel.center.x + t.x, self.panel.center.y + t.y);
     [gr setTranslation:CGPointZero inView:self.view];
 }
-
-// ─── ScriptBlox ──────────────────────────────────────────────────────────────
 
 - (void)loadTrending {
     self.spinner.hidden = NO;
@@ -736,29 +574,12 @@
     SRFXScriptCell *cell = [t dequeueReusableCellWithIdentifier:@"sc"];
     if (!cell) cell = [[SRFXScriptCell alloc] initWithStyle:0 reuseIdentifier:@"sc"];
     [cell configureWithData:self.scripts[ip.row] gradientIndex:ip.row];
-    __weak typeof(self) weak = self;
     cell.runBtn.tag = ip.row;
     [cell.runBtn addTarget:self action:@selector(loadScriptRow:) forControlEvents:UIControlEventTouchUpInside];
-    (void)weak;
     return cell;
 }
 
-- (UIEdgeInsets)tableView:(UITableView *)t layoutMarginsForCell:(UITableViewCell *)c { return UIEdgeInsetsZero; }
-- (void)tableView:(UITableView *)t willDisplayCell:(UITableViewCell *)c forRowAtIndexPath:(NSIndexPath *)ip {
-    c.contentView.layer.cornerRadius = 10;
-    c.separatorInset = UIEdgeInsetsMake(0, c.bounds.size.width, 0, 0);
-}
-- (UIEdgeInsets)tableView:(UITableView *)t
-            separatorInsetForRow:(NSInteger)row { return UIEdgeInsetsZero; }
-
 - (CGFloat)tableView:(UITableView *)t heightForRowAtIndexPath:(NSIndexPath *)ip { return 88; }
-- (CGFloat)tableView:(UITableView *)t heightForHeaderInSection:(NSInteger)s     { return 0; }
-- (CGFloat)tableView:(UITableView *)t heightForFooterInSection:(NSInteger)s     { return 6; }
-
-- (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {
-    [t deselectRowAtIndexPath:ip animated:YES];
-    [self fetchAndLoadSlug:self.scripts[ip.row][@"slug"]];
-}
 
 - (void)loadScriptRow:(UIButton *)sender {
     NSInteger idx = sender.tag;
@@ -782,17 +603,13 @@
     }];
 }
 
-// ─── Editor actions ──────────────────────────────────────────────────────────
-
 - (void)execute {
     NSString *script = self.editor.text;
     if (script.length == 0) return;
-    // Flash execute button
     UIView *execBtn = [[self.contentArea viewWithTag:12] viewWithTag:20];
     [UIView animateWithDuration:0.08 animations:^{ execBtn.alpha = 0.5; }
         completion:^(BOOL _){ [UIView animateWithDuration:0.2 animations:^{ execBtn.alpha = 1; }]; }];
     SRFXLuaExecute(script.UTF8String);
-    // Auto-switch to console
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1*NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (self.consoleText.length > 0) [self switchToTab:2];
@@ -812,8 +629,6 @@
     [saved insertObject:script atIndex:0];
     if (saved.count > 20) [saved removeLastObject];
     [ud setObject:saved forKey:@"SRFXSaved"];
-
-    // Brief toast
     UILabel *toast = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 120, 32)];
     toast.text      = @"✓ Saved";
     toast.textColor = UIColor.whiteColor;
@@ -836,14 +651,10 @@
     self.lineNumbers.text = nums;
 }
 
-// ─── Console actions ─────────────────────────────────────────────────────────
-
 - (void)clearConsole {
     self.consoleText = [NSMutableString string];
     self.consoleView.text = @"";
 }
-
-// ─── Notifications ───────────────────────────────────────────────────────────
 
 - (void)onPrint:(NSNotification *)note {
     dispatch_async(dispatch_get_main_queue(), ^{

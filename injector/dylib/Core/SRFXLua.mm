@@ -6,7 +6,6 @@
 #include <pthread.h>
 #include <unistd.h>
 #include "SRFXLua.h"
-#import "srfx_security.h"
 
 static lua_State *L = NULL;
 static pthread_mutex_t lua_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -142,18 +141,12 @@ static int srfx_webhook          (lua_State *L) { (void)L; return 0; }
 static int srfx_setfpscap        (lua_State *L) { (void)L; return 0; }
 static int srfx_getfps           (lua_State *L) { lua_pushinteger(L,60); return 1; }
 static int srfx_getping          (lua_State *L) { lua_pushinteger(L,30); return 1; }
-static int srfx_gethwid          (lua_State *L) {
-    lua_pushstring(L, [SRFXSecurity spoofedHWID].UTF8String); return 1;
-}
-static int srfx_getuser          (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
-static int srfx_getexecutionpath (lua_State *L) { lua_pushstring(L,"SERFIX"); return 1; }
-static int srfx_clonefunction    (lua_State *L) { lua_pushvalue(L,1); return 1; }
-static int srfx_isfolder_ins     (lua_State *L) { lua_pushboolean(L,0); return 1; }
-static int srfx_isscript         (lua_State *L) { lua_pushboolean(L,0); return 1; }
+
 static int srfx_getinstances     (lua_State *L) { lua_newtable(L); return 1; }
 static int srfx_getscripts       (lua_State *L) { lua_newtable(L); return 1; }
 static int srfx_getloadedmodules (lua_State *L) { lua_newtable(L); return 1; }
 
+__attribute__((visibility("default")))
 void SRFXLuaInit(void) {
     if (L) return;
     L = luaL_newstate();
@@ -193,9 +186,6 @@ void SRFXLuaInit(void) {
     REG("loadfile",srfx_loadfile); REG("createnotification",srfx_createnotification);
     REG("webhook",srfx_webhook); REG("setfpscap",srfx_setfpscap);
     REG("getfps",srfx_getfps); REG("getping",srfx_getping);
-    REG("gethwid",srfx_gethwid); REG("getuser",srfx_getuser);
-    REG("getexecutionpath",srfx_getexecutionpath); REG("clonefunction",srfx_clonefunction);
-    REG("isfolder_ins",srfx_isfolder_ins); REG("isscript",srfx_isscript);
     REG("getinstances",srfx_getinstances); REG("getscripts",srfx_getscripts);
     REG("getloadedmodules",srfx_getloadedmodules);
     #undef REG
@@ -205,6 +195,7 @@ void SRFXLuaInit(void) {
     lua_setglobal(L,"serfix");
 }
 
+__attribute__((visibility("default")))
 void SRFXLuaExecute(const char *script) {
     if (!script || !script[0]) return;
     pthread_mutex_lock(&lua_mutex);
@@ -223,12 +214,14 @@ void SRFXLuaExecute(const char *script) {
     pthread_mutex_unlock(&lua_mutex);
 }
 
+__attribute__((visibility("default")))
 void SRFXLuaRegister(const char *name, int (*func)(lua_State*)) {
     pthread_mutex_lock(&lua_mutex);
     if (L && name && func) lua_register(L, name, func);
     pthread_mutex_unlock(&lua_mutex);
 }
 
+__attribute__((visibility("default")))
 lua_State* SRFXLuaState(void) { return L; }
 
 }

@@ -295,13 +295,8 @@
     self.consoleView.text = @"";
 }
 
-- (void)hide {
-    self.view.window.hidden = YES;
-}
-
-- (void)minimize {
-    self.view.window.hidden = YES;
-}
+- (void)hide { self.view.window.hidden = YES; }
+- (void)minimize { self.view.window.hidden = YES; }
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];

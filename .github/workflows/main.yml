@@ -457,6 +457,10 @@ jobs:
           static int srfx_getfps           (lua_State *L) { lua_pushinteger(L,60); return 1; }
           static int srfx_getping          (lua_State *L) { lua_pushinteger(L,30); return 1; }
 
+          static int srfx_getinstances     (lua_State *L) { lua_newtable(L); return 1; }
+          static int srfx_getscripts       (lua_State *L) { lua_newtable(L); return 1; }
+          static int srfx_getloadedmodules (lua_State *L) { lua_newtable(L); return 1; }
+
           __attribute__((visibility("default")))
           void SRFXLuaInit(void) {
               if (L) return;

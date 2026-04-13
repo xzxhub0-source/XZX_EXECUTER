@@ -11,9 +11,15 @@
                 NSArray *scripts = json[@"scripts"];
                 NSMutableArray *res = [NSMutableArray array];
                 for (NSDictionary *s in scripts) {
-                    [res addObject:@{@"title": s[@"title"]?:@"", @"author": s[@"author"]?:@"", @"game": s[@"game"]?:@"", @"slug": s[@"slug"]?:@""}];
+                    [res addObject:@{
+                        @"title": s[@"title"] ?: @"",
+                        @"author": s[@"author"] ?: @"",
+                        @"game": s[@"game"] ?: @"",
+                        @"slug": s[@"slug"] ?: @""
+                    }];
                 }
-                completion(res); return;
+                completion(res);
+                return;
             }
         }
         completion(@[]);
@@ -35,19 +41,19 @@
 }
 
 + (void)search:(NSString *)query completion:(void(^)(NSArray *))completion {
-    NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts?search=%@&limit=30",
-                        [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-    NSURL *url = [NSURL URLWithString:urlStr];
-    [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+    NSString *enc = [query stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    NSString *urlStr = [NSString stringWithFormat:@"https://scriptblox.com/api/scripts?search=%@&limit=30", enc];
+    [[[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlStr] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
         if (d) {
             id json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
             if ([json isKindOfClass:[NSDictionary class]]) {
                 NSArray *scripts = json[@"scripts"];
                 NSMutableArray *res = [NSMutableArray array];
                 for (NSDictionary *s in scripts) {
-                    [res addObject:@{@"title": s[@"title"]?:@"", @"slug": s[@"slug"]?:@""}];
+                    [res addObject:@{@"title": s[@"title"] ?: @"", @"slug": s[@"slug"] ?: @""}];
                 }
-                completion(res); return;
+                completion(res);
+                return;
             }
         }
         completion(@[]);

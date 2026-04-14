@@ -97,8 +97,7 @@ void SRFXLuaExecute(const char *script);
 - (void)configureWithData:(NSDictionary *)d gradientIndex:(NSInteger)idx {
     self.titleLbl.text = d[@"title"] ?: @"Untitled";
     self.gameLbl.text  = d[@"game"]  ?: @"Universal";
-    NSString *views    = d[@"views"] ? [NSString stringWithFormat:@"👁 %@", d[@"views"]] : @"";
-    self.viewsLbl.text = views;
+    self.viewsLbl.text = d[@"views"] ? [NSString stringWithFormat:@"👁 %@", d[@"views"]] : @"";
     static NSArray *palettes = nil;
     if (!palettes) palettes = @[
         @[@"#8B2FC9",@"#FF1F8F"],
@@ -108,17 +107,18 @@ void SRFXLuaExecute(const char *script);
         @[@"#C92F4B",@"#FF2FBF"],
     ];
     NSArray *pair = palettes[idx % palettes.count];
-    UIColor *(^hexToColor)(NSString *) = ^UIColor *(NSString *hex) {
-        unsigned int rgb = 0;
-        [[NSScanner scannerWithString:[hex substringFromIndex:1]] scanHexInt:&rgb];
-        return [UIColor colorWithRed:((rgb>>16)&0xFF)/255.0
-                               green:((rgb>>8)&0xFF)/255.0
-                                blue:(rgb&0xFF)/255.0 alpha:1];
-    };
+    unsigned int rgb1 = 0, rgb2 = 0;
+    [[NSScanner scannerWithString:[pair[0] substringFromIndex:1]] scanHexInt:&rgb1];
+    [[NSScanner scannerWithString:[pair[1] substringFromIndex:1]] scanHexInt:&rgb2];
+    UIColor *color1 = [UIColor colorWithRed:((rgb1>>16)&0xFF)/255.0
+                                      green:((rgb1>>8)&0xFF)/255.0
+                                       blue:(rgb1&0xFF)/255.0 alpha:1];
+    UIColor *color2 = [UIColor colorWithRed:((rgb2>>16)&0xFF)/255.0
+                                      green:((rgb2>>8)&0xFF)/255.0
+                                       blue:(rgb2&0xFF)/255.0 alpha:1];
     for (CALayer *l in self.thumb.layer.sublayers) {
         if ([l isKindOfClass:[CAGradientLayer class]])
-            ((CAGradientLayer *)l).colors = @[(id)hexToColor(pair[0]).CGColor,
-                                              (id)hexToColor(pair[1]).CGColor];
+            ((CAGradientLayer *)l).colors = @[(id)color1.CGColor, (id)color2.CGColor];
     }
 }
 
@@ -201,14 +201,13 @@ void SRFXLuaExecute(const char *script);
 - (void)buildFloatButton {
     self.floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     self.floatBtn.frame = CGRectMake(20, 100, 50, 50);
-    self.floatBtn.layer.cornerRadius = 25;
+    self.floatBtn.layer.cornerRadius = 12;
     self.floatBtn.layer.masksToBounds = YES;
     self.floatBtn.layer.shadowColor   = SRFX_PINK.CGColor;
     self.floatBtn.layer.shadowOpacity = 0.7;
     self.floatBtn.layer.shadowRadius  = 12;
     self.floatBtn.layer.shadowOffset  = CGSizeZero;
     CAGradientLayer *g = [self purplePinkGradientForFrame:CGRectMake(0,0,50,50)];
-    g.cornerRadius = 25;
     [self.floatBtn.layer insertSublayer:g atIndex:0];
     [self.floatBtn setTitle:@"S" forState:UIControlStateNormal];
     [self.floatBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];

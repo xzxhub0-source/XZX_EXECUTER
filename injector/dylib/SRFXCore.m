@@ -1,10 +1,12 @@
 #import "SRFXCore.h"
 #import "SRFXMainViewController.h"
+#import <dlfcn.h>
 #import <QuartzCore/QuartzCore.h>
-#include "Core/SRFXLua.h"
 
 static SRFXCore *instance = nil;
 static const NSInteger kDebounce = 3;
+static NSInteger positiveCount = 0;
+static NSInteger negativeCount = 0;
 
 @implementation SRFXCore
 
@@ -19,8 +21,6 @@ static const NSInteger kDebounce = 3;
     if (self) {
         _inGame = NO;
         _uiWindow = nil;
-        _positiveCount = 0;
-        _negativeCount = 0;
     }
     return self;
 }
@@ -28,7 +28,8 @@ static const NSInteger kDebounce = 3;
 - (void)start {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        SRFXLuaInit();
+        void (*luaInit)(void) = dlsym(RTLD_SELF, "SRFXLuaInit");
+        if (luaInit) luaInit();
         [self startGameDetection];
     });
 }
@@ -48,17 +49,15 @@ static const NSInteger kDebounce = 3;
 
 - (void)pollGameState {
     BOOL nowInGame = [self isInsideGame];
-
-    if (nowInGame) { self.positiveCount++; self.negativeCount = 0; }
-    else           { self.negativeCount++; self.positiveCount = 0; }
-
-    if (!self.inGame && self.positiveCount >= kDebounce) {
+    if (nowInGame) { positiveCount++; negativeCount = 0; }
+    else           { negativeCount++; positiveCount = 0; }
+    if (!self.inGame && positiveCount >= kDebounce) {
         self.inGame = YES;
-        self.positiveCount = 0;
+        positiveCount = 0;
         [self showUI];
-    } else if (self.inGame && self.negativeCount >= kDebounce) {
+    } else if (self.inGame && negativeCount >= kDebounce) {
         self.inGame = NO;
-        self.negativeCount = 0;
+        negativeCount = 0;
         [self hideUI];
     }
 }
@@ -67,62 +66,38 @@ static const NSInteger kDebounce = 3;
     @try {
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            if (windowScene.activationState != UISceneActivationStateForegroundActive) continue;
-
-            BOOL statusBarHidden = windowScene.statusBarManager.statusBarHidden;
-            BOOL hasMetal = NO;
-            NSInteger buttonCount = 0;
-
-            for (UIWindow *window in windowScene.windows) {
-                if (window == self.uiWindow) continue;
-                if (!hasMetal) hasMetal = [self viewHasMetalLayer:window];
-                if (buttonCount < 20) buttonCount += [self countButtonsInView:window];
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            if (ws.activationState != UISceneActivationStateForegroundActive) continue;
+            if (ws.statusBarManager.statusBarHidden) {
+                for (UIWindow *w in ws.windows) {
+                    if (w == self.uiWindow) continue;
+                    if ([self viewHasMetalLayer:w]) return YES;
+                }
             }
-
-            if (hasMetal && statusBarHidden && buttonCount < 6) return YES;
         }
     } @catch (NSException *e) {}
     return NO;
 }
 
 - (BOOL)viewHasMetalLayer:(UIView *)view {
-    @try {
-        if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-        for (CALayer *sub in view.layer.sublayers ?: @[]) {
-            if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-            for (CALayer *s2 in sub.sublayers ?: @[])
-                if ([s2 isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-        }
-        for (UIView *sub in view.subviews)
-            if ([self viewHasMetalLayer:sub]) return YES;
-    } @catch (NSException *e) {}
+    if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+    for (CALayer *sub in view.layer.sublayers) {
+        if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
+    }
+    for (UIView *sub in view.subviews) {
+        if ([self viewHasMetalLayer:sub]) return YES;
+    }
     return NO;
-}
-
-- (NSInteger)countButtonsInView:(UIView *)view {
-    NSInteger n = 0;
-    @try {
-        if ([view isKindOfClass:[UIButton class]]) n++;
-        if (n >= 20) return n;
-        for (UIView *sub in view.subviews) {
-            n += [self countButtonsInView:sub];
-            if (n >= 20) return n;
-        }
-    } @catch (NSException *e) {}
-    return n;
 }
 
 - (void)showUI {
     if (!self.inGame) return;
     if (self.uiWindow && !self.uiWindow.hidden) return;
-
     if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC),
                        dispatch_get_main_queue(), ^{ [self showUI]; });
         return;
     }
-
     UIWindowScene *scene = nil;
     for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
         if ([s isKindOfClass:[UIWindowScene class]] &&
@@ -134,7 +109,6 @@ static const NSInteger kDebounce = 3;
         for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
             if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
     if (!scene) return;
-
     if (!self.uiWindow) {
         SRFXMainViewController *vc = [[SRFXMainViewController alloc] init];
         self.uiWindow = [[UIWindow alloc] initWithWindowScene:scene];
@@ -143,7 +117,6 @@ static const NSInteger kDebounce = 3;
         self.uiWindow.rootViewController = vc;
         self.uiWindow.hidden = YES;
     }
-
     self.uiWindow.hidden = NO;
     [self.uiWindow makeKeyAndVisible];
 }

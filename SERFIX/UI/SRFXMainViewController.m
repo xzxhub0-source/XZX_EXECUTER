@@ -17,10 +17,6 @@ void SRFXLuaExecute(const char *script);
 #define LEFT_W    190.0
 #define DOCK_W    52.0
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#pragma mark - Script Card Cell
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 @interface SRFXScriptCard : UITableViewCell
 @property (nonatomic, strong) UIView      *thumb;
 @property (nonatomic, strong) UILabel     *iconLabel;
@@ -201,10 +197,6 @@ void SRFXLuaExecute(const char *script);
 
 @end
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#pragma mark - Dock Button
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 @interface SRFXDockButton : UIButton
 @property (nonatomic, assign) BOOL dockSelected;
 @end
@@ -223,10 +215,6 @@ void SRFXLuaExecute(const char *script);
     }
 }
 @end
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#pragma mark - Main View Controller
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @interface SRFXMainViewController ()
     <UITableViewDelegate, UITableViewDataSource, UISearchBarDelegate>
@@ -487,7 +475,7 @@ void SRFXLuaExecute(const char *script);
     self.editor.backgroundColor        = SRFX_BG;
     self.editor.textColor              = SRFX_TEXT;
     self.editor.font                   = [UIFont fontWithName:@"Menlo" size:13];
-    self.editor.text                   = @"-- XZX Executor\nprint(\"Ready\")";
+    self.editor.text                   = @"-- SERFIX Executor\nprint(\"Ready\")";
     self.editor.autocorrectionType     = UITextAutocorrectionTypeNo;
     self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.editor.smartQuotesType        = UITextSmartQuotesTypeNo;
@@ -642,12 +630,10 @@ void SRFXLuaExecute(const char *script);
 
     self.contentArea.frame = CGRectMake(lpW, 0, cw, ch);
 
-    // Editor
-    CGFloat tbH = 50, lnW = 28;
-    [self.contentArea viewWithTag:401].frame = CGRectMake(0, 0, lnW, ch - tbH);
-    [self.contentArea viewWithTag:402].frame = CGRectMake(lnW, 0, cw - lnW, ch - tbH);
+    [self.contentArea viewWithTag:401].frame = CGRectMake(0, 0, 28, ch - 50);
+    [self.contentArea viewWithTag:402].frame = CGRectMake(28, 0, cw - 28, ch - 50);
     UIView *tb = [self.contentArea viewWithTag:403];
-    tb.frame = CGRectMake(0, ch - tbH, cw, tbH);
+    tb.frame = CGRectMake(0, ch - 50, cw, 50);
     UIView *exec = [tb viewWithTag:404], *clr = [tb viewWithTag:405], *save = [tb viewWithTag:406];
     exec.frame = CGRectMake(10, 8, 108, 34);
     clr.frame  = CGRectMake(126, 8, 72, 34);
@@ -656,7 +642,6 @@ void SRFXLuaExecute(const char *script);
         for (CALayer *l in b.layer.sublayers)
             if ([l isKindOfClass:[CAGradientLayer class]]) l.frame = b.bounds;
 
-    // Hub
     [self.contentArea viewWithTag:501].frame = CGRectMake(0, 0, cw, 44);
     [self.contentArea viewWithTag:502].frame = CGRectMake(40, 4, cw - 56, 38);
     [self.contentArea viewWithTag:503].frame = CGRectMake(12, 50, cw - 24, 18);
@@ -665,7 +650,6 @@ void SRFXLuaExecute(const char *script);
     [self.contentArea viewWithTag:506].frame = CGRectMake(0, 86, cw, ch - 86);
     [self.contentArea viewWithTag:507].frame = CGRectMake(20, ch/2 - 20, cw - 40, 40);
 
-    // Console
     [self.contentArea viewWithTag:601].frame = CGRectMake(0, 0, cw, ch - 42);
     [self.contentArea viewWithTag:602].frame = CGRectMake(cw/2 - 64, ch - 36, 128, 28);
 }
@@ -826,10 +810,12 @@ void SRFXLuaExecute(const char *script);
     UIView *btn = [tb viewWithTag:404];
     [UIView animateWithDuration:0.08 animations:^{ btn.alpha = 0.45; }
         completion:^(BOOL f){ [UIView animateWithDuration:0.2 animations:^{ btn.alpha = 1; }]; }];
-    SRFXLuaExecute(self.editor.text.UTF8String);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12*NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if (self.consoleText.length) [self switchToTab:2];
+    const char *script = self.editor.text.UTF8String;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        SRFXLuaExecute(script);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.consoleText.length) [self switchToTab:2];
+        });
     });
 }
 

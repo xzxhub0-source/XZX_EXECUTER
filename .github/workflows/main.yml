@@ -65,7 +65,16 @@ jobs:
 
       - name: Link dylib
         run: |
-          xcrun -sdk iphoneos clang++ -shared -framework UIKit -framework Foundation -framework CoreGraphics -framework WebKit -framework QuartzCore -framework Metal -Wl,-force_load,$LUA_LIB/liblua.a -undefined dynamic_lookup -lc++ -target arm64-apple-ios15.0 -o build/serfix.dylib build/*.o
+          xcrun -sdk iphoneos clang++ -shared \
+            -framework UIKit -framework Foundation \
+            -framework CoreGraphics -framework WebKit \
+            -framework QuartzCore -framework Metal \
+            -Wl,-force_load,$LUA_LIB/liblua.a \
+            -Wl,-export_dynamic \
+            -undefined dynamic_lookup \
+            -lc++ \
+            -target arm64-apple-ios15.0 \
+            -o build/serfix.dylib build/*.o
 
       - name: Patch and sign IPA
         run: |
@@ -79,9 +88,9 @@ jobs:
           plutil -convert xml1 "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName SERFIX" "$APP/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SERFIX" "$APP/Info.plist"
           plutil -convert binary1 "$APP/Info.plist"
-          codesign -f -s - "$APP/serfix.dylib"
+          codesign -f -s - --entitlements entitlements.plist "$APP/serfix.dylib" 2>/dev/null || codesign -f -s - "$APP/serfix.dylib"
           find "$APP/Frameworks" \( -name "*.dylib" -o -name "*.framework" \) 2>/dev/null | while read f; do codesign -f -s - "$f" 2>/dev/null || true; done
-          codesign -f -s - "$APP/Roblox"
+          codesign -f -s - --entitlements entitlements.plist "$APP/Roblox" 2>/dev/null || codesign -f -s - "$APP/Roblox"
           codesign -f -s - --deep "$APP"
 
       - name: Package IPA

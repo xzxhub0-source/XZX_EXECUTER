@@ -30,7 +30,12 @@ static NSInteger negativeCount = 0;
                    dispatch_get_main_queue(), ^{
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
-            SRFXLuaInit();
+            void (*initFn)(void) = &SRFXLuaInit;
+            if (!initFn) {
+                NSLog(@"[SERFIX] FATAL: SRFXLuaInit is NULL");
+                return;
+            }
+            initFn();
         });
         [self startGameDetection];
     });

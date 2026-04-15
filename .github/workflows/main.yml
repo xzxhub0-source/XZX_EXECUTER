@@ -81,7 +81,7 @@ jobs:
           nm -gU build/serfix.dylib | grep _SRFXLuaInit || (echo "FATAL: _SRFXLuaInit not exported" && exit 1)
           nm -gU build/serfix.dylib | grep _SRFXLuaExecute || (echo "FATAL: _SRFXLuaExecute not exported" && exit 1)
 
-      - name: Patch and sign IPA
+      - name: Patch IPA
         run: |
           mkdir -p extracted
           unzip -q Roblox.ipa -d extracted/
@@ -94,10 +94,6 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName SERFIX" "$APP/Info.plist" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SERFIX" "$APP/Info.plist"
           plutil -convert binary1 "$APP/Info.plist"
-          
-          codesign --force --sign - --entitlements entitlements.plist "$APP/serfix.dylib"
-          codesign --force --sign - --entitlements entitlements.plist "$APP/Roblox"
-          codesign --force --sign - "$APP"
 
       - name: Verify dylib insertion
         run: |

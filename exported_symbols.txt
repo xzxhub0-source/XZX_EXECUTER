@@ -1,0 +1,4 @@
+_SRFXLuaInit
+_SRFXLuaExecute
+_SRFXLuaRegister
+_SRFXLuaState

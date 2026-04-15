@@ -70,11 +70,16 @@ jobs:
             -framework CoreGraphics -framework WebKit \
             -framework QuartzCore -framework Metal \
             -Wl,-force_load,$LUA_LIB/liblua.a \
-            -Wl,-export_dynamic \
+            -Wl,-exported_symbols_list,exported_symbols.txt \
             -undefined dynamic_lookup \
             -lc++ \
             -target arm64-apple-ios16.0 \
             -o build/serfix.dylib build/*.o
+
+      - name: Verify exported symbols
+        run: |
+          nm -gU build/serfix.dylib | grep _SRFXLuaInit || (echo "FATAL: _SRFXLuaInit not exported" && exit 1)
+          nm -gU build/serfix.dylib | grep _SRFXLuaExecute || (echo "FATAL: _SRFXLuaExecute not exported" && exit 1)
 
       - name: Patch and sign IPA
         run: |
@@ -91,8 +96,8 @@ jobs:
           plutil -convert binary1 "$APP/Info.plist"
           
           codesign --force --sign - --entitlements entitlements.plist "$APP/serfix.dylib"
-          codesign --force --deep --sign - --entitlements entitlements.plist "$APP/Roblox"
-          codesign --force --deep --sign - "$APP"
+          codesign --force --sign - --entitlements entitlements.plist "$APP/Roblox"
+          codesign --force --sign - "$APP"
 
       - name: Verify dylib insertion
         run: |

@@ -1,6 +1,6 @@
 #import "SRFXCore.h"
 #import "SRFXMainViewController.h"
-#import <dlfcn.h>
+#import "Core/SRFXLua.h"
 #import <QuartzCore/QuartzCore.h>
 
 static SRFXCore *instance = nil;
@@ -28,8 +28,7 @@ static NSInteger negativeCount = 0;
 - (void)start {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        void (*luaInit)(void) = dlsym(RTLD_SELF, "SRFXLuaInit");
-        if (luaInit) luaInit();
+        SRFXLuaInit();
         [self startGameDetection];
     });
 }
@@ -80,13 +79,16 @@ static NSInteger negativeCount = 0;
 }
 
 - (BOOL)viewHasMetalLayer:(UIView *)view {
+    return [self viewHasMetalLayer:view depth:0];
+}
+
+- (BOOL)viewHasMetalLayer:(UIView *)view depth:(int)depth {
+    if (depth > 6) return NO;
     if ([view.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-    for (CALayer *sub in view.layer.sublayers) {
+    for (CALayer *sub in view.layer.sublayers)
         if ([sub isKindOfClass:NSClassFromString(@"CAMetalLayer")]) return YES;
-    }
-    for (UIView *sub in view.subviews) {
-        if ([self viewHasMetalLayer:sub]) return YES;
-    }
+    for (UIView *sub in view.subviews)
+        if ([self viewHasMetalLayer:sub depth:depth + 1]) return YES;
     return NO;
 }
 
